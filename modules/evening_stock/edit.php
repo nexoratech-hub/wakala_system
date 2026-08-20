@@ -1,9 +1,14 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/view.php
-// WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT
-// WITH MULTI-PAGE PDF EXPORT INCLUDING LOGO & OFFICE NAME
+// FILE: C:\xampp\htdocs\wakala_system\modules\evening_stock\edit.php
+// WAKALA FINANCIAL SYSTEM - EDIT EVENING STOCK
 // ================================================================
+
+// ============================================================
+// ENABLE ERROR REPORTING
+// ============================================================
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 // ============================================================
 // INCLUDE CONFIG BEFORE SESSION
@@ -34,7 +39,7 @@ $profile_image = '../../assets/images/logo.PNG';
 $is_admin = isAdmin();
 
 // ============================================================
-// GET REPORT ID
+// GET STOCK ID
 // ============================================================
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
@@ -44,59 +49,112 @@ if ($id <= 0) {
 }
 
 // ============================================================
-// GET REPORT DATA
+// GET STOCK DATA
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM morning_reports WHERE id = ?");
+$stmt = $db->prepare("SELECT * FROM evening_stocks WHERE id = ?");
 $stmt->execute([$id]);
-$report = $stmt->fetch();
+$stock = $stmt->fetch();
 
-if (!$report) {
+if (!$stock) {
     header('Location: index.php');
     exit();
 }
 
-// Check if user has permission to view this report
-if (!$is_admin && $report['employee_id'] != $employee_id) {
+// Check if user has permission to edit this stock
+if (!$is_admin && $stock['employee_id'] != $employee_id) {
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET PROVIDER NAMES WITH ICONS
+// GET ACTIVE PROVIDERS WITH ICONS
 // ============================================================
-$stmt = $db->prepare("SELECT provider_code, provider_name, color_code, icon_class FROM providers WHERE is_active = 1");
+$stmt = $db->prepare("SELECT * FROM providers WHERE is_active = 1 ORDER BY display_order");
 $stmt->execute();
-$providers_list = $stmt->fetchAll();
-
-// Create provider name map
-$provider_names = [];
-foreach ($providers_list as $p) {
-    $provider_names[$p['provider_code']] = [
-        'name' => $p['provider_name'],
-        'color' => $p['color_code'] ?? '#0B5ED7',
-        'icon' => $p['icon_class'] ?? 'fas fa-university'
-    ];
-}
+$providers = $stmt->fetchAll();
 
 // ============================================================
 // DECODE PROVIDER DATA
 // ============================================================
-$provider_data = json_decode($report['provider_data'], true) ?? [];
+$provider_data = json_decode($stock['provider_data'], true) ?? [];
 
 // ============================================================
-// GET EMPLOYEE NAME
+// HANDLE FORM SUBMISSION
 // ============================================================
-$stmt = $db->prepare("SELECT full_name FROM employees WHERE id = ?");
-$stmt->execute([$report['employee_id']]);
-$employee = $stmt->fetch();
-$employee_name = $employee['full_name'] ?? 'Unknown';
+$error = '';
+$success = '';
 
-// ============================================================
-// GET COMPANY NAME FROM SETTINGS
-// ============================================================
-$company_name = getSetting('company_name') ?? SITE_NAME;
-$company_address = getSetting('company_address') ?? 'Dodoma, Tanzania';
-$company_phone = getSetting('company_phone') ?? '+255 700 000 000';
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $provider_data_new = [];
+    
+    // Get cash balance (remove commas)
+    $cash_balance_raw = $_POST['cash_balance'] ?? '0';
+    $cash_balance = floatval(str_replace(',', '', $cash_balance_raw));
+    $total = $cash_balance;
+    
+    // Collect provider data (remove commas)
+    foreach ($providers as $provider) {
+        $code = $provider['provider_code'];
+        $amount_raw = $_POST['provider_' . $code] ?? '0';
+        $amount = floatval(str_replace(',', '', $amount_raw));
+        $provider_data_new[$code] = $amount;
+        $total += $amount;
+    }
+    
+    // Validate - at least one amount > 0
+    $has_value = false;
+    foreach ($provider_data_new as $amount) {
+        if ($amount > 0) {
+            $has_value = true;
+            break;
+        }
+    }
+    
+    if ($cash_balance <= 0 && !$has_value) {
+        $error = 'Please enter at least one value (cash or provider balance)';
+    } else {
+        try {
+            // Convert provider data to JSON
+            $provider_json = json_encode($provider_data_new);
+            
+            // Update database
+            $stmt = $db->prepare("
+                UPDATE evening_stocks SET
+                    provider_data = :provider_data,
+                    cash_balance = :cash_balance,
+                    cumm_total = :cumm_total,
+                    notes = :notes,
+                    updated_at = NOW()
+                WHERE id = :id
+            ");
+            
+            $notes = $_POST['notes'] ?? '';
+            
+            $result = $stmt->execute([
+                ':provider_data' => $provider_json,
+                ':cash_balance' => $cash_balance,
+                ':cumm_total' => $total,
+                ':notes' => $notes,
+                ':id' => $id
+            ]);
+            
+            if ($result) {
+                // Log activity
+                logActivity($employee_id, 'Edit Evening Stock', 'Evening Stock', $id, '', 'Evening stock updated');
+                
+                $success = 'Evening Stock updated successfully!';
+                
+                // Redirect after 2 seconds
+                echo '<meta http-equiv="refresh" content="2;url=view.php?id=' . $id . '">';
+            } else {
+                $error = 'Failed to update data. Please check your input.';
+            }
+            
+        } catch (PDOException $e) {
+            $error = 'Database error: ' . $e->getMessage();
+        }
+    }
+}
 
 // ================================================================
 // HTML STARTS HERE
@@ -107,19 +165,15 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Morning Report - Wakala</title>
+    <title>Edit Evening Stock - Wakala</title>
     
     <link rel="icon" href="../../assets/images/logo.PNG" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="../../assets/css/dark-mode.css">
     
-    <!-- jsPDF library for PDF export -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    
     <style>
-        /* ===== FULL STYLES ===== */
+        /* ===== COMPLETE STYLES ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         :root {
@@ -478,20 +532,43 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             border: 1px solid var(--border-color);
         }
         .btn-secondary:hover { background: var(--border-color); }
-        .btn-pdf {
-            background: #DC2626;
+        .btn-success {
+            background: #10B981;
             color: white;
         }
-        .btn-pdf:hover {
-            background: #8B0000;
+        .btn-success:hover {
+            background: #059669;
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+        }
+        .btn-outline {
+            background: transparent;
+            color: #DC2626;
+            border: 2px solid #DC2626;
+        }
+        .btn-outline:hover {
+            background: #DC2626;
+            color: white;
         }
         .btn-sm { padding: 5px 12px; font-size: 12px; }
         .btn-lg { padding: 12px 28px; font-size: 15px; }
         
-        /* ===== VIEW CARD ===== */
-        .view-card {
+        /* ===== ALERTS ===== */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .alert-success { background: #D1FAE5; border: 1px solid #A7F3D0; color: #065F46; }
+        .alert-danger { background: #FEE2E2; border: 1px solid #FECACA; color: #991B1B; }
+        .alert-warning { background: #FEF3C7; border: 1px solid #FDE68A; color: #92400E; }
+        .alert-info { background: #DBEAFE; border: 1px solid #BFDBFE; color: #1E40AF; }
+        
+        /* ===== FORM ===== */
+        .form-container {
             background: var(--bg-card);
             border-radius: 12px;
             padding: 24px 28px;
@@ -499,255 +576,104 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             max-width: 820px;
         }
         
-        /* ===== PDF HEADER (Logo + Office Name) ===== */
-        .pdf-header {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            padding-bottom: 16px;
-            border-bottom: 3px solid #DC2626;
-            margin-bottom: 20px;
+        .form-group {
+            margin-bottom: 16px;
         }
-        
-        .pdf-header .pdf-logo {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 3px solid #DC2626;
-            padding: 3px;
-            background: white;
-        }
-        
-        .pdf-header .pdf-office-info {
-            flex: 1;
-        }
-        
-        .pdf-header .pdf-office-info .office-name {
-            font-size: 18px;
-            font-weight: 700;
-            color: #8B0000;
-        }
-        
-        .pdf-header .pdf-office-info .office-details {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        .pdf-header .pdf-office-info .office-details i {
-            margin-right: 4px;
-            color: #DC2626;
-        }
-        
-        .view-card .view-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        .view-card .view-header .report-number {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .view-card .view-header .report-number small {
-            font-size: 14px;
-            font-weight: 400;
-            color: var(--text-secondary);
+        .form-group label {
             display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        .form-group label .required { color: #DC2626; margin-left: 2px; }
+        .form-group .form-text {
+            font-size: 11px;
+            color: var(--text-light);
             margin-top: 2px;
         }
         
-        .view-card .view-header .status-badge {
-            padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
+        .form-control {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1.5px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-input);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
         }
-        .status-badge.success { background: #D1FAE5; color: #065F46; }
+        .form-control:focus {
+            outline: none;
+            border-color: #DC2626;
+            box-shadow: 0 0 0 3px rgba(220,38,38,0.08);
+        }
+        .form-control::placeholder { color: var(--text-light); }
+        textarea.form-control { min-height: 80px; resize: vertical; }
         
-        /* Info Grid */
-        .info-grid {
+        .provider-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+            margin: 12px 0 16px;
         }
         
-        .info-item {
-            padding: 12px 16px;
+        .provider-item {
             background: var(--bg-input);
             border-radius: 8px;
+            padding: 12px 14px;
+            border: 1.5px solid var(--border-color);
+            transition: all 0.3s ease;
         }
-        
-        .info-item .info-label {
-            font-size: 11px;
-            color: var(--text-secondary);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .info-item .info-value {
-            font-size: 16px;
+        .provider-item:hover { border-color: #DC2626; }
+        .provider-item .provider-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
             font-weight: 600;
             color: var(--text-primary);
-            margin-top: 2px;
+            margin-bottom: 4px;
         }
-        
-        /* Provider Table */
-        .provider-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 16px 0;
-        }
-        
-        .provider-table th {
-            text-align: left;
-            padding: 10px 12px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            border-bottom: 2px solid var(--border-color);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .provider-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-        }
-        
-        .provider-table tr:hover { background: var(--bg-hover); }
-        .provider-table .text-right { text-align: right; }
-        
-        .provider-table .provider-dot {
-            display: inline-block;
+        .provider-item .provider-label .color-dot {
             width: 10px;
             height: 10px;
             border-radius: 50%;
-            margin-right: 8px;
+            display: inline-block;
+        }
+        .provider-item .form-control {
+            padding: 6px 10px;
+            font-size: 14px;
+            font-weight: 500;
         }
         
-        /* Total Row */
-        .total-row {
+        .total-box {
             background: #8B0000;
             color: white;
-            border-radius: 8px;
-            padding: 14px 18px;
+            border-radius: 10px;
+            padding: 16px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-top: 16px;
         }
-        
-        .total-row .total-label {
+        .total-box .total-label {
             font-size: 14px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             opacity: 0.8;
         }
+        .total-box .total-value { font-size: 24px; font-weight: 700; }
         
-        .total-row .total-value {
-            font-size: 22px;
-            font-weight: 700;
-        }
-        
-        /* Notes */
-        .notes-section {
-            margin-top: 20px;
-            padding: 16px 18px;
-            background: var(--bg-input);
-            border-radius: 8px;
-            border-left: 4px solid #DC2626;
-        }
-        
-        .notes-section .notes-label {
-            font-size: 11px;
-            color: var(--text-secondary);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .notes-section .notes-content {
-            font-size: 14px;
-            color: var(--text-primary);
-            margin-top: 4px;
-        }
-        
-        /* ===== PDF LOADING OVERLAY ===== */
-        .pdf-loading {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.6);
-            z-index: 9999;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-            gap: 20px;
-        }
-        
-        .pdf-loading.active {
+        .form-actions {
             display: flex;
-        }
-        
-        .pdf-loading .spinner-box {
-            background: white;
-            padding: 40px;
-            border-radius: 16px;
-            text-align: center;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-        }
-        
-        .pdf-loading .spinner-box .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid #F3F4F6;
-            border-top: 4px solid #DC2626;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 16px;
-        }
-        
-        .pdf-loading .spinner-box .progress-text {
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-top: 8px;
-        }
-        
-        .pdf-loading .spinner-box .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: #F3F4F6;
-            border-radius: 3px;
-            margin-top: 12px;
-            overflow: hidden;
-        }
-        
-        .pdf-loading .spinner-box .progress-bar .progress-fill {
-            height: 100%;
-            background: #DC2626;
-            border-radius: 3px;
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+            gap: 12px;
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            flex-wrap: wrap;
         }
         
         /* ===== RESPONSIVE ===== */
@@ -764,15 +690,13 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             .topbar-right { gap: 6px; }
             .global-search { order: 10; width: 100%; }
             .global-search input { width: 100%; font-size: 12px; padding: 5px 10px 5px 30px; }
+            .provider-grid { grid-template-columns: 1fr 1fr; }
             .main-content { padding: 14px 16px; }
-            .view-card { padding: 16px 18px; }
+            .form-container { padding: 16px 18px; }
             .page-header h1 { font-size: 18px; }
             .page-header h1 small { font-size: 12px; }
             .live-datetime { font-size: 10px; padding: 2px 8px; }
             .user-profile .user-info { display: none; }
-            .info-grid { grid-template-columns: 1fr 1fr; }
-            .pdf-header .pdf-logo { width: 45px; height: 45px; }
-            .pdf-header .pdf-office-info .office-name { font-size: 15px; }
             
             .sidebar-overlay {
                 display: none;
@@ -791,36 +715,19 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             .admin-topbar { padding: 4px 10px; min-height: 44px; }
             .topbar-left h2 { font-size: 13px; }
             .topbar-left h2 .page-icon { display: none; }
-            .info-grid { grid-template-columns: 1fr; }
+            .provider-grid { grid-template-columns: 1fr; }
+            .form-container { padding: 12px 14px; }
             .page-header { flex-direction: column; align-items: flex-start; }
             .page-header .header-actions { width: 100%; }
             .page-header .header-actions .btn { flex: 1; justify-content: center; }
-            .view-card { padding: 12px 14px; }
-            .total-row { flex-direction: column; text-align: center; gap: 6px; padding: 12px 14px; }
-            .total-row .total-value { font-size: 18px; }
-            .provider-table { font-size: 12px; }
-            .provider-table th, .provider-table td { padding: 6px 8px; }
-            .view-card .view-header .report-number { font-size: 16px; }
-            .pdf-header .pdf-logo { width: 35px; height: 35px; }
-            .pdf-header .pdf-office-info .office-name { font-size: 13px; }
-            .pdf-header .pdf-office-info .office-details { font-size: 10px; }
+            .total-box { flex-direction: column; text-align: center; gap: 8px; padding: 14px 16px; }
+            .total-box .total-value { font-size: 20px; }
+            .form-actions { flex-direction: column; }
+            .form-actions .btn { width: 100%; justify-content: center; }
         }
     </style>
 </head>
 <body>
-    
-    <!-- ===== PDF LOADING OVERLAY ===== -->
-    <div class="pdf-loading" id="pdfLoading">
-        <div class="spinner-box">
-            <div class="spinner"></div>
-            <p><i class="fas fa-file-pdf" style="color:#DC2626;"></i> Generating PDF...</p>
-            <small style="color:#6B7280;">Please wait</small>
-            <div class="progress-text" id="pdfProgressText">Preparing content...</div>
-            <div class="progress-bar">
-                <div class="progress-fill" id="pdfProgressFill"></div>
-            </div>
-        </div>
-    </div>
     
     <!-- ===== SIDEBAR ===== -->
     <nav class="admin-sidebar" id="adminSidebar">
@@ -835,8 +742,8 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             <li><a href="../dashboard/admin.php"><i class="fas fa-home"></i> Dashboard</a></li>
             
             <li class="menu-label">Daily Operations</li>
-            <li><a href="index.php" class="active"><i class="fas fa-sun"></i> Morning Report</a></li>
-            <li><a href="../evening_stock/index.php"><i class="fas fa-moon"></i> Evening Stock</a></li>
+            <li><a href="../morning_report/index.php"><i class="fas fa-sun"></i> Morning Report</a></li>
+            <li><a href="index.php" class="active"><i class="fas fa-moon"></i> Evening Stock</a></li>
             <li><a href="../daily_report/index.php"><i class="fas fa-file-alt"></i> Daily Report</a></li>
             
             <li class="menu-label">Financial</li>
@@ -875,8 +782,8 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
                     <i class="fas fa-bars"></i>
                 </button>
                 <h2>
-                    <i class="fas fa-sun page-icon"></i>
-                    Morning Report Details
+                    <i class="fas fa-edit page-icon"></i>
+                    Edit Evening Stock
                 </h2>
             </div>
             
@@ -928,143 +835,126 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
             <div class="page-header">
                 <div>
                     <h1>
-                        <i class="fas fa-file-alt" style="color:#DC2626;"></i> Morning Report Details
-                        <small>View complete morning report information</small>
+                        <i class="fas fa-edit" style="color:#DC2626;"></i> Edit Evening Stock
+                        <small>Update evening stock information for <?php echo date('d M Y', strtotime($stock['stock_date'])); ?></small>
                     </h1>
                 </div>
                 <div class="header-actions">
-                    <button onclick="exportPDF()" class="btn btn-pdf">
-                        <i class="fas fa-file-pdf"></i> Export PDF
-                    </button>
-                    <a href="edit.php?id=<?php echo $report['id']; ?>" class="btn btn-primary">
-                        <i class="fas fa-edit"></i> Edit
+                    <a href="view.php?id=<?php echo $id; ?>" class="btn btn-secondary">
+                        <i class="fas fa-eye"></i> View
                     </a>
                     <a href="index.php" class="btn btn-secondary">
-                        <i class="fas fa-arrow-left"></i> Back
+                        <i class="fas fa-arrow-left"></i> Back to List
                     </a>
                 </div>
             </div>
             
-            <!-- ===== VIEW CARD ===== -->
-            <div class="view-card" id="reportContent">
-                
-                <!-- ===== PDF HEADER (Logo + Office Name) ===== -->
-                <div class="pdf-header">
-                    <img src="../../assets/images/logo.PNG" alt="Wakala Logo" class="pdf-logo" 
-                         onerror="this.src='../../assets/images/default-avatar.png'">
-                    <div class="pdf-office-info">
-                        <div class="office-name"><?php echo htmlspecialchars($company_name); ?></div>
-                        <div class="office-details">
-                            <i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($company_address); ?>
-                            <span style="margin:0 8px;">|</span>
-                            <i class="fas fa-phone"></i> <?php echo htmlspecialchars($company_phone); ?>
-                            <span style="margin:0 8px;">|</span>
-                            <i class="fas fa-calendar-alt"></i> <?php echo date('d M Y'); ?>
+            <!-- Alerts -->
+            <?php if (!empty($error)): ?>
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <span><?php echo htmlspecialchars($error); ?></span>
+                </div>
+            <?php endif; ?>
+            
+            <?php if (!empty($success)): ?>
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i>
+                    <span><?php echo htmlspecialchars($success); ?></span>
+                </div>
+            <?php endif; ?>
+            
+            <!-- ===== FORM ===== -->
+            <div class="form-container">
+                <form method="POST" action="" id="eveningStockForm" autocomplete="off">
+                    
+                    <!-- Info Box -->
+                    <div style="background:var(--bg-hover); border-radius:8px; padding:12px 16px; margin-bottom:16px; border-left:4px solid #DC2626;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; font-size:13px;">
+                            <div>
+                                <span style="color:var(--text-secondary);">Stock Number</span><br>
+                                <strong style="color:var(--text-primary);"><?php echo htmlspecialchars($stock['stock_number']); ?></strong>
+                            </div>
+                            <div>
+                                <span style="color:var(--text-secondary);">Date</span><br>
+                                <strong style="color:var(--text-primary);"><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></strong>
+                            </div>
+                            <div>
+                                <span style="color:var(--text-secondary);">Submitted</span><br>
+                                <strong style="color:var(--text-primary);"><?php echo date('h:i A', strtotime($stock['submitted_at'])); ?></strong>
+                            </div>
                         </div>
                     </div>
-                </div>
-                
-                <!-- Header -->
-                <div class="view-header">
-                    <div class="report-number">
-                        <?php echo htmlspecialchars($report['report_number']); ?>
-                        <small>Morning Report for <?php echo date('d M Y', strtotime($report['report_date'])); ?></small>
+                    
+                    <!-- Provider Fields -->
+                    <div class="form-group">
+                        <label>Provider Balances <span class="required">*</span></label>
+                        <div class="form-text">Enter the closing float balance (CFB) for each provider</div>
+                        
+                        <div class="provider-grid">
+                            <?php foreach ($providers as $provider): 
+                                $code = $provider['provider_code'];
+                                $value = $provider_data[$code] ?? 0;
+                            ?>
+                                <div class="provider-item">
+                                    <div class="provider-label">
+                                        <span class="color-dot" style="background:<?php echo $provider['color_code'] ?? '#0B5ED7'; ?>;"></span>
+                                        <i class="<?php echo $provider['icon_class'] ?? 'fas fa-university'; ?>" 
+                                           style="color:<?php echo $provider['color_code'] ?? '#0B5ED7'; ?>; font-size:14px;"></i>
+                                        <?php echo htmlspecialchars($provider['provider_name']); ?>
+                                    </div>
+                                    <input type="text" 
+                                           name="provider_<?php echo $code; ?>" 
+                                           id="provider_<?php echo $code; ?>"
+                                           class="form-control provider-input amount-input"
+                                           placeholder="0"
+                                           value="<?php echo number_format($value, 0, '.', ','); ?>">
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
-                    <span class="status-badge success">
-                        <i class="fas fa-check-circle"></i> Submitted
-                    </span>
-                </div>
-                
-                <!-- Info Grid -->
-                <div class="info-grid">
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-calendar-day"></i> Date</div>
-                        <div class="info-value"><?php echo date('l, d M Y', strtotime($report['report_date'])); ?></div>
+                    
+                    <!-- Cash Balance -->
+                    <div class="form-group">
+                        <label for="cash_balance">Cash Balance <span class="required">*</span></label>
+                        <input type="text" 
+                               name="cash_balance" 
+                               id="cash_balance"
+                               class="form-control amount-input"
+                               placeholder="Enter cash balance"
+                               value="<?php echo number_format($stock['cash_balance'], 0, '.', ','); ?>"
+                               required>
+                        <div class="form-text">Physical cash available in the till</div>
                     </div>
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-user"></i> Employee</div>
-                        <div class="info-value"><?php echo htmlspecialchars($employee_name); ?></div>
+                    
+                    <!-- Total Box - Auto Calculated -->
+                    <div class="total-box">
+                        <span class="total-label">
+                            <i class="fas fa-calculator"></i> CUMM. TOTAL
+                        </span>
+                        <span class="total-value" id="totalDisplay"><?php echo formatCurrency($stock['cumm_total']); ?></span>
                     </div>
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-building"></i> Branch</div>
-                        <div class="info-value"><?php echo htmlspecialchars($report['branch'] ?? 'Main'); ?></div>
+                    
+                    <!-- Notes -->
+                    <div class="form-group" style="margin-top:16px;">
+                        <label for="notes">Notes</label>
+                        <textarea name="notes" id="notes" class="form-control" placeholder="Additional notes (optional)"><?php echo htmlspecialchars($stock['notes'] ?? ''); ?></textarea>
                     </div>
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-clock"></i> Submitted At</div>
-                        <div class="info-value"><?php echo date('h:i A', strtotime($report['submitted_at'])); ?></div>
+                    
+                    <!-- Form Actions -->
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                            <i class="fas fa-save"></i> Update Evening Stock
+                        </button>
+                        <a href="view.php?id=<?php echo $id; ?>" class="btn btn-secondary">
+                            <i class="fas fa-times"></i> Cancel
+                        </a>
+                        <a href="index.php" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to List
+                        </a>
                     </div>
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-money-bill-wave"></i> Cash Balance</div>
-                        <div class="info-value"><?php echo formatCurrency($report['cash_balance']); ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label"><i class="fas fa-calculator"></i> CUMM. TOTAL</div>
-                        <div class="info-value" style="color:#DC2626;"><?php echo formatCurrency($report['cumm_total']); ?></div>
-                    </div>
-                </div>
-                
-                <!-- Provider Table -->
-                <h4 style="margin-bottom:12px; color:var(--text-primary);">
-                    <i class="fas fa-university" style="color:#DC2626;"></i> Provider Balances (OFB)
-                </h4>
-                
-                <table class="provider-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Provider</th>
-                            <th class="text-right">Amount</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php 
-                        $counter = 1;
-                        foreach ($provider_data as $code => $amount):
-                            $name = $provider_names[$code]['name'] ?? $code;
-                            $color = $provider_names[$code]['color'] ?? '#0B5ED7';
-                            $icon = $provider_names[$code]['icon'] ?? 'fas fa-university';
-                        ?>
-                            <tr>
-                                <td><?php echo $counter++; ?></td>
-                                <td>
-                                    <span class="provider-dot" style="background:<?php echo $color; ?>;"></span>
-                                    <i class="<?php echo $icon; ?>" style="color:<?php echo $color; ?>; margin-right:6px;"></i>
-                                    <?php echo htmlspecialchars($name); ?>
-                                </td>
-                                <td class="text-right"><?php echo formatCurrency($amount); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <?php if (empty($provider_data)): ?>
-                            <tr>
-                                <td colspan="3" style="text-align:center; color:var(--text-light); padding:20px;">
-                                    <i class="fas fa-inbox"></i> No provider data available
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-                
-                <!-- Total Row -->
-                <div class="total-row">
-                    <span class="total-label">
-                        <i class="fas fa-calculator"></i> CUMM. TOTAL
-                    </span>
-                    <span class="total-value"><?php echo formatCurrency($report['cumm_total']); ?></span>
-                </div>
-                
-                <!-- Notes -->
-                <?php if (!empty($report['notes'])): ?>
-                <div class="notes-section">
-                    <div class="notes-label"><i class="fas fa-pencil-alt"></i> Notes</div>
-                    <div class="notes-content"><?php echo nl2br(htmlspecialchars($report['notes'])); ?></div>
-                </div>
-                <?php endif; ?>
-                
-                <!-- Footer for PDF -->
-                <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color); font-size:11px; color:var(--text-light); text-align:center;">
-                    <p>Generated on <?php echo date('d M Y h:i A'); ?> | Wakala Financial Management System</p>
-                </div>
-                
+                    
+                </form>
             </div>
             
         </main>
@@ -1072,6 +962,7 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
     </div>
     
     <!-- ===== JAVASCRIPT ===== -->
+    <script src="../../assets/js/number-format.js"></script>
     <script>
         // ============================================================
         // SIDEBAR TOGGLE
@@ -1151,6 +1042,59 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
         setInterval(updateLiveDateTime, 1000);
         
         // ============================================================
+        // AUTO CALCULATE CUMM. TOTAL (with commas)
+        // ============================================================
+        function calculateTotal() {
+            const providerInputs = document.querySelectorAll('.provider-input');
+            const cashBalance = document.getElementById('cash_balance');
+            const totalDisplay = document.getElementById('totalDisplay');
+            
+            let total = 0;
+            
+            providerInputs.forEach(input => {
+                let value = getRawNumberValue(input);
+                total += value;
+            });
+            
+            let cash = getRawNumberValue(cashBalance);
+            total += cash;
+            
+            // Update display with commas
+            updateTotalDisplay(total, 'totalDisplay');
+        }
+        
+        // ============================================================
+        // FORM VALIDATION
+        // ============================================================
+        document.getElementById('eveningStockForm').addEventListener('submit', function(e) {
+            const providerInputs = document.querySelectorAll('.provider-input');
+            const cashBalance = document.getElementById('cash_balance');
+            let hasValue = false;
+            
+            providerInputs.forEach(input => {
+                let value = getRawNumberValue(input);
+                if (value > 0) {
+                    hasValue = true;
+                }
+            });
+            
+            if (getRawNumberValue(cashBalance) > 0) {
+                hasValue = true;
+            }
+            
+            if (!hasValue) {
+                e.preventDefault();
+                alert('Please enter at least one value (cash or provider balance)');
+                return false;
+            }
+            
+            // Show loading state
+            const btn = document.getElementById('submitBtn');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+            btn.disabled = true;
+        });
+        
+        // ============================================================
         // SEARCH
         // ============================================================
         const searchInput = document.getElementById('globalSearch');
@@ -1166,194 +1110,24 @@ $company_phone = getSetting('company_phone') ?? '+255 700 000 000';
         }
         
         // ============================================================
-        // MULTI-PAGE PDF EXPORT WITH LOGO
+        // AUTO CALCULATE ON LOAD
         // ============================================================
-        function updateProgress(percent, text) {
-            document.getElementById('pdfProgressFill').style.width = percent + '%';
-            document.getElementById('pdfProgressText').textContent = text;
-        }
-        
-        function exportPDF() {
-            // Show loading overlay
-            document.getElementById('pdfLoading').classList.add('active');
-            updateProgress(0, 'Initializing...');
+        document.addEventListener('DOMContentLoaded', function() {
+            calculateTotal();
             
-            const content = document.getElementById('reportContent');
-            
-            updateProgress(10, 'Capturing content...');
-            
-            html2canvas(content, {
-                scale: 2,
-                backgroundColor: '#FFFFFF',
-                logging: false,
-                useCORS: true,
-                allowTaint: true,
-                onclone: function(document) {
-                    const images = document.querySelectorAll('img');
-                    images.forEach(img => {
-                        if (img.complete === false) {
-                            img.setAttribute('crossOrigin', 'anonymous');
-                        }
-                    });
-                }
-            }).then(function(canvas) {
-                updateProgress(30, 'Processing image...');
-                
-                const imgData = canvas.toDataURL('image/png');
-                const { jsPDF } = window.jspdf;
-                
-                // ============================================================
-                // MULTI-PAGE PDF GENERATION
-                // ============================================================
-                const pdf = new jsPDF('p', 'mm', 'a4');
-                
-                // Get page dimensions
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = pdf.internal.pageSize.getHeight();
-                
-                // Margins
-                const marginTop = 15;
-                const marginBottom = 15;
-                const marginLeft = 10;
-                const marginRight = 10;
-                
-                // Calculate usable area
-                const usableWidth = pdfWidth - marginLeft - marginRight;
-                const usableHeight = pdfHeight - marginTop - marginBottom;
-                
-                // Calculate image dimensions to fit width
-                const imgWidth = usableWidth;
-                const imgHeight = (canvas.height * imgWidth) / canvas.width;
-                
-                updateProgress(50, 'Calculating pages...');
-                
-                // Calculate how many pages needed
-                const totalPages = Math.ceil(imgHeight / usableHeight);
-                
-                updateProgress(60, 'Generating ' + totalPages + ' page(s)...');
-                
-                // For each page, slice the image
-                for (let page = 0; page < totalPages; page++) {
-                    // Calculate the portion of the image for this page
-                    const startY = page * usableHeight;
-                    const endY = Math.min((page + 1) * usableHeight, imgHeight);
-                    const sliceHeight = endY - startY;
-                    
-                    // Create a temporary canvas for this page slice
-                    const tempCanvas = document.createElement('canvas');
-                    
-                    // Calculate source dimensions
-                    const sourceX = 0;
-                    const sourceY = (startY / imgHeight) * canvas.height;
-                    const sourceWidth = canvas.width;
-                    const sourceHeight = (sliceHeight / imgHeight) * canvas.height;
-                    
-                    tempCanvas.width = canvas.width;
-                    tempCanvas.height = sourceHeight;
-                    
-                    const tempCtx = tempCanvas.getContext('2d');
-                    tempCtx.drawImage(
-                        canvas,
-                        sourceX, sourceY,
-                        sourceWidth, sourceHeight,
-                        0, 0,
-                        tempCanvas.width, tempCanvas.height
-                    );
-                    
-                    const pageImgData = tempCanvas.toDataURL('image/png');
-                    
-                    // Add page to PDF
-                    if (page > 0) {
-                        pdf.addPage();
-                    }
-                    
-                    // Calculate dimensions for this page
-                    const pageImgWidth = imgWidth;
-                    const pageImgHeight = (tempCanvas.height * pageImgWidth) / tempCanvas.width;
-                    
-                    // Position: start from top with margin
-                    const xPos = marginLeft;
-                    const yPos = marginTop;
-                    
-                    // Add image - starts at top of page
-                    pdf.addImage(pageImgData, 'PNG', xPos, yPos, pageImgWidth, pageImgHeight);
-                    
-                    // Add page number at bottom
-                    pdf.setFontSize(9);
-                    pdf.setTextColor(150);
-                    pdf.text(
-                        'Page ' + (page + 1) + ' of ' + totalPages,
-                        pdfWidth / 2,
-                        pdfHeight - 6,
-                        { align: 'center' }
-                    );
-                    
-                    // Add company name footer
-                    pdf.setFontSize(7);
-                    pdf.setTextColor(200);
-                    pdf.text(
-                        '<?php echo htmlspecialchars($company_name); ?> | Morning Report | ' + new Date().toLocaleDateString(),
-                        pdfWidth / 2,
-                        pdfHeight - 2,
-                        { align: 'center' }
-                    );
-                    
-                    // Update progress
-                    const progress = 60 + (((page + 1) / totalPages) * 35);
-                    updateProgress(progress, 'Page ' + (page + 1) + ' of ' + totalPages);
-                }
-                
-                updateProgress(95, 'Finalizing PDF...');
-                
-                // ============================================================
-                // DOWNLOAD PDF DIRECTLY
-                // ============================================================
-                const pdfOutput = pdf.output('blob');
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(pdfOutput);
-                link.download = 'Morning_Report_' + '<?php echo $report['report_number']; ?>' + '.pdf';
-                
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(link.href);
-                
-                updateProgress(100, 'Done!');
-                
-                // Hide loading overlay after a short delay
-                setTimeout(() => {
-                    document.getElementById('pdfLoading').classList.remove('active');
-                }, 800);
-                
-            }).catch(function(error) {
-                console.error('PDF Export Error:', error);
-                document.getElementById('pdfLoading').classList.remove('active');
-                alert('Failed to generate PDF. Please try again.\n\nError: ' + error.message);
+            // Add event listeners to all inputs
+            const inputs = document.querySelectorAll('.provider-input, #cash_balance');
+            inputs.forEach(input => {
+                input.addEventListener('input', calculateTotal);
+                input.addEventListener('change', calculateTotal);
             });
-        }
-        
-        // ============================================================
-        // KEYBOARD SHORTCUTS
-        // ============================================================
-        document.addEventListener('keydown', function(e) {
-            // Ctrl+P to export PDF
-            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
-                if (document.activeElement.tagName !== 'INPUT' && 
-                    document.activeElement.tagName !== 'TEXTAREA' &&
-                    document.activeElement.tagName !== 'SELECT') {
-                    e.preventDefault();
-                    exportPDF();
-                }
-            }
         });
         
-        console.log('%c MORNING REPORT - VIEW v2.0 (MULTI-PAGE PDF)',
+        console.log('%c EVENING STOCK - EDIT FORM v2.0 ',
             'background:#8B0000; color:white; padding:6px 12px; border-radius:4px; font-size:13px; font-weight:bold;');
-        console.log('%c 📄 Report: <?php echo $report['report_number']; ?> ',
+        console.log('%c 📄 Stock: <?php echo $stock['stock_number']; ?> ',
             'color:#6B7280; font-size:12px;');
-        console.log('%c 📄 Multi-page PDF with Logo & Office Name',
-            'color:#10B981; font-size:12px;');
-        console.log('%c ⌨️ Press Ctrl+P to export PDF',
+        console.log('%c 📊 Auto-format: 1,000,000 | Auto-calculate: CUMM. TOTAL ',
             'color:#6B7280; font-size:12px;');
     </script>
 </body>

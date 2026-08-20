@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: C:\xampp\htdocs\wakala_system\modules\evening_stock\view.php
+// FILE: modules/evening_stock/view.php
 // WAKALA FINANCIAL SYSTEM - VIEW EVENING STOCK
-// WITH PDF DOWNLOAD (NOT OPEN IN NEW PAGE)
+// WITH MULTI-PAGE PDF DOWNLOAD (CONTENT STARTS AT TOP)
 // ================================================================
 
 // ============================================================
@@ -876,6 +876,26 @@ $verification = $cash_difference + $float_difference;
             animation: spin 1s linear infinite;
             margin: 0 auto 16px;
         }
+        .pdf-loading .spinner-box .progress-text {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+        .pdf-loading .spinner-box .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #F3F4F6;
+            border-radius: 3px;
+            margin-top: 12px;
+            overflow: hidden;
+        }
+        .pdf-loading .spinner-box .progress-bar .progress-fill {
+            height: 100%;
+            background: #DC2626;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
         @keyframes spin { to { transform: rotate(360deg); } }
         
         /* ===== RESPONSIVE ===== */
@@ -951,6 +971,10 @@ $verification = $cash_difference + $float_difference;
             <div class="spinner"></div>
             <p><i class="fas fa-file-pdf" style="color:#DC2626;"></i> Generating PDF...</p>
             <small style="color:#6B7280;">Please wait</small>
+            <div class="progress-text" id="pdfProgressText">Preparing content...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="pdfProgressFill"></div>
+            </div>
         </div>
     </div>
     
@@ -1416,16 +1440,22 @@ $verification = $cash_difference + $float_difference;
         }
         
         // ============================================================
-        // EXPORT PDF FUNCTION - DOWNLOAD DIRECTLY (FIXED)
+        // MULTI-PAGE PDF EXPORT - FIXED (CONTENT STARTS AT TOP)
         // ============================================================
+        function updateProgress(percent, text) {
+            document.getElementById('pdfProgressFill').style.width = percent + '%';
+            document.getElementById('pdfProgressText').textContent = text;
+        }
+        
         function exportPDF() {
             // Show loading overlay
             document.getElementById('pdfLoading').classList.add('active');
+            updateProgress(0, 'Initializing...');
             
-            // Get the content to export
             const content = document.getElementById('reportContent');
             
-            // Use html2canvas to capture the content
+            updateProgress(10, 'Capturing content...');
+            
             html2canvas(content, {
                 scale: 2,
                 backgroundColor: '#FFFFFF',
@@ -1441,68 +1471,166 @@ $verification = $cash_difference + $float_difference;
                     });
                 }
             }).then(function(canvas) {
+                updateProgress(30, 'Processing image...');
+                
                 const imgData = canvas.toDataURL('image/png');
-                
-                // ============================================================
-                // FIX: Download PDF directly using Blob (NOT open in new tab)
-                // ============================================================
-                
-                // Create PDF using jsPDF
                 const { jsPDF } = window.jspdf;
+                
+                // ============================================================
+                // MULTI-PAGE PDF GENERATION - CONTENT STARTS AT TOP
+                // ============================================================
                 const pdf = new jsPDF('p', 'mm', 'a4');
                 
                 // Get page dimensions
                 const pdfWidth = pdf.internal.pageSize.getWidth();
                 const pdfHeight = pdf.internal.pageSize.getHeight();
                 
-                // Calculate image dimensions to fit page
-                const imgWidth = pdfWidth - 20; // 10mm margin on each side
+                // Margins (top, bottom, left, right)
+                const marginTop = 15;
+                const marginBottom = 15;
+                const marginLeft = 10;
+                const marginRight = 10;
+                
+                // Calculate usable area
+                const usableWidth = pdfWidth - marginLeft - marginRight;
+                const usableHeight = pdfHeight - marginTop - marginBottom;
+                
+                // Calculate image dimensions to fit width
+                const imgWidth = usableWidth;
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
                 
-                // Add image to PDF
-                pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight);
+                updateProgress(50, 'Calculating pages...');
                 
-                // Add footer
-                pdf.setFontSize(8);
-                pdf.setTextColor(150);
-                pdf.text('Generated by Wakala Financial Management System', pdfWidth / 2, pdfHeight - 10, { align: 'center' });
+                // Calculate how many pages needed
+                const totalPages = Math.ceil(imgHeight / usableHeight);
+                
+                updateProgress(60, 'Generating ' + totalPages + ' page(s)...');
+                
+                // For each page, slice the image
+                for (let page = 0; page < totalPages; page++) {
+                    // Calculate the portion of the image for this page
+                    const startY = page * usableHeight;
+                    const endY = Math.min((page + 1) * usableHeight, imgHeight);
+                    const sliceHeight = endY - startY;
+                    
+                    // Create a temporary canvas for this page slice
+                    const tempCanvas = document.createElement('canvas');
+                    const scale = 2;
+                    
+                    // Calculate dimensions
+                    const sourceX = 0;
+                    const sourceY = (startY / imgHeight) * canvas.height;
+                    const sourceWidth = canvas.width;
+                    const sourceHeight = (sliceHeight / imgHeight) * canvas.height;
+                    
+                    tempCanvas.width = canvas.width;
+                    tempCanvas.height = sourceHeight;
+                    
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(
+                        canvas,
+                        sourceX, sourceY,
+                        sourceWidth, sourceHeight,
+                        0, 0,
+                        tempCanvas.width, tempCanvas.height
+                    );
+                    
+                    const pageImgData = tempCanvas.toDataURL('image/png');
+                    
+                    // Add page to PDF
+                    if (page > 0) {
+                        pdf.addPage();
+                    }
+                    
+                    // Calculate dimensions for this page
+                    const pageImgWidth = imgWidth;
+                    const pageImgHeight = (tempCanvas.height * pageImgWidth) / tempCanvas.width;
+                    
+                    // Position: start from top with margin
+                    const xPos = marginLeft;
+                    const yPos = marginTop;
+                    
+                    // Add image - starts at top of page
+                    pdf.addImage(pageImgData, 'PNG', xPos, yPos, pageImgWidth, pageImgHeight);
+                    
+                    // Add page number at bottom
+                    pdf.setFontSize(9);
+                    pdf.setTextColor(150);
+                    pdf.text(
+                        'Page ' + (page + 1) + ' of ' + totalPages,
+                        pdfWidth / 2,
+                        pdfHeight - 6,
+                        { align: 'center' }
+                    );
+                    
+                    // Add company name footer
+                    pdf.setFontSize(7);
+                    pdf.setTextColor(200);
+                    pdf.text(
+                        '<?php echo htmlspecialchars($company_name); ?> | Evening Stock Report | ' + new Date().toLocaleDateString(),
+                        pdfWidth / 2,
+                        pdfHeight - 2,
+                        { align: 'center' }
+                    );
+                    
+                    // Update progress
+                    const progress = 60 + (((page + 1) / totalPages) * 35);
+                    updateProgress(progress, 'Page ' + (page + 1) + ' of ' + totalPages);
+                }
+                
+                updateProgress(95, 'Finalizing PDF...');
                 
                 // ============================================================
-                // FIX: Generate PDF as Blob and download
+                // DOWNLOAD PDF DIRECTLY
                 // ============================================================
                 const pdfOutput = pdf.output('blob');
-                
-                // Create download link
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(pdfOutput);
                 link.download = 'Evening_Stock_' + '<?php echo $stock['stock_number']; ?>' + '.pdf';
                 
-                // Trigger download
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                
-                // Clean up
                 URL.revokeObjectURL(link.href);
                 
-                // Hide loading overlay
-                document.getElementById('pdfLoading').classList.remove('active');
+                updateProgress(100, 'Done!');
+                
+                // Hide loading overlay after a short delay
+                setTimeout(() => {
+                    document.getElementById('pdfLoading').classList.remove('active');
+                }, 800);
                 
             }).catch(function(error) {
                 console.error('PDF Export Error:', error);
                 document.getElementById('pdfLoading').classList.remove('active');
-                alert('Failed to generate PDF. Please try again.');
+                alert('Failed to generate PDF. Please try again.\n\nError: ' + error.message);
             });
         }
         
-        console.log('%c EVENING STOCK - VIEW v2.0 ',
+        // ============================================================
+        // KEYBOARD SHORTCUTS
+        // ============================================================
+        document.addEventListener('keydown', function(e) {
+            // Ctrl+P to export PDF
+            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+                // Only intercept if not in a form input
+                if (document.activeElement.tagName !== 'INPUT' && 
+                    document.activeElement.tagName !== 'TEXTAREA' &&
+                    document.activeElement.tagName !== 'SELECT') {
+                    e.preventDefault();
+                    exportPDF();
+                }
+            }
+        });
+        
+        console.log('%c EVENING STOCK - VIEW v2.0 (MULTI-PAGE PDF FIXED)',
             'background:#8B0000; color:white; padding:6px 12px; border-radius:4px; font-size:13px; font-weight:bold;');
         console.log('%c 📄 Stock: <?php echo $stock['stock_number']; ?> ',
             'color:#6B7280; font-size:12px;');
-        console.log('%c 📊 Differences: TOTAL | CASH | FLOAT ',
-            'color:#6B7280; font-size:12px;');
-        console.log('%c ⬇️ PDF will DOWNLOAD directly (not open in new tab) ',
+        console.log('%c ✅ Content starts at TOP of each page',
             'color:#10B981; font-size:12px;');
+        console.log('%c ⌨️ Press Ctrl+P to export PDF',
+            'color:#6B7280; font-size:12px;');
     </script>
 </body>
 </html>
