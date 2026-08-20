@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: C:\xampp\htdocs\wakala_system\modules\morning_report\view.php
 // WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT
-// WITH EXPORT PDF BUTTON
+// WITH PDF EXPORT INCLUDING LOGO & OFFICE NAME
 // ================================================================
 
 // ============================================================
@@ -62,9 +62,9 @@ if (!$is_admin && $report['employee_id'] != $employee_id) {
 }
 
 // ============================================================
-// GET PROVIDER NAMES
+// GET PROVIDER NAMES WITH ICONS
 // ============================================================
-$stmt = $db->prepare("SELECT provider_code, provider_name, color_code FROM providers WHERE is_active = 1");
+$stmt = $db->prepare("SELECT provider_code, provider_name, color_code, icon_class FROM providers WHERE is_active = 1");
 $stmt->execute();
 $providers_list = $stmt->fetchAll();
 
@@ -73,7 +73,8 @@ $provider_names = [];
 foreach ($providers_list as $p) {
     $provider_names[$p['provider_code']] = [
         'name' => $p['provider_name'],
-        'color' => $p['color_code'] ?? '#0B5ED7'
+        'color' => $p['color_code'] ?? '#0B5ED7',
+        'icon' => $p['icon_class'] ?? 'fas fa-university'
     ];
 }
 
@@ -91,12 +92,11 @@ $employee = $stmt->fetch();
 $employee_name = $employee['full_name'] ?? 'Unknown';
 
 // ============================================================
-// CALCULATE PROVIDER TOTAL
+// GET COMPANY NAME FROM SETTINGS
 // ============================================================
-$provider_total = 0;
-foreach ($provider_data as $amount) {
-    $provider_total += $amount;
-}
+$company_name = getSetting('company_name') ?? SITE_NAME;
+$company_address = getSetting('company_address') ?? 'Dodoma, Tanzania';
+$company_phone = getSetting('company_phone') ?? '+255 700 000 000';
 
 // ================================================================
 // HTML STARTS HERE
@@ -526,6 +526,47 @@ foreach ($provider_data as $amount) {
             max-width: 820px;
         }
         
+        /* ===== PDF HEADER (Logo + Office Name) ===== */
+        .pdf-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding-bottom: 16px;
+            border-bottom: 3px solid #DC2626;
+            margin-bottom: 20px;
+        }
+        
+        .pdf-header .pdf-logo {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid #DC2626;
+            padding: 3px;
+            background: white;
+        }
+        
+        .pdf-header .pdf-office-info {
+            flex: 1;
+        }
+        
+        .pdf-header .pdf-office-info .office-name {
+            font-size: 18px;
+            font-weight: 700;
+            color: #8B0000;
+        }
+        
+        .pdf-header .pdf-office-info .office-details {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        .pdf-header .pdf-office-info .office-details i {
+            margin-right: 4px;
+            color: #DC2626;
+        }
+        
         .view-card .view-header {
             display: flex;
             justify-content: space-between;
@@ -743,6 +784,8 @@ foreach ($provider_data as $amount) {
             .live-datetime { font-size: 10px; padding: 2px 8px; }
             .user-profile .user-info { display: none; }
             .info-grid { grid-template-columns: 1fr 1fr; }
+            .pdf-header .pdf-logo { width: 45px; height: 45px; }
+            .pdf-header .pdf-office-info .office-name { font-size: 15px; }
             
             .sidebar-overlay {
                 display: none;
@@ -771,6 +814,9 @@ foreach ($provider_data as $amount) {
             .provider-table { font-size: 12px; }
             .provider-table th, .provider-table td { padding: 6px 8px; }
             .view-card .view-header .report-number { font-size: 16px; }
+            .pdf-header .pdf-logo { width: 35px; height: 35px; }
+            .pdf-header .pdf-office-info .office-name { font-size: 13px; }
+            .pdf-header .pdf-office-info .office-details { font-size: 10px; }
         }
     </style>
 </head>
@@ -912,6 +958,22 @@ foreach ($provider_data as $amount) {
             <!-- ===== VIEW CARD ===== -->
             <div class="view-card" id="reportContent">
                 
+                <!-- ===== PDF HEADER (Logo + Office Name) ===== -->
+                <div class="pdf-header">
+                    <img src="../../assets/images/logo.PNG" alt="Wakala Logo" class="pdf-logo" 
+                         onerror="this.src='../../assets/images/default-avatar.png'">
+                    <div class="pdf-office-info">
+                        <div class="office-name"><?php echo htmlspecialchars($company_name); ?></div>
+                        <div class="office-details">
+                            <i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($company_address); ?>
+                            <span style="margin:0 8px;">|</span>
+                            <i class="fas fa-phone"></i> <?php echo htmlspecialchars($company_phone); ?>
+                            <span style="margin:0 8px;">|</span>
+                            <i class="fas fa-calendar-alt"></i> <?php echo date('d M Y'); ?>
+                        </div>
+                    </div>
+                </div>
+                
                 <!-- Header -->
                 <div class="view-header">
                     <div class="report-number">
@@ -970,11 +1032,13 @@ foreach ($provider_data as $amount) {
                         foreach ($provider_data as $code => $amount):
                             $name = $provider_names[$code]['name'] ?? $code;
                             $color = $provider_names[$code]['color'] ?? '#0B5ED7';
+                            $icon = $provider_names[$code]['icon'] ?? 'fas fa-university';
                         ?>
                             <tr>
                                 <td><?php echo $counter++; ?></td>
                                 <td>
                                     <span class="provider-dot" style="background:<?php echo $color; ?>;"></span>
+                                    <i class="<?php echo $icon; ?>" style="color:<?php echo $color; ?>; margin-right:6px;"></i>
                                     <?php echo htmlspecialchars($name); ?>
                                 </td>
                                 <td class="text-right"><?php echo formatCurrency($amount); ?></td>
@@ -1112,7 +1176,7 @@ foreach ($provider_data as $amount) {
         }
         
         // ============================================================
-        // EXPORT PDF FUNCTION
+        // EXPORT PDF FUNCTION WITH LOGO
         // ============================================================
         function exportPDF() {
             // Show loading overlay
@@ -1127,7 +1191,17 @@ foreach ($provider_data as $amount) {
                 backgroundColor: '#FFFFFF',
                 logging: false,
                 useCORS: true,
-                allowTaint: true
+                allowTaint: true,
+                // Ensure logo is captured
+                onclone: function(document) {
+                    // Make sure all images are loaded
+                    const images = document.querySelectorAll('img');
+                    images.forEach(img => {
+                        if (img.complete === false) {
+                            img.setAttribute('crossOrigin', 'anonymous');
+                        }
+                    });
+                }
             }).then(function(canvas) {
                 const imgData = canvas.toDataURL('image/png');
                 
@@ -1175,7 +1249,7 @@ foreach ($provider_data as $amount) {
             'background:#8B0000; color:white; padding:6px 12px; border-radius:4px; font-size:13px; font-weight:bold;');
         console.log('%c 📄 Report: <?php echo $report['report_number']; ?> ',
             'color:#6B7280; font-size:12px;');
-        console.log('%c 📄 PDF Export: Click the PDF button ',
+        console.log('%c 📄 PDF Export with Logo & Office Name ',
             'color:#6B7280; font-size:12px;');
     </script>
 </body>
