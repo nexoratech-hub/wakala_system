@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/index.php
-// WAKALA SYSTEM - MORNING REPORT LIST
-// WITH DARK MODE SUPPORT
+// FILE: modules/daily_report/index.php
+// WAKALA SYSTEM - DAILY REPORT LIST
+// WITH FULL DARK MODE SUPPORT
 // ================================================================
 
 // ============================================================
@@ -56,30 +56,33 @@ $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 
 // ============================================================
-// GET MORNING REPORTS WITH FILTERS
+// GET DAILY REPORTS WITH FILTERS
 // ============================================================
-$sql = "SELECT mr.*, 
+$sql = "SELECT dr.*, 
         e.full_name as employee_name, 
-        b.branch_name as branch_name
-        FROM morning_reports mr
-        LEFT JOIN employees e ON mr.employee_id = e.id
-        LEFT JOIN branches b ON mr.branch_id = b.id
-        WHERE mr.report_date BETWEEN ? AND ?";
+        b.branch_name as branch_name,
+        p.provider_name as provider_name,
+        p.provider_code
+        FROM daily_reports dr
+        LEFT JOIN employees e ON dr.employee_id = e.id
+        LEFT JOIN branches b ON dr.branch_id = b.id
+        LEFT JOIN providers p ON dr.provider_id = p.id
+        WHERE dr.report_date BETWEEN ? AND ?";
 
 $params = [$from_date, $to_date];
 
 if ($selected_branch > 0) {
-    $sql .= " AND mr.branch_id = ?";
+    $sql .= " AND dr.branch_id = ?";
     $params[] = $selected_branch;
 }
 
 // If employee, show only their reports
 if ($role == 'employee') {
-    $sql .= " AND mr.employee_id = ?";
+    $sql .= " AND dr.employee_id = ?";
     $params[] = $user_id;
 }
 
-$sql .= " ORDER BY mr.report_date DESC, mr.submitted_at DESC";
+$sql .= " ORDER BY dr.report_date DESC, dr.created_at DESC";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
@@ -90,10 +93,14 @@ $reports = $stmt->fetchAll();
 // ============================================================
 $sql_summary = "SELECT 
         COUNT(*) as total_reports,
-        SUM(cumm_total) as total_float,
-        SUM(cash_balance) as total_cash,
-        SUM(cumm_total + cash_balance) as total_stock
-        FROM morning_reports
+        SUM(total_commission + other_income) as total_income,
+        SUM(total_expenses) as total_expenses,
+        SUM(total_salaries) as total_salaries,
+        SUM(total_cash_out) as total_cashout,
+        SUM((total_commission + other_income) - total_expenses - total_salaries - total_cash_out) as total_profit,
+        SUM(total_deposits) as total_deposits,
+        SUM(total_withdrawals) as total_withdrawals
+        FROM daily_reports
         WHERE report_date BETWEEN ? AND ?";
 
 $params_summary = [$from_date, $to_date];
@@ -126,27 +133,25 @@ PAGE CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
-        </div>
-
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-sun" style="color:#bb0404;"></i> Morning Reports</h2>
-                <p class="text-muted">Manage and view all morning reports</p>
+                <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> Daily Reports</h2>
+                <p class="text-muted">Manage and view all daily reports</p>
             </div>
             <div class="header-right">
-                <a href="add.php" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add Report
+                <a href="deposit.php" class="btn btn-deposit">
+                    <i class="fas fa-arrow-down"></i> Deposit
+                </a>
+                <a href="withdrawal.php" class="btn btn-withdrawal">
+                    <i class="fas fa-arrow-up"></i> Withdrawal
+                </a>
+                <a href="generate.php" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Generate Report
                 </a>
                 <!-- ===== EXPORT DROPDOWN ===== -->
                 <div class="dropdown export-dropdown">
-                    <button class="btn btn-success dropdown-toggle" type="button" id="exportDropdown" onclick="toggleExportDropdown()">
+                    <button class="btn btn-success dropdown-toggle" type="button" id="exportDropdown" onclick="toggleDropdown()">
                         <i class="fas fa-file-export"></i> Export
                         <i class="fas fa-chevron-down" style="margin-left: 6px; font-size: 11px;"></i>
                     </button>
@@ -213,25 +218,25 @@ PAGE CONTENT
                     <span class="summary-value"><?php echo number_format($summary['total_reports'] ?? 0); ?></span>
                 </div>
             </div>
-            <div class="summary-card total-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <div class="summary-card total-income">
+                <div class="summary-icon"><i class="fas fa-hand-holding-usd"></i></div>
                 <div class="summary-info">
-                    <span class="summary-label">Total Float</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_float'] ?? 0); ?></span>
+                    <span class="summary-label">Total Income</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_income'] ?? 0); ?></span>
                 </div>
             </div>
-            <div class="summary-card total-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="summary-card total-deposits">
+                <div class="summary-icon"><i class="fas fa-arrow-down"></i></div>
                 <div class="summary-info">
-                    <span class="summary-label">Total Cash</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_cash'] ?? 0); ?></span>
+                    <span class="summary-label">Total Deposits</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_deposits'] ?? 0); ?></span>
                 </div>
             </div>
-            <div class="summary-card total-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <div class="summary-card total-withdrawals">
+                <div class="summary-icon"><i class="fas fa-arrow-up"></i></div>
                 <div class="summary-info">
-                    <span class="summary-label">Total Stock</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_stock'] ?? 0); ?></span>
+                    <span class="summary-label">Total Withdrawals</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_withdrawals'] ?? 0); ?></span>
                 </div>
             </div>
         </div>
@@ -239,7 +244,7 @@ PAGE CONTENT
         <!-- ===== REPORTS TABLE ===== -->
         <div class="table-container" id="printableArea">
             <div class="table-header">
-                <h4><i class="fas fa-list"></i> Morning Reports List</h4>
+                <h4><i class="fas fa-list"></i> Daily Reports List</h4>
                 <span class="record-count"><?php echo count($reports); ?> records found</span>
             </div>
             
@@ -252,9 +257,11 @@ PAGE CONTENT
                             <th>Date</th>
                             <th>Branch</th>
                             <th>Employee</th>
+                            <th>Provider</th>
                             <th>Float</th>
-                            <th>Cash</th>
-                            <th>Total Stock</th>
+                            <th>Deposits</th>
+                            <th>Withdrawals</th>
+                            <th>Commission</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -274,9 +281,19 @@ PAGE CONTENT
                                         </span>
                                     </td>
                                     <td><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></td>
-                                    <td class="text-primary"><?php echo formatCurrency($report['cumm_total'] ?? 0); ?></td>
-                                    <td class="text-success"><?php echo formatCurrency($report['cash_balance'] ?? 0); ?></td>
-                                    <td class="text-info font-bold"><?php echo formatCurrency(($report['cumm_total'] ?? 0) + ($report['cash_balance'] ?? 0)); ?></td>
+                                    <td>
+                                        <?php if ($report['provider_code']): ?>
+                                            <span class="provider-badge">
+                                                <?php echo htmlspecialchars($report['provider_code']); ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="text-muted">N/A</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?php echo formatCurrency($report['current_float'] ?? 0); ?></td>
+                                    <td class="text-success"><?php echo formatCurrency($report['total_deposits'] ?? 0); ?></td>
+                                    <td class="text-danger"><?php echo formatCurrency($report['total_withdrawals'] ?? 0); ?></td>
+                                    <td class="text-primary font-bold"><?php echo formatCurrency($report['total_commission'] ?? 0); ?></td>
                                     <td>
                                         <div class="action-buttons">
                                             <a href="view.php?id=<?php echo $report['id']; ?>" class="btn-action view" title="View">
@@ -297,11 +314,11 @@ PAGE CONTENT
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="9" class="text-center no-data">
-                                    <i class="fas fa-inbox" style="font-size:48px;color:var(--text-light);display:block;margin:20px 0;"></i>
-                                    <p style="color:var(--text-muted);">No morning reports found for the selected filters</p>
-                                    <a href="add.php" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-plus"></i> Add First Report
+                                <td colspan="11" class="text-center no-data">
+                                    <i class="fas fa-inbox" style="font-size:48px;color:var(--daily-text-light);display:block;margin:20px 0;"></i>
+                                    <p style="color:var(--daily-text-secondary);">No daily reports found for the selected filters</p>
+                                    <a href="generate.php" class="btn btn-primary btn-sm">
+                                        <i class="fas fa-plus"></i> Generate First Report
                                     </a>
                                 </td>
                             </tr>
@@ -320,104 +337,61 @@ PAGE CONTENT
 </div>
 
 <!-- ============================================================
-STYLES WITH DARK MODE SUPPORT
+STYLES - WITH FULL DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --bg-primary: #f3f4f6;
-    --bg-body: #f3f4f6;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f9fafb;
-    --bg-table-even: #fafafa;
-    --bg-table-hover: #f3f4f6;
-    --bg-header: #ffffff;
-    --bg-input: #f9fafb;
-    --bg-empty: #f9fafb;
-    --text-primary: #1f2937;
-    --text-secondary: #374151;
-    --text-muted: #6b7280;
-    --text-light: #9ca3af;
-    --border-color: #e5e7eb;
-    --shadow-color: rgba(0,0,0,0.06);
-    --shadow-hover: rgba(0,0,0,0.08);
+    --daily-bg: #FFFFFF;
+    --daily-text: #1F2937;
+    --daily-text-secondary: #6B7280;
+    --daily-text-light: #9CA3AF;
+    --daily-border: #E5E7EB;
+    --daily-card-bg: #FFFFFF;
+    --daily-input-bg: #F9FAFB;
+    --daily-hover: #F3F4F6;
+    --daily-shadow: rgba(0,0,0,0.06);
+    --daily-shadow-lg: rgba(0,0,0,0.12);
+    --daily-dropdown-bg: #FFFFFF;
+    --daily-dropdown-border: #E5E7EB;
 }
 
-/* Dark Mode - Full Page */
-body.dark-mode {
-    --bg-primary: #0f172a;
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-card-hover: #334155;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-header: #1e293b;
-    --bg-input: #334155;
-    --bg-empty: #1a2332;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
+html.dark-mode {
+    --daily-bg: #1F2937;
+    --daily-text: #F9FAFB;
+    --daily-text-secondary: #9CA3AF;
+    --daily-text-light: #6B7280;
+    --daily-border: #374151;
+    --daily-card-bg: #1F2937;
+    --daily-input-bg: #374151;
+    --daily-hover: #374151;
+    --daily-shadow: rgba(0,0,0,0.3);
+    --daily-shadow-lg: rgba(0,0,0,0.4);
+    --daily-dropdown-bg: #1F2937;
+    --daily-dropdown-border: #374151;
 }
 
 /* Apply Dark Mode to Full Page */
 body {
-    background: var(--bg-body) !important;
-    color: var(--text-primary);
+    background: var(--daily-bg) !important;
+    color: var(--daily-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
 .main-wrapper {
-    background: var(--bg-body) !important;
+    background: var(--daily-bg) !important;
     transition: background 0.3s ease;
 }
 
 .main-content {
-    background: var(--bg-body) !important;
+    background: var(--daily-bg) !important;
     transition: background 0.3s ease;
 }
 
 /* ============================================================
-   DARK MODE TOGGLE BUTTON
-   ============================================================ */
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-card-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-.dark-mode-btn i {
-    font-size: 16px;
-}
-
-/* ============================================================
-   PAGE HEADER
+   PAGE HEADER - DARK MODE
    ============================================================ */
 .page-header {
     display: flex;
@@ -431,8 +405,9 @@ body {
 .page-header .header-left h2 {
     font-size: 22px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--daily-text);
     margin: 0;
+    transition: color 0.3s ease;
 }
 
 .page-header .header-left h2 i {
@@ -441,8 +416,9 @@ body {
 
 .page-header .header-left .text-muted {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--daily-text-secondary);
     margin: 4px 0 0 0;
+    transition: color 0.3s ease;
 }
 
 .page-header .header-right {
@@ -450,6 +426,55 @@ body {
     gap: 10px;
     flex-wrap: wrap;
     align-items: center;
+}
+
+/* ============================================================
+   BUTTONS - DARK MODE
+   ============================================================ */
+.btn-deposit {
+    background: #10B981;
+    color: #ffffff;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+}
+
+.btn-deposit:hover {
+    background: #059669;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    color: #ffffff;
+}
+
+.btn-withdrawal {
+    background: #DC2626;
+    color: #ffffff;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+}
+
+.btn-withdrawal:hover {
+    background: #B91C1C;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+    color: #ffffff;
 }
 
 .btn-primary {
@@ -484,7 +509,6 @@ body {
     font-weight: 600;
     font-size: 13px;
     cursor: pointer;
-    text-decoration: none;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -499,7 +523,7 @@ body {
 }
 
 /* ============================================================
-   EXPORT DROPDOWN
+   EXPORT DROPDOWN - DARK MODE
    ============================================================ */
 .export-dropdown {
     position: relative;
@@ -537,14 +561,15 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
+    background: var(--daily-dropdown-bg);
+    border: 1px solid var(--daily-dropdown-border);
     border-radius: 10px;
-    box-shadow: 0 10px 30px var(--shadow-color);
+    box-shadow: 0 10px 30px var(--daily-shadow-lg);
     min-width: 200px;
     z-index: 1000;
     padding: 6px 0;
     overflow: hidden;
+    transition: all 0.3s ease;
 }
 
 .export-dropdown .dropdown-menu.show {
@@ -568,7 +593,7 @@ body {
     align-items: center;
     gap: 10px;
     padding: 10px 18px;
-    color: var(--text-primary);
+    color: var(--daily-text);
     text-decoration: none;
     font-size: 13px;
     font-weight: 500;
@@ -581,7 +606,7 @@ body {
 }
 
 .export-dropdown .dropdown-item:hover {
-    background: var(--bg-card-hover);
+    background: var(--daily-hover);
     color: #bb0404;
 }
 
@@ -593,20 +618,21 @@ body {
 
 .export-dropdown .dropdown-divider {
     height: 1px;
-    background: var(--border-color);
+    background: var(--daily-border);
     margin: 4px 0;
 }
 
 /* ============================================================
-   FILTERS BAR
+   FILTERS BAR - DARK MODE
    ============================================================ */
 .filters-bar {
-    background: var(--bg-card);
+    background: var(--daily-card-bg);
     padding: 16px 20px;
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--daily-shadow);
+    border: 1px solid var(--daily-border);
     margin-bottom: 20px;
+    transition: all 0.3s ease;
 }
 
 .filters-form {
@@ -625,18 +651,19 @@ body {
 .filter-group label {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--daily-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    transition: color 0.3s ease;
 }
 
 .form-control {
     padding: 8px 12px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--daily-border);
     border-radius: 6px;
     font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-input);
+    color: var(--daily-text);
+    background: var(--daily-input-bg);
     transition: all 0.3s ease;
     min-width: 150px;
 }
@@ -645,6 +672,11 @@ body {
     outline: none;
     border-color: #bb0404;
     box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
+}
+
+.form-control option {
+    background: var(--daily-dropdown-bg);
+    color: var(--daily-text);
 }
 
 .btn-filter {
@@ -667,9 +699,9 @@ body {
 }
 
 .btn-reset {
-    background: var(--bg-table-even);
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
+    background: var(--daily-hover);
+    color: var(--daily-text-secondary);
+    border: none;
     padding: 8px 16px;
     border-radius: 6px;
     font-weight: 500;
@@ -683,11 +715,12 @@ body {
 }
 
 .btn-reset:hover {
-    background: var(--bg-table-hover);
+    background: var(--daily-border);
+    color: var(--daily-text);
 }
 
 /* ============================================================
-   SUMMARY CARDS
+   SUMMARY CARDS - DARK MODE
    ============================================================ */
 .summary-cards {
     display: grid;
@@ -697,20 +730,20 @@ body {
 }
 
 .summary-card {
-    background: var(--bg-card);
+    background: var(--daily-card-bg);
     border-radius: 10px;
     padding: 16px 20px;
     display: flex;
     align-items: center;
     gap: 14px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--daily-shadow);
+    border: 1px solid var(--daily-border);
     transition: all 0.3s ease;
 }
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--shadow-hover);
+    box-shadow: 0 4px 12px var(--daily-shadow-lg);
 }
 
 .summary-icon {
@@ -732,14 +765,14 @@ body {
     font-size: 11px;
     text-transform: uppercase;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--daily-text-secondary);
     display: block;
 }
 
 .summary-value {
     font-size: 20px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--daily-text);
 }
 
 .summary-card.total-reports .summary-icon {
@@ -748,33 +781,34 @@ body {
 }
 .summary-card.total-reports { border-left: 4px solid #3B82F6; }
 
-.summary-card.total-float .summary-icon {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-.summary-card.total-float { border-left: 4px solid #1E40AF; }
-
-.summary-card.total-cash .summary-icon {
+.summary-card.total-income .summary-icon {
     background: #D1FAE5;
     color: #065F46;
 }
-.summary-card.total-cash { border-left: 4px solid #10B981; }
+.summary-card.total-income { border-left: 4px solid #10B981; }
 
-.summary-card.total-stock .summary-icon {
+.summary-card.total-deposits .summary-icon {
     background: #DBEAFE;
     color: #1E40AF;
 }
-.summary-card.total-stock { border-left: 4px solid #1E40AF; }
+.summary-card.total-deposits { border-left: 4px solid #1E40AF; }
+
+.summary-card.total-withdrawals .summary-icon {
+    background: #FEE2E2;
+    color: #991B1B;
+}
+.summary-card.total-withdrawals { border-left: 4px solid #DC2626; }
 
 /* ============================================================
-   TABLE CONTAINER
+   TABLE CONTAINER - DARK MODE
    ============================================================ */
 .table-container {
-    background: var(--bg-card);
+    background: var(--daily-card-bg);
     border-radius: 10px;
     padding: 16px 20px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--daily-shadow);
+    border: 1px solid var(--daily-border);
+    transition: all 0.3s ease;
 }
 
 .table-header {
@@ -787,7 +821,7 @@ body {
 .table-header h4 {
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--daily-text);
     margin: 0;
 }
 
@@ -798,7 +832,7 @@ body {
 
 .record-count {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--daily-text-secondary);
 }
 
 .table-responsive {
@@ -812,7 +846,7 @@ body {
 }
 
 /* ============================================================
-   TABLE HEADER - RED BACKGROUND
+   TABLE HEADER - RED BACKGROUND (Stays Red)
    ============================================================ */
 .table thead th {
     background: #bb0404 !important;
@@ -834,20 +868,22 @@ body {
 
 .table tbody td {
     padding: 10px 12px;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--daily-border);
     vertical-align: middle;
+    color: var(--daily-text);
+    transition: color 0.3s ease;
 }
 
 .table tbody tr:hover {
-    background: var(--bg-table-hover);
+    background: var(--daily-hover);
 }
 
 .table tbody tr:nth-child(even) {
-    background: var(--bg-table-even);
+    background: var(--daily-hover);
 }
 
 .table tbody tr:nth-child(even):hover {
-    background: var(--bg-table-hover);
+    background: var(--daily-border);
 }
 
 .table tbody .no-data {
@@ -856,7 +892,7 @@ body {
 
 .report-number {
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--daily-text);
     font-size: 12px;
 }
 
@@ -869,9 +905,13 @@ body {
     font-weight: 500;
 }
 
-.text-primary {
-    color: #1E40AF;
-    font-weight: 600;
+.provider-badge {
+    background: #FEF3C7;
+    color: #92400E;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
 }
 
 .text-success {
@@ -879,8 +919,13 @@ body {
     font-weight: 600;
 }
 
-.text-info {
-    color: #3B82F6;
+.text-danger {
+    color: #DC2626;
+    font-weight: 600;
+}
+
+.text-primary {
+    color: #1E40AF;
     font-weight: 600;
 }
 
@@ -889,11 +934,11 @@ body {
 }
 
 .text-muted {
-    color: var(--text-muted);
+    color: var(--daily-text-light);
 }
 
 /* ============================================================
-   ACTION BUTTONS
+   ACTION BUTTONS - DARK MODE
    ============================================================ */
 .action-buttons {
     display: flex;
@@ -973,7 +1018,7 @@ body {
     .page-header .header-right .btn,
     .page-header .header-right .export-dropdown {
         flex: 1;
-        min-width: 120px;
+        min-width: 100px;
     }
     
     .page-header .header-right .btn {
@@ -1086,45 +1131,9 @@ JAVASCRIPT
 ============================================================ -->
 <script>
 // ============================================================
-// DARK MODE TOGGLE
-// ============================================================
-function toggleDarkMode() {
-    const body = document.body;
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    body.classList.toggle('dark-mode');
-    
-    if (body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-// Check for saved dark mode preference
-document.addEventListener('DOMContentLoaded', function() {
-    const darkMode = localStorage.getItem('darkMode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn?.querySelector('i');
-    const text = btn?.querySelector('span');
-    
-    if (darkMode === 'enabled') {
-        document.body.classList.add('dark-mode');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light Mode';
-    }
-});
-
-// ============================================================
 // EXPORT DROPDOWN TOGGLE
 // ============================================================
-function toggleExportDropdown() {
+function toggleDropdown() {
     var menu = document.getElementById('exportMenu');
     menu.classList.toggle('show');
 }
@@ -1144,30 +1153,28 @@ document.addEventListener('click', function(e) {
 // EXPORT FUNCTIONS
 // ============================================================
 function getFilterParams() {
-    const fromDate = document.querySelector('input[name="from_date"]')?.value || '';
-    const toDate = document.querySelector('input[name="to_date"]')?.value || '';
-    const branch = document.querySelector('select[name="branch"]')?.value || '0';
+    var fromDate = document.querySelector('input[name="from_date"]')?.value || '';
+    var toDate = document.querySelector('input[name="to_date"]')?.value || '';
+    var branch = document.querySelector('select[name="branch"]')?.value || '0';
     return { from_date: fromDate, to_date: toDate, branch: branch };
 }
 
 function exportData(format) {
-    const params = getFilterParams();
-    const url = 'export.php?format=' + format + 
-                '&from_date=' + params.from_date + 
-                '&to_date=' + params.to_date + 
-                '&branch=' + params.branch;
+    var params = getFilterParams();
+    var url = 'export.php?format=' + format + 
+              '&from_date=' + params.from_date + 
+              '&to_date=' + params.to_date + 
+              '&branch=' + params.branch;
     window.location.href = url;
 }
 
 function printData() {
-    // Get the table content
-    const table = document.getElementById('dataTable');
-    const title = 'Morning Reports List';
-    const dateRange = document.querySelector('input[name="from_date"]')?.value + ' to ' + document.querySelector('input[name="to_date"]')?.value || '';
+    var table = document.getElementById('dataTable');
+    var title = 'Daily Reports List';
+    var dateRange = document.querySelector('input[name="from_date"]')?.value + ' to ' + document.querySelector('input[name="to_date"]')?.value || '';
     
-    // Create print window
-    const printWindow = window.open('', '_blank', 'width=1000,height=600');
-    printWindow.document.write('<html><head><title>Morning Reports</title>');
+    var printWindow = window.open('', '_blank', 'width=1000,height=600');
+    printWindow.document.write('<html><head><title>Daily Reports</title>');
     printWindow.document.write('<style>');
     printWindow.document.write(`
         body { font-family: Arial, sans-serif; padding: 20px; }
@@ -1178,23 +1185,23 @@ function printData() {
         td { padding: 8px 12px; border-bottom: 1px solid #E5E7EB; }
         tr:nth-child(even) { background: #FAFAFA; }
         .branch-badge { background: #DBEAFE; color: #1D4ED8; padding: 2px 8px; border-radius: 4px; }
-        .text-primary { color: #1E40AF; }
+        .provider-badge { background: #FEF3C7; color: #92400E; padding: 2px 8px; border-radius: 4px; }
         .text-success { color: #10B981; }
-        .text-info { color: #3B82F6; }
+        .text-danger { color: #DC2626; }
+        .text-primary { color: #1E40AF; }
         .footer { margin-top: 20px; font-size: 11px; color: #9CA3AF; text-align: center; border-top: 1px solid #E5E7EB; padding-top: 10px; }
         .print-date { float: right; color: #6B7280; font-size: 12px; }
     `);
     printWindow.document.write('</style>');
     printWindow.document.write('</head><body>');
-    printWindow.document.write('<h2><i class="fas fa-sun"></i> Morning Reports</h2>');
+    printWindow.document.write('<h2><i class="fas fa-file-alt"></i> Daily Reports</h2>');
     printWindow.document.write('<div class="subtitle">Date Range: ' + dateRange + '</div>');
     printWindow.document.write('<div class="print-date">Printed: ' + new Date().toLocaleString() + '</div>');
     printWindow.document.write(table.outerHTML);
-    printWindow.document.write('<div class="footer">Wakala System - Morning Reports</div>');
+    printWindow.document.write('<div class="footer">Wakala System - Daily Reports</div>');
     printWindow.document.write('</body></html>');
     printWindow.document.close();
     
-    // Wait for content to load then print
     printWindow.onload = function() {
         printWindow.print();
         printWindow.close();
@@ -1205,10 +1212,31 @@ function printData() {
 // DELETE FUNCTION
 // ============================================================
 function deleteReport(id) {
-    if (confirm('Are you sure you want to delete this morning report? This action cannot be undone.')) {
+    if (confirm('Are you sure you want to delete this daily report? This action cannot be undone.')) {
         window.location.href = 'delete.php?id=' + id;
     }
 }
+
+// ============================================================
+// DARK MODE SYNC
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    function syncDarkMode() {
+        var html = document.documentElement;
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) {
+            html.classList.add('dark-mode');
+        } else {
+            html.classList.remove('dark-mode');
+        }
+    }
+    
+    syncDarkMode();
+    
+    document.addEventListener('darkModeChanged', function(e) {
+        syncDarkMode();
+    });
+});
 </script>
 
 </body>

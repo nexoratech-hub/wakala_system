@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// WAKALA FINANCIAL SYSTEM - EVENING STOCK LIST
-// WITH FULL DARK MODE SUPPORT
+// FILE: modules/employees/index.php
+// WAKALA FINANCIAL SYSTEM - EMPLOYEES LIST
+// WITH PROFILE PICTURE SUPPORT & DARK MODE
 // ================================================================
 
 // ============================================================
@@ -29,6 +29,14 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
 
 $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+
+// ============================================================
+// CHECK PERMISSION - Only admin and super_admin can access
+// ============================================================
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
 
 // ============================================================
 // GET USER DATA
@@ -62,7 +70,7 @@ $branch_filter = '';
 $branch_params = [];
 
 if ($selected_branch > 0) {
-    $branch_filter = " AND es.branch_id = ? ";
+    $branch_filter = " AND e.branch_id = ? ";
     $branch_params[] = $selected_branch;
 }
 
@@ -78,67 +86,84 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// GET TODAY'S SUMMARIES FROM EVENING STOCK
+// GET EMPLOYEE SUMMARIES
 // ============================================================
 $today = date('Y-m-d');
+$month = date('m');
+$year = date('Y');
 
-// TODAY FLOAT (cumm_total from evening_stock)
+// TOTAL EMPLOYEES
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
+    $sql = "SELECT COUNT(*) as total FROM employees WHERE branch_id = ?";
+    $params = [$selected_branch];
 } else {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
+    $sql = "SELECT COUNT(*) as total FROM employees";
+    $params = [];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_float = $result['total'] ?? 0;
+$total_employees = $result['total'] ?? 0;
 
-// TODAY CASH (cash_balance from evening_stock)
+// ACTIVE EMPLOYEES
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
+    $sql = "SELECT COUNT(*) as total FROM employees WHERE is_active = 1 AND branch_id = ?";
+    $params = [$selected_branch];
 } else {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
+    $sql = "SELECT COUNT(*) as total FROM employees WHERE is_active = 1";
+    $params = [];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_cash = $result['total'] ?? 0;
+$active_employees = $result['total'] ?? 0;
 
-// TODAY STOCK = FLOAT + CASH
-$today_stock = $today_float + $today_cash;
+// THIS MONTH HIRED
+if ($selected_branch > 0) {
+    $sql = "SELECT COUNT(*) as total FROM employees WHERE MONTH(created_at) = ? AND YEAR(created_at) = ? AND branch_id = ?";
+    $params = [$month, $year, $selected_branch];
+} else {
+    $sql = "SELECT COUNT(*) as total FROM employees WHERE MONTH(created_at) = ? AND YEAR(created_at) = ?";
+    $params = [$month, $year];
+}
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$result = $stmt->fetch();
+$this_month_hired = $result['total'] ?? 0;
 
 // ============================================================
-// GET EVENING STOCKS LIST
+// GET EMPLOYEES LIST
 // ============================================================
 $sql = "SELECT 
-            es.id,
-            es.stock_number,
-            es.stock_date,
-            es.cash_balance,
-            es.cumm_total,
-            es.status,
-            es.submitted_at,
-            es.notes,
-            e.full_name as employee_name,
-            b.branch_name as branch_name,
-            b.id as branch_id
-        FROM evening_stocks es
-        LEFT JOIN employees e ON es.employee_id = e.id
-        LEFT JOIN branches b ON es.branch_id = b.id
+            e.id,
+            e.employee_id,
+            e.full_name,
+            e.email,
+            e.phone,
+            e.username,
+            e.role,
+            e.branch,
+            e.branch_id,
+            e.profile_pic,
+            e.base_salary,
+            e.hire_date,
+            e.employment_status,
+            e.is_active,
+            e.last_login,
+            e.created_at,
+            b.branch_name as branch_name
+        FROM employees e
+        LEFT JOIN branches b ON e.branch_id = b.id
         WHERE 1=1 " . $branch_filter . "
-        ORDER BY es.stock_date DESC, es.id DESC";
+        ORDER BY e.full_name ASC";
 
 $params = $branch_params;
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$stocks = $stmt->fetchAll();
+$employees = $stmt->fetchAll();
 
-// Count stocks
-$stock_count = count($stocks);
+// Count employees
+$employee_count = count($employees);
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -154,17 +179,25 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== DARK MODE TOGGLE ===== -->
+        <div class="dark-mode-toggle">
+            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
+                <i class="fas fa-moon"></i>
+                <span>Dark Mode</span>
+            </button>
+        </div>
+
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Evening Stocks</h2>
-                <span class="record-count"><?php echo $stock_count; ?> records</span>
+                <h2><i class="fas fa-users"></i> Employees</h2>
+                <span class="record-count"><?php echo $employee_count; ?> records</span>
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
                     <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Employee
                     </a>
                     
                     <!-- Export Dropdown - SECOND -->
@@ -215,81 +248,83 @@ DASHBOARD CONTENT
         </div>
 
         <!-- ============================================================
-        SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
+        SUMMARIES CARDS - TOTAL, ACTIVE, THIS MONTH
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
-            <div class="summary-card card-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <!-- TOTAL EMPLOYEES - Blue -->
+            <div class="summary-card card-total">
+                <div class="summary-icon"><i class="fas fa-users"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY STOCK</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_stock); ?></div>
-                    <div class="summary-sub">Float + Cash (Evening Stock)</div>
+                    <div class="summary-label">TOTAL EMPLOYEES</div>
+                    <div class="summary-value"><?php echo number_format($total_employees); ?></div>
+                    <div class="summary-sub">All Employees</div>
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
-            <div class="summary-card card-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <!-- ACTIVE EMPLOYEES - Green -->
+            <div class="summary-card card-active">
+                <div class="summary-icon"><i class="fas fa-user-check"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY FLOAT</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_float); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">ACTIVE EMPLOYEES</div>
+                    <div class="summary-value"><?php echo number_format($active_employees); ?></div>
+                    <div class="summary-sub">Currently Active</div>
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
-            <div class="summary-card card-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <!-- THIS MONTH HIRED - Orange -->
+            <div class="summary-card card-month">
+                <div class="summary-icon"><i class="fas fa-user-plus"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY CASH</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_cash); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">THIS MONTH HIRED</div>
+                    <div class="summary-value"><?php echo number_format($this_month_hired); ?></div>
+                    <div class="summary-sub"><?php echo date('F Y'); ?></div>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        TABLE - EVENING STOCKS LIST
+        TABLE - EMPLOYEES LIST
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Evening Stocks</h3>
+                <h3><i class="fas fa-list"></i> All Employees</h3>
                 <div class="table-actions">
+                    <select id="roleFilter" class="filter-select" onchange="filterByRole(this.value)">
+                        <option value="">All Roles</option>
+                        <option value="super_admin">Super Admin</option>
+                        <option value="admin">Admin</option>
+                        <option value="employee">Employee</option>
+                    </select>
                     <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
                         <option value="">All Status</option>
-                        <option value="waiting">Waiting</option>
-                        <option value="pending">Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="adjusted">Adjusted</option>
-                        <option value="rejected">Rejected</option>
+                        <option value="1">Active</option>
+                        <option value="0">Inactive</option>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search stocks..." class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search employees..." class="search-input">
                 </div>
             </div>
 
-            <?php if (empty($stocks)): ?>
+            <?php if (empty($employees)): ?>
                 <div class="empty-state">
-                    <i class="fas fa-moon"></i>
-                    <h3>No Evening Stocks Found</h3>
-                    <p>Start by adding your first evening stock for today.</p>
+                    <i class="fas fa-users"></i>
+                    <h3>No Employees Found</h3>
+                    <p>Start by adding your first employee record.</p>
                     <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Employee
                     </a>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="data-table" id="stocksTable">
+                    <table class="data-table" id="employeesTable">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Stock No.</th>
-                                <th>Date</th>
-                                <th>Employee</th>
+                                <th>Employee ID</th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Phone</th>
                                 <th>Branch</th>
-                                <th>Providers</th>
-                                <th>Cash</th>
-                                <th>Float</th>
+                                <th>Role</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -297,54 +332,92 @@ DASHBOARD CONTENT
                         <tbody>
                             <?php 
                             $counter = 1;
-                            foreach ($stocks as $stock): 
-                                // Get providers count
-                                $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
-                                $provider_count = count($provider_data);
+                            foreach ($employees as $employee): 
+                                // Status
+                                $is_active = $employee['is_active'] ?? 1;
+                                $status = $is_active ? 'Active' : 'Inactive';
+                                $status_class = $is_active ? 'status-active' : 'status-inactive';
                                 
-                                // Determine status
-                                $status = ucfirst($stock['status'] ?? 'pending');
-                                $status_colors = [
-                                    'waiting' => 'status-waiting',
-                                    'pending' => 'status-pending',
-                                    'approved' => 'status-approved',
-                                    'adjusted' => 'status-adjusted',
-                                    'rejected' => 'status-rejected'
-                                ];
-                                $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
+                                // Role badge color
+                                $role_class = '';
+                                if (strtolower($employee['role']) == 'super_admin') {
+                                    $role_class = 'role-super-admin';
+                                } elseif (strtolower($employee['role']) == 'admin') {
+                                    $role_class = 'role-admin';
+                                } else {
+                                    $role_class = 'role-employee';
+                                }
+                                
+                                // ============================================================
+                                // GET PROFILE PICTURE PATH
+                                // ============================================================
+                                $profile_pic_path = '';
+                                $profile_pic_url = '';
+                                
+                                if (!empty($employee['profile_pic'])) {
+                                    // Check if file exists in different paths
+                                    $paths_to_check = [
+                                        '../../' . $employee['profile_pic'],
+                                        $employee['profile_pic'],
+                                        '../../uploads/profiles/' . basename($employee['profile_pic'])
+                                    ];
+                                    
+                                    foreach ($paths_to_check as $path) {
+                                        if (file_exists($path)) {
+                                            $profile_pic_url = '../../' . $employee['profile_pic'];
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // If still not found, try direct path
+                                    if (empty($profile_pic_url) && file_exists($employee['profile_pic'])) {
+                                        $profile_pic_url = $employee['profile_pic'];
+                                    }
+                                }
                             ?>
-                                <tr data-status="<?php echo strtolower($stock['status'] ?? 'pending'); ?>">
+                                <tr data-role="<?php echo strtolower($employee['role']); ?>" data-status="<?php echo $is_active; ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="stock-number">
-                                            <?php echo htmlspecialchars($stock['stock_number']); ?>
+                                        <span class="employee-id">
+                                            <?php echo htmlspecialchars($employee['employee_id']); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></td>
                                     <td>
-                                        <span class="employee-name">
-                                            <?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?>
+                                        <div class="employee-name-cell">
+                                            <?php if (!empty($profile_pic_url)): ?>
+                                                <img src="<?php echo htmlspecialchars($profile_pic_url); ?>" alt="Profile" class="profile-thumb" 
+                                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                                <div class="profile-avatar" style="display:none;">
+                                                    <?php echo strtoupper(substr($employee['full_name'], 0, 1)); ?>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="profile-avatar">
+                                                    <?php echo strtoupper(substr($employee['full_name'], 0, 1)); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <span class="employee-name">
+                                                <?php echo htmlspecialchars($employee['full_name']); ?>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="employee-email">
+                                            <?php echo htmlspecialchars($employee['email']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="employee-phone">
+                                            <?php echo htmlspecialchars($employee['phone'] ?? 'N/A'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-name">
-                                            <?php echo htmlspecialchars($stock['branch_name'] ?? 'Main'); ?>
+                                            <?php echo htmlspecialchars($employee['branch_name'] ?? 'Main'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="provider-count">
-                                            <i class="fas fa-building"></i>
-                                            <?php echo $provider_count; ?> providers
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount cash">
-                                            <?php echo formatCurrency($stock['cash_balance']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount float">
-                                            <?php echo formatCurrency($stock['cumm_total']); ?>
+                                        <span class="role-badge <?php echo $role_class; ?>">
+                                            <?php echo ucfirst(str_replace('_', ' ', $employee['role'])); ?>
                                         </span>
                                     </td>
                                     <td>
@@ -354,13 +427,13 @@ DASHBOARD CONTENT
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-view" title="View">
+                                            <a href="view.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
+                                            <a href="edit.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            <a href="delete.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this employee?')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -382,63 +455,106 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+DASHBOARD STYLES WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --evening-bg: #FFFFFF;
-    --evening-text: #1F2937;
-    --evening-text-secondary: #6B7280;
-    --evening-text-light: #9CA3AF;
-    --evening-border: #E5E7EB;
-    --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
-    --evening-input-bg: #F9FAFB;
-    --evening-hover: #F3F4F6;
-    --evening-shadow: rgba(0,0,0,0.06);
-    --evening-shadow-lg: rgba(0,0,0,0.12);
-    --evening-dropdown-bg: #FFFFFF;
-    --evening-dropdown-border: #E5E7EB;
+    --bg-primary: #f3f4f6;
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f9fafb;
+    --bg-table-even: #fafafa;
+    --bg-table-hover: #f3f4f6;
+    --bg-input: #f9fafb;
+    --bg-empty: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --shadow-hover: rgba(0,0,0,0.08);
+    --dropdown-bg: #ffffff;
+    --dropdown-hover: #f3f4f6;
 }
 
-html.dark-mode {
-    --evening-bg: #1F2937;
-    --evening-text: #F9FAFB;
-    --evening-text-secondary: #9CA3AF;
-    --evening-text-light: #6B7280;
-    --evening-border: #374151;
-    --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
-    --evening-input-bg: #374151;
-    --evening-hover: #374151;
-    --evening-shadow: rgba(0,0,0,0.3);
-    --evening-shadow-lg: rgba(0,0,0,0.4);
-    --evening-dropdown-bg: #1F2937;
-    --evening-dropdown-border: #374151;
+/* Dark Mode - Full Page */
+body.dark-mode {
+    --bg-primary: #0f172a;
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-card-hover: #334155;
+    --bg-table-even: #1a2332;
+    --bg-table-hover: #2d3a4f;
+    --bg-input: #334155;
+    --bg-empty: #1a2332;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+    --shadow-color: rgba(0,0,0,0.4);
+    --shadow-hover: rgba(0,0,0,0.6);
+    --dropdown-bg: #1e293b;
+    --dropdown-hover: #334155;
 }
 
 /* Apply Dark Mode to Full Page */
 body {
-    background: var(--evening-bg) !important;
-    color: var(--evening-text);
+    background: var(--bg-body) !important;
+    color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
 .main-wrapper {
-    background: var(--evening-bg) !important;
+    background: var(--bg-body) !important;
     transition: background 0.3s ease;
 }
 
 .main-content {
-    background: var(--evening-bg) !important;
+    background: var(--bg-body) !important;
     transition: background 0.3s ease;
 }
 
 /* ============================================================
-   PAGE HEADER - DARK MODE
+   DARK MODE TOGGLE BUTTON
+   ============================================================ */
+.dark-mode-toggle {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+}
+
+.dark-mode-btn {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+}
+
+.dark-mode-btn:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.dark-mode-btn i {
+    font-size: 16px;
+}
+
+/* ============================================================
+   PAGE HEADER
    ============================================================ */
 .page-header {
     display: flex;
@@ -457,9 +573,8 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--evening-text);
+    color: var(--text-primary);
     margin: 0;
-    transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
@@ -469,11 +584,10 @@ body {
 
 .record-count {
     font-size: 13px;
-    color: var(--evening-text-secondary);
-    background: var(--evening-hover);
+    color: var(--text-muted);
+    background: var(--bg-table-even);
     padding: 2px 12px;
     border-radius: 12px;
-    transition: all 0.3s ease;
 }
 
 .header-actions {
@@ -575,15 +689,14 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--evening-dropdown-bg);
+    background: var(--dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--evening-shadow-lg);
-    border: 1px solid var(--evening-dropdown-border);
+    box-shadow: 0 4px 20px var(--shadow-hover);
+    border: 1px solid var(--border-color);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
-    transition: all 0.3s ease;
 }
 
 .dropdown-menu.show {
@@ -596,14 +709,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--evening-text);
+    color: var(--text-primary);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--evening-hover);
+    background: var(--dropdown-hover);
 }
 
 .dropdown-menu a i {
@@ -617,19 +730,18 @@ body {
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
 /* ============================================================
-   BRANCH FILTER BAR - DARK MODE
+   BRANCH FILTER BAR
    ============================================================ */
 .branch-filter-bar {
-    background: var(--evening-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
     padding: 12px 20px;
     margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
-    transition: all 0.3s ease;
+    box-shadow: 0 1px 3px var(--shadow-color);
+    border: 1px solid var(--border-color);
 }
 
 .branch-filter-left {
@@ -637,7 +749,7 @@ body {
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--text-primary);
 }
 
 .branch-filter-left i {
@@ -648,23 +760,17 @@ body {
 .branch-filter-left select {
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-input);
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--text-primary);
     outline: none;
     cursor: pointer;
-    transition: all 0.3s ease;
 }
 
 .branch-filter-left select:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
 }
 
 .branch-badge {
@@ -678,7 +784,7 @@ body {
 
 .branch-filter-right .date-display {
     font-size: 13px;
-    color: var(--evening-text-secondary);
+    color: var(--text-muted);
 }
 
 .branch-filter-right .date-display i {
@@ -686,7 +792,7 @@ body {
 }
 
 /* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
+   SUMMARIES GRID - 3 CARDS
    ============================================================ */
 .summaries-grid-three {
     display: grid;
@@ -696,14 +802,14 @@ body {
 }
 
 .summary-card {
-    background: var(--evening-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--shadow-color);
+    border: 1px solid var(--border-color);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -711,7 +817,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--evening-shadow-lg);
+    box-shadow: 0 4px 12px var(--shadow-hover);
 }
 
 .summary-icon {
@@ -738,46 +844,44 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--evening-text-secondary);
+    color: var(--text-muted);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--evening-text);
+    color: var(--text-primary);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    transition: color 0.3s ease;
 }
 
 .summary-sub {
     font-size: 11px;
-    color: var(--evening-text-light);
+    color: var(--text-light);
     font-weight: 500;
 }
 
 /* Card Colors */
-.card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
-.card-stock { border-left: 4px solid #1E40AF; }
+.card-total .summary-icon { background: #DBEAFE; color: #1D4ED8; }
+.card-total { border-left: 4px solid #3B82F6; }
 
-.card-float .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-float { border-left: 4px solid #3B82F6; }
+.card-active .summary-icon { background: #D1FAE5; color: #065F46; }
+.card-active { border-left: 4px solid #10B981; }
 
-.card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-cash { border-left: 4px solid #10B981; }
+.card-month .summary-icon { background: #FEF3C7; color: #D97706; }
+.card-month { border-left: 4px solid #D97706; }
 
 /* ============================================================
-   TABLE CONTAINER - DARK MODE
+   TABLE CONTAINER
    ============================================================ */
 .table-container {
-    background: var(--evening-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--shadow-color);
+    border: 1px solid var(--border-color);
     overflow: hidden;
-    transition: all 0.3s ease;
 }
 
 .table-header {
@@ -785,16 +889,15 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--border-color);
     flex-wrap: wrap;
     gap: 10px;
-    transition: all 0.3s ease;
 }
 
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--evening-text);
+    color: var(--text-primary);
     margin: 0;
 }
 
@@ -813,17 +916,13 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--border-color);
     font-size: 13px;
     outline: none;
     width: 200px;
+    background: var(--bg-input);
+    color: var(--text-primary);
     transition: all 0.3s ease;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
-}
-
-.search-input::placeholder {
-    color: var(--evening-text-light);
 }
 
 .search-input:focus {
@@ -831,14 +930,18 @@ body {
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
 }
 
+.search-input::placeholder {
+    color: var(--text-light);
+}
+
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--border-color);
     font-size: 13px;
     outline: none;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--bg-input);
+    color: var(--text-primary);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -846,11 +949,6 @@ body {
 .filter-select:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
 }
 
 .table-responsive {
@@ -864,7 +962,7 @@ body {
 }
 
 /* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
+   TABLE HEADER - RED BACKGROUND
    ============================================================ */
 .data-table thead {
     background: #DC2626;
@@ -888,65 +986,123 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--border-color);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--evening-hover);
+    background: var(--bg-table-hover);
+}
+
+.data-table tbody tr:nth-child(even) {
+    background: var(--bg-table-even);
+}
+
+.data-table tbody tr:nth-child(even):hover {
+    background: var(--bg-table-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--evening-text);
-    transition: color 0.3s ease;
+    color: var(--text-secondary);
 }
 
-/* Stock Number */
-.stock-number {
+/* Employee ID */
+.employee-id {
     font-weight: 600;
     color: #3B82F6;
     font-size: 12px;
 }
 
-/* Employee Name */
+/* Employee Name Cell */
+.employee-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.profile-thumb {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #DC2626;
+    background: #ffffff;
+}
+
+.profile-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #3B82F6;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+/* Dark mode profile avatar */
+body.dark-mode .profile-avatar {
+    background: #3B82F6;
+    color: #ffffff;
+}
+
+body.dark-mode .profile-thumb {
+    border-color: #DC2626;
+    background: #1e293b;
+}
+
 .employee-name {
     font-weight: 500;
-    color: var(--evening-text);
+    color: var(--text-primary);
+}
+
+/* Employee Email */
+.employee-email {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Employee Phone */
+.employee-phone {
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 /* Branch Name */
 .branch-name {
-    background: var(--evening-hover);
+    background: var(--bg-table-even);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    color: var(--evening-text-secondary);
-    transition: all 0.3s ease;
+    color: var(--text-muted);
 }
 
-/* Provider Count */
-.provider-count {
-    font-size: 12px;
-    color: var(--evening-text-secondary);
-}
-
-.provider-count i {
-    color: #3B82F6;
-    margin-right: 4px;
-}
-
-/* Amounts */
-.amount {
+/* Role Badge */
+.role-badge {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 11px;
     font-weight: 600;
 }
 
-.amount.cash {
-    color: #059669;
+.role-super-admin {
+    background: #FEF3C7;
+    color: #92400E;
 }
 
-.amount.float {
-    color: #1D4ED8;
+.role-admin {
+    background: #DBEAFE;
+    color: #1E40AF;
+}
+
+.role-employee {
+    background: #D1FAE5;
+    color: #065F46;
 }
 
 /* Status Badge */
@@ -958,27 +1114,12 @@ body {
     font-weight: 600;
 }
 
-.status-approved {
+.status-active {
     background: #D1FAE5;
     color: #065F46;
 }
 
-.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.status-waiting {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.status-adjusted {
-    background: #EDE9FE;
-    color: #5B21B6;
-}
-
-.status-rejected {
+.status-inactive {
     background: #FEE2E2;
     color: #991B1B;
 }
@@ -1032,11 +1173,12 @@ body {
 }
 
 /* ============================================================
-   EMPTY STATE - DARK MODE
+   EMPTY STATE
    ============================================================ */
 .empty-state {
     text-align: center;
     padding: 60px 20px;
+    background: var(--bg-empty);
 }
 
 .empty-state i {
@@ -1047,12 +1189,12 @@ body {
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--evening-text);
+    color: var(--text-primary);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--evening-text-secondary);
+    color: var(--text-muted);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
@@ -1202,6 +1344,11 @@ body {
         width: 100%;
         justify-content: center;
     }
+    
+    .employee-name-cell {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }
 
 /* ============================================================
@@ -1228,6 +1375,42 @@ body {
 
 <script>
 // ============================================================
+// DARK MODE TOGGLE
+// ============================================================
+function toggleDarkMode() {
+    const body = document.body;
+    const btn = document.getElementById('darkModeToggle');
+    const icon = btn.querySelector('i');
+    const text = btn.querySelector('span');
+    
+    body.classList.toggle('dark-mode');
+    
+    if (body.classList.contains('dark-mode')) {
+        icon.className = 'fas fa-sun';
+        text.textContent = 'Light Mode';
+        localStorage.setItem('darkMode', 'enabled');
+    } else {
+        icon.className = 'fas fa-moon';
+        text.textContent = 'Dark Mode';
+        localStorage.setItem('darkMode', 'disabled');
+    }
+}
+
+// Check for saved dark mode preference
+document.addEventListener('DOMContentLoaded', function() {
+    const darkMode = localStorage.getItem('darkMode');
+    const btn = document.getElementById('darkModeToggle');
+    const icon = btn?.querySelector('i');
+    const text = btn?.querySelector('span');
+    
+    if (darkMode === 'enabled') {
+        document.body.classList.add('dark-mode');
+        if (icon) icon.className = 'fas fa-sun';
+        if (text) text.textContent = 'Light Mode';
+    }
+});
+
+// ============================================================
 // DROPDOWN TOGGLE
 // ============================================================
 function toggleDropdown() {
@@ -1251,7 +1434,7 @@ function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('stocksTable');
+    var table = document.getElementById('employeesTable');
     if (!table) {
         alert('No data to export!');
         return;
@@ -1306,7 +1489,7 @@ function exportCSV(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.download = 'employees_export_' + new Date().toISOString().slice(0,10) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1317,7 +1500,7 @@ function exportCSV(headers, data) {
 // EXPORT EXCEL (HTML Table format)
 // ============================================================
 function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+    var html = '<html><head><meta charset="UTF-8"><title>Employees Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
     html += 'h1 { color: #3B82F6; }';
@@ -1326,7 +1509,7 @@ function exportExcel(headers, data) {
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
     html += '</style>';
     html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
+    html += '<h1>Employees Report</h1>';
     html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     html += '<table>';
     html += '<thead><tr>';
@@ -1350,7 +1533,7 @@ function exportExcel(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+    a.download = 'employees_export_' + new Date().toISOString().slice(0,10) + '.xls';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1361,7 +1544,7 @@ function exportExcel(headers, data) {
 // EXPORT PDF
 // ============================================================
 function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
+    var printContent = '<html><head><title>Employees Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
     printContent += 'h1 { color: #3B82F6; }';
@@ -1371,11 +1554,11 @@ function exportPDF(headers, data) {
     printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
+    printContent += '<h1>Employees Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     
-    var totalFloat = 0;
-    var totalCash = 0;
+    var totalActive = 0;
+    var totalInactive = 0;
     
     printContent += '<table>';
     printContent += '<thead><tr>';
@@ -1387,20 +1570,12 @@ function exportPDF(headers, data) {
     data.forEach(function(row) {
         printContent += '<tr>';
         row.forEach(function(cell, index) {
-            // Float column (index 7)
+            // Status column (index 7)
             if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
-                }
-            }
-            // Cash column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
+                if (cell.trim() === 'Active') {
+                    totalActive++;
+                } else if (cell.trim() === 'Inactive') {
+                    totalInactive++;
                 }
             }
             printContent += '<td>' + cell + '</td>';
@@ -1409,9 +1584,9 @@ function exportPDF(headers, data) {
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
+    printContent += '<div class="total">Total Active Employees: ' + totalActive + '</div>';
+    printContent += '<div class="total">Total Inactive Employees: ' + totalInactive + '</div>';
+    printContent += '<div class="total">Total Employees: ' + (totalActive + totalInactive) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1422,22 +1597,31 @@ function exportPDF(headers, data) {
 }
 
 // ============================================================
-// FORMAT NUMBER
+// FILTER BY ROLE
 // ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+function filterByRole(role) {
+    var rows = document.querySelectorAll('#employeesTable tbody tr');
+    var roleFilter = role.toLowerCase();
+    
+    rows.forEach(function(row) {
+        var rowRole = row.getAttribute('data-role');
+        if (roleFilter === '' || rowRole === roleFilter) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
 }
 
 // ============================================================
 // FILTER BY STATUS
 // ============================================================
 function filterByStatus(status) {
-    var rows = document.querySelectorAll('#stocksTable tbody tr');
-    var statusFilter = status.toLowerCase();
+    var rows = document.querySelectorAll('#employeesTable tbody tr');
     
     rows.forEach(function(row) {
         var rowStatus = row.getAttribute('data-status');
-        if (statusFilter === '' || rowStatus === statusFilter) {
+        if (status === '' || rowStatus === status) {
             row.style.display = '';
         } else {
             row.style.display = 'none';
@@ -1453,7 +1637,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
             var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#stocksTable tbody tr');
+            var rows = document.querySelectorAll('#employeesTable tbody tr');
             
             rows.forEach(function(row) {
                 var text = row.textContent.toLowerCase();
@@ -1465,25 +1649,6 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
-    function syncDarkMode() {
-        var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
-    }
-    
-    syncDarkMode();
-    
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
 });
 </script>
 

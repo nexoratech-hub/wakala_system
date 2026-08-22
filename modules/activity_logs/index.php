@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// WAKALA FINANCIAL SYSTEM - EVENING STOCK LIST
-// WITH FULL DARK MODE SUPPORT
+// FILE: modules/activity_logs/index.php
+// WAKALA FINANCIAL SYSTEM - ACTIVITY LOGS
+// WITH DARK MODE SUPPORT
 // ================================================================
 
 // ============================================================
@@ -31,6 +31,14 @@ $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
 
 // ============================================================
+// CHECK PERMISSION - Only admin and super_admin can access
+// ============================================================
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
+
+// ============================================================
 // GET USER DATA
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
@@ -45,100 +53,112 @@ $stmt->execute();
 $branches = $stmt->fetchAll();
 
 // ============================================================
-// BRANCH FILTER HANDLING
+// FILTER HANDLING
 // ============================================================
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+$selected_action = isset($_GET['action']) ? $_GET['action'] : '';
+$selected_module = isset($_GET['module']) ? $_GET['module'] : '';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : date('Y-m-d', strtotime('-7 days'));
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : date('Y-m-d');
 
-if (isset($_GET['branch'])) {
-    $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
-    $selected_branch = $_SESSION['selected_branch'];
-}
-
-$selected_branch = $selected_branch ?? 0;
-
-// Build branch filter for SQL
-$branch_filter = '';
-$branch_params = [];
+// Build filter SQL
+$where_conditions = [];
+$params = [];
 
 if ($selected_branch > 0) {
-    $branch_filter = " AND es.branch_id = ? ";
-    $branch_params[] = $selected_branch;
+    $where_conditions[] = "al.branch_id = ?";
+    $params[] = $selected_branch;
 }
 
-// Get branch name for display
-$branch_name = 'All Branches';
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
-            break;
-        }
-    }
+if (!empty($selected_action)) {
+    $where_conditions[] = "al.action = ?";
+    $params[] = $selected_action;
+}
+
+if (!empty($selected_module)) {
+    $where_conditions[] = "al.module = ?";
+    $params[] = $selected_module;
+}
+
+if (!empty($date_from)) {
+    $where_conditions[] = "DATE(al.created_at) >= ?";
+    $params[] = $date_from;
+}
+
+if (!empty($date_to)) {
+    $where_conditions[] = "DATE(al.created_at) <= ?";
+    $params[] = $date_to;
+}
+
+$where_clause = '';
+if (!empty($where_conditions)) {
+    $where_clause = "WHERE " . implode(" AND ", $where_conditions);
 }
 
 // ============================================================
-// GET TODAY'S SUMMARIES FROM EVENING STOCK
+// GET ACTIVITY LOGS SUMMARIES
 // ============================================================
-$today = date('Y-m-d');
-
-// TODAY FLOAT (cumm_total from evening_stock)
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
-}
+// Total logs
+$sql = "SELECT COUNT(*) as total FROM activity_logs al";
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$stmt->execute();
 $result = $stmt->fetch();
-$today_float = $result['total'] ?? 0;
+$total_logs = $result['total'] ?? 0;
 
-// TODAY CASH (cash_balance from evening_stock)
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
-}
+// Today's logs
+$sql = "SELECT COUNT(*) as total FROM activity_logs al WHERE DATE(created_at) = CURDATE()";
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$stmt->execute();
 $result = $stmt->fetch();
-$today_cash = $result['total'] ?? 0;
+$today_logs = $result['total'] ?? 0;
 
-// TODAY STOCK = FLOAT + CASH
-$today_stock = $today_float + $today_cash;
+// Unique users who logged activity
+$sql = "SELECT COUNT(DISTINCT employee_id) as total FROM activity_logs al";
+$stmt = $db->prepare($sql);
+$stmt->execute();
+$result = $stmt->fetch();
+$active_users = $result['total'] ?? 0;
 
 // ============================================================
-// GET EVENING STOCKS LIST
+// GET ACTIVITY LOGS LIST
 // ============================================================
 $sql = "SELECT 
-            es.id,
-            es.stock_number,
-            es.stock_date,
-            es.cash_balance,
-            es.cumm_total,
-            es.status,
-            es.submitted_at,
-            es.notes,
+            al.id,
+            al.employee_id,
+            al.action,
+            al.module,
+            al.record_id,
+            al.old_value,
+            al.new_value,
+            al.ip_address,
+            al.user_agent,
+            al.branch_id,
+            al.created_at,
             e.full_name as employee_name,
-            b.branch_name as branch_name,
-            b.id as branch_id
-        FROM evening_stocks es
-        LEFT JOIN employees e ON es.employee_id = e.id
-        LEFT JOIN branches b ON es.branch_id = b.id
-        WHERE 1=1 " . $branch_filter . "
-        ORDER BY es.stock_date DESC, es.id DESC";
+            e.role as employee_role,
+            b.branch_name as branch_name
+        FROM activity_logs al
+        LEFT JOIN employees e ON al.employee_id = e.id
+        LEFT JOIN branches b ON al.branch_id = b.id
+        " . $where_clause . "
+        ORDER BY al.created_at DESC
+        LIMIT 500";
 
-$params = $branch_params;
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$stocks = $stmt->fetchAll();
+$logs = $stmt->fetchAll();
 
-// Count stocks
-$stock_count = count($stocks);
+// Count logs
+$log_count = count($logs);
+
+// Get unique actions and modules for filters
+$action_stmt = $db->prepare("SELECT DISTINCT action FROM activity_logs ORDER BY action");
+$action_stmt->execute();
+$actions = $action_stmt->fetchAll();
+
+$module_stmt = $db->prepare("SELECT DISTINCT module FROM activity_logs ORDER BY module");
+$module_stmt->execute();
+$modules = $module_stmt->fetchAll();
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -154,20 +174,15 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
+        <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Evening Stocks</h2>
-                <span class="record-count"><?php echo $stock_count; ?> records</span>
+                <h2><i class="fas fa-history"></i> Activity Logs</h2>
+                <span class="record-count"><?php echo number_format($log_count); ?> records</span>
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
-                    <!-- ADD Button - FIRST -->
-                    <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
-                    </a>
-                    
-                    <!-- Export Dropdown - SECOND -->
+                    <!-- Export Dropdown -->
                     <div class="dropdown">
                         <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
                             <i class="fas fa-download"></i> Export
@@ -192,177 +207,228 @@ DASHBOARD CONTENT
             </div>
         </div>
 
-        <!-- ===== BRANCH FILTER ===== -->
-        <div class="branch-filter-bar">
-            <div class="branch-filter-left">
-                <i class="fas fa-store-alt"></i>
-                <span>Branch:</span>
-                <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
-                    <option value="0">All Branches</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <?php if ($selected_branch > 0): ?>
-                    <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
-                <?php endif; ?>
-            </div>
-            <div class="branch-filter-right">
-                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
-            </div>
-        </div>
-
         <!-- ============================================================
-        SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
+        SUMMARIES CARDS
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
-            <div class="summary-card card-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <!-- Total Logs -->
+            <div class="summary-card card-total">
+                <div class="summary-icon"><i class="fas fa-file-alt"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY STOCK</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_stock); ?></div>
-                    <div class="summary-sub">Float + Cash (Evening Stock)</div>
+                    <div class="summary-label">TOTAL LOGS</div>
+                    <div class="summary-value"><?php echo number_format($total_logs); ?></div>
+                    <div class="summary-sub">All Time</div>
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
-            <div class="summary-card card-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <!-- Today's Logs -->
+            <div class="summary-card card-today">
+                <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY FLOAT</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_float); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">TODAY'S LOGS</div>
+                    <div class="summary-value"><?php echo number_format($today_logs); ?></div>
+                    <div class="summary-sub"><?php echo date('d M Y'); ?></div>
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
-            <div class="summary-card card-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <!-- Active Users -->
+            <div class="summary-card card-users">
+                <div class="summary-icon"><i class="fas fa-users"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY CASH</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_cash); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">ACTIVE USERS</div>
+                    <div class="summary-value"><?php echo number_format($active_users); ?></div>
+                    <div class="summary-sub">Who Logged Activity</div>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        TABLE - EVENING STOCKS LIST
+        FILTERS
+        ============================================================ -->
+        <div class="filter-bar">
+            <form method="GET" action="" class="filter-form">
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label for="branch">Branch</label>
+                        <select id="branch" name="branch" class="form-control">
+                            <option value="0">All Branches</option>
+                            <?php foreach ($branches as $b): ?>
+                                <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($b['branch_name']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="action">Action</label>
+                        <select id="action" name="action" class="form-control">
+                            <option value="">All Actions</option>
+                            <?php foreach ($actions as $a): ?>
+                                <option value="<?php echo htmlspecialchars($a['action']); ?>" <?php echo $selected_action == $a['action'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($a['action']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="module">Module</label>
+                        <select id="module" name="module" class="form-control">
+                            <option value="">All Modules</option>
+                            <?php foreach ($modules as $m): ?>
+                                <option value="<?php echo htmlspecialchars($m['module']); ?>" <?php echo $selected_module == $m['module'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($m['module']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="date_from">Date From</label>
+                        <input type="date" id="date_from" name="date_from" class="form-control" value="<?php echo $date_from; ?>">
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="date_to">Date To</label>
+                        <input type="date" id="date_to" name="date_to" class="form-control" value="<?php echo $date_to; ?>">
+                    </div>
+                    
+                    <div class="filter-group filter-actions">
+                        <button type="submit" class="btn btn-filter">
+                            <i class="fas fa-search"></i> Filter
+                        </button>
+                        <a href="?branch=0&action=&module=&date_from=&date_to=" class="btn btn-reset-filter">
+                            <i class="fas fa-times"></i> Reset
+                        </a>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- ============================================================
+        TABLE - ACTIVITY LOGS
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Evening Stocks</h3>
+                <h3><i class="fas fa-list"></i> Activity Logs</h3>
                 <div class="table-actions">
-                    <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
-                        <option value="">All Status</option>
-                        <option value="waiting">Waiting</option>
-                        <option value="pending">Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="adjusted">Adjusted</option>
-                        <option value="rejected">Rejected</option>
-                    </select>
-                    <input type="text" id="searchInput" placeholder="Search stocks..." class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search logs..." class="search-input">
                 </div>
             </div>
 
-            <?php if (empty($stocks)): ?>
+            <?php if (empty($logs)): ?>
                 <div class="empty-state">
-                    <i class="fas fa-moon"></i>
-                    <h3>No Evening Stocks Found</h3>
-                    <p>Start by adding your first evening stock for today.</p>
-                    <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
-                    </a>
+                    <i class="fas fa-history"></i>
+                    <h3>No Activity Logs Found</h3>
+                    <p>No activity logs match your filter criteria.</p>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="data-table" id="stocksTable">
+                    <table class="data-table" id="logsTable">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Stock No.</th>
-                                <th>Date</th>
-                                <th>Employee</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Module</th>
+                                <th>Record ID</th>
+                                <th>IP Address</th>
                                 <th>Branch</th>
-                                <th>Providers</th>
-                                <th>Cash</th>
-                                <th>Float</th>
-                                <th>Status</th>
+                                <th>Date/Time</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php 
                             $counter = 1;
-                            foreach ($stocks as $stock): 
-                                // Get providers count
-                                $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
-                                $provider_count = count($provider_data);
+                            foreach ($logs as $log): 
+                                // Action color
+                                $action = $log['action'] ?? 'Unknown';
+                                $action_class = 'action-default';
                                 
-                                // Determine status
-                                $status = ucfirst($stock['status'] ?? 'pending');
-                                $status_colors = [
-                                    'waiting' => 'status-waiting',
-                                    'pending' => 'status-pending',
-                                    'approved' => 'status-approved',
-                                    'adjusted' => 'status-adjusted',
-                                    'rejected' => 'status-rejected'
+                                $action_colors = [
+                                    'Login' => 'action-login',
+                                    'Logout' => 'action-logout',
+                                    'Add' => 'action-add',
+                                    'Edit' => 'action-edit',
+                                    'Update' => 'action-edit',
+                                    'Delete' => 'action-delete',
+                                    'View' => 'action-view',
+                                    'Export' => 'action-export',
+                                    'Print' => 'action-print',
+                                    'Generate' => 'action-generate',
+                                    'Approve' => 'action-approve',
+                                    'Reject' => 'action-reject',
+                                    'Cancel' => 'action-cancel'
                                 ];
-                                $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
+                                
+                                foreach ($action_colors as $key => $class) {
+                                    if (stripos($action, $key) !== false) {
+                                        $action_class = $class;
+                                        break;
+                                    }
+                                }
+                                
+                                // Get role badge color
+                                $role_class = '';
+                                if (strtolower($log['employee_role'] ?? '') == 'super_admin') {
+                                    $role_class = 'role-super-admin';
+                                } elseif (strtolower($log['employee_role'] ?? '') == 'admin') {
+                                    $role_class = 'role-admin';
+                                } else {
+                                    $role_class = 'role-employee';
+                                }
                             ?>
-                                <tr data-status="<?php echo strtolower($stock['status'] ?? 'pending'); ?>">
+                                <tr>
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="stock-number">
-                                            <?php echo htmlspecialchars($stock['stock_number']); ?>
+                                        <div class="user-cell">
+                                            <span class="user-name"><?php echo htmlspecialchars($log['employee_name'] ?? 'Unknown'); ?></span>
+                                            <span class="user-role-badge <?php echo $role_class; ?>">
+                                                <?php echo ucfirst($log['employee_role'] ?? 'N/A'); ?>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="action-badge <?php echo $action_class; ?>">
+                                            <?php echo htmlspecialchars($action); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></td>
                                     <td>
-                                        <span class="employee-name">
-                                            <?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?>
+                                        <span class="module-badge">
+                                            <?php echo htmlspecialchars($log['module'] ?? 'N/A'); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="record-id">
+                                            <?php echo $log['record_id'] ? '#' . $log['record_id'] : '—'; ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="ip-address">
+                                            <?php echo htmlspecialchars($log['ip_address'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-name">
-                                            <?php echo htmlspecialchars($stock['branch_name'] ?? 'Main'); ?>
+                                            <?php echo htmlspecialchars($log['branch_name'] ?? 'Main'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="provider-count">
-                                            <i class="fas fa-building"></i>
-                                            <?php echo $provider_count; ?> providers
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount cash">
-                                            <?php echo formatCurrency($stock['cash_balance']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount float">
-                                            <?php echo formatCurrency($stock['cumm_total']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="status-badge <?php echo $status_class; ?>">
-                                            <?php echo $status; ?>
-                                        </span>
+                                        <div class="datetime-cell">
+                                            <span class="log-date"><?php echo date('d M Y', strtotime($log['created_at'])); ?></span>
+                                            <span class="log-time"><?php echo date('H:i:s', strtotime($log['created_at'])); ?></span>
+                                        </div>
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-view" title="View">
+                                            <button class="btn-action btn-view" onclick="viewLog(<?php echo $log['id']; ?>)" title="View Details">
                                                 <i class="fas fa-eye"></i>
-                                            </a>
-                                            <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            </button>
+                                            <button class="btn-action btn-delete" onclick="deleteLog(<?php echo $log['id']; ?>)" title="Delete">
                                                 <i class="fas fa-trash"></i>
-                                            </a>
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -382,63 +448,44 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+DASHBOARD STYLES - WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --evening-bg: #FFFFFF;
-    --evening-text: #1F2937;
-    --evening-text-secondary: #6B7280;
-    --evening-text-light: #9CA3AF;
-    --evening-border: #E5E7EB;
-    --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
-    --evening-input-bg: #F9FAFB;
-    --evening-hover: #F3F4F6;
-    --evening-shadow: rgba(0,0,0,0.06);
-    --evening-shadow-lg: rgba(0,0,0,0.12);
-    --evening-dropdown-bg: #FFFFFF;
-    --evening-dropdown-border: #E5E7EB;
+    --logs-bg: #FFFFFF;
+    --logs-text: #1F2937;
+    --logs-text-secondary: #6B7280;
+    --logs-text-light: #9CA3AF;
+    --logs-border: #E5E7EB;
+    --logs-card-bg: #FFFFFF;
+    --logs-input-bg: #F9FAFB;
+    --logs-hover: #F3F4F6;
+    --logs-shadow: rgba(0,0,0,0.06);
+    --logs-shadow-lg: rgba(0,0,0,0.12);
+    --logs-dropdown-bg: #FFFFFF;
+    --logs-dropdown-border: #E5E7EB;
 }
 
 html.dark-mode {
-    --evening-bg: #1F2937;
-    --evening-text: #F9FAFB;
-    --evening-text-secondary: #9CA3AF;
-    --evening-text-light: #6B7280;
-    --evening-border: #374151;
-    --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
-    --evening-input-bg: #374151;
-    --evening-hover: #374151;
-    --evening-shadow: rgba(0,0,0,0.3);
-    --evening-shadow-lg: rgba(0,0,0,0.4);
-    --evening-dropdown-bg: #1F2937;
-    --evening-dropdown-border: #374151;
-}
-
-/* Apply Dark Mode to Full Page */
-body {
-    background: var(--evening-bg) !important;
-    color: var(--evening-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
-}
-
-.main-content {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
+    --logs-bg: #1F2937;
+    --logs-text: #F9FAFB;
+    --logs-text-secondary: #9CA3AF;
+    --logs-text-light: #6B7280;
+    --logs-border: #374151;
+    --logs-card-bg: #1F2937;
+    --logs-input-bg: #374151;
+    --logs-hover: #374151;
+    --logs-shadow: rgba(0,0,0,0.3);
+    --logs-shadow-lg: rgba(0,0,0,0.4);
+    --logs-dropdown-bg: #1F2937;
+    --logs-dropdown-border: #374151;
 }
 
 /* ============================================================
-   PAGE HEADER - DARK MODE
+   PAGE HEADER - DARK MODE SUPPORT
    ============================================================ */
 .page-header {
     display: flex;
@@ -457,20 +504,20 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--evening-text);
+    color: var(--logs-text);
     margin: 0;
     transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
-    color: #3B82F6;
+    color: var(--logs-text-secondary);
     margin-right: 8px;
 }
 
 .record-count {
     font-size: 13px;
-    color: var(--evening-text-secondary);
-    background: var(--evening-hover);
+    color: var(--logs-text-secondary);
+    background: var(--logs-hover);
     padding: 2px 12px;
     border-radius: 12px;
     transition: all 0.3s ease;
@@ -483,59 +530,7 @@ body {
 }
 
 /* ============================================================
-   ADD BUTTON - RED
-   ============================================================ */
-.btn-add {
-    background: #DC2626;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    border: none;
-    cursor: pointer;
-}
-
-.btn-add:hover {
-    background: #B91C1C;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
-    color: white;
-}
-
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
-.btn-add-empty {
-    background: #DC2626;
-    color: white;
-    padding: 12px 28px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    border: none;
-    cursor: pointer;
-}
-
-.btn-add-empty:hover {
-    background: #B91C1C;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(220,38,38,0.4);
-    color: white;
-}
-
-/* ============================================================
-   EXPORT BUTTON - BLUE
+   EXPORT BUTTON - DARK MODE SUPPORT
    ============================================================ */
 .btn-export {
     background: #1E40AF;
@@ -575,11 +570,11 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--evening-dropdown-bg);
+    background: var(--logs-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--evening-shadow-lg);
-    border: 1px solid var(--evening-dropdown-border);
+    box-shadow: 0 4px 20px var(--logs-shadow-lg);
+    border: 1px solid var(--logs-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
@@ -596,14 +591,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--evening-text);
+    color: var(--logs-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--evening-hover);
+    background: var(--logs-hover);
 }
 
 .dropdown-menu a i {
@@ -617,76 +612,7 @@ body {
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
 /* ============================================================
-   BRANCH FILTER BAR - DARK MODE
-   ============================================================ */
-.branch-filter-bar {
-    background: var(--evening-card-bg);
-    border-radius: 10px;
-    padding: 12px 20px;
-    margin-bottom: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    color: var(--evening-text);
-}
-
-.branch-filter-left i {
-    color: #DC2626;
-    font-size: 16px;
-}
-
-.branch-filter-left select {
-    padding: 5px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
-    font-size: 13px;
-    color: var(--evening-text);
-    outline: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
-}
-
-.branch-badge {
-    background: #DC2626;
-    color: white;
-    padding: 2px 12px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.branch-filter-right .date-display {
-    font-size: 13px;
-    color: var(--evening-text-secondary);
-}
-
-.branch-filter-right .date-display i {
-    color: #DC2626;
-}
-
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
+   SUMMARIES GRID - 3 CARDS - DARK MODE SUPPORT
    ============================================================ */
 .summaries-grid-three {
     display: grid;
@@ -696,14 +622,14 @@ body {
 }
 
 .summary-card {
-    background: var(--evening-card-bg);
+    background: var(--logs-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--logs-shadow);
+    border: 1px solid var(--logs-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -711,7 +637,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--evening-shadow-lg);
+    box-shadow: 0 4px 12px var(--logs-shadow-lg);
 }
 
 .summary-icon {
@@ -738,13 +664,13 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--evening-text-secondary);
+    color: var(--logs-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--evening-text);
+    color: var(--logs-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
@@ -754,28 +680,142 @@ body {
 
 .summary-sub {
     font-size: 11px;
-    color: var(--evening-text-light);
+    color: var(--logs-text-light);
     font-weight: 500;
 }
 
-/* Card Colors */
-.card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
-.card-stock { border-left: 4px solid #1E40AF; }
+.card-total .summary-icon { background: #DBEAFE; color: #1D4ED8; }
+.card-total { border-left: 4px solid #3B82F6; }
 
-.card-float .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-float { border-left: 4px solid #3B82F6; }
+.card-today .summary-icon { background: #D1FAE5; color: #065F46; }
+.card-today { border-left: 4px solid #10B981; }
 
-.card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-cash { border-left: 4px solid #10B981; }
+.card-users .summary-icon { background: #FEF3C7; color: #D97706; }
+.card-users { border-left: 4px solid #D97706; }
 
 /* ============================================================
-   TABLE CONTAINER - DARK MODE
+   FILTER BAR - DARK MODE SUPPORT
+   ============================================================ */
+.filter-bar {
+    background: var(--logs-card-bg);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border: 1px solid var(--logs-border);
+    box-shadow: 0 1px 3px var(--logs-shadow);
+    transition: all 0.3s ease;
+}
+
+.filter-form {
+    width: 100%;
+}
+
+.filter-row {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 120px;
+}
+
+.filter-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--logs-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: color 0.3s ease;
+}
+
+.filter-group .form-control {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--logs-border);
+    font-size: 13px;
+    outline: none;
+    transition: all 0.3s ease;
+    background: var(--logs-input-bg);
+    color: var(--logs-text);
+    width: 100%;
+    font-family: 'Inter', sans-serif;
+}
+
+.filter-group .form-control option {
+    background: var(--logs-dropdown-bg);
+    color: var(--logs-text);
+}
+
+.filter-group .form-control:focus {
+    border-color: #DC2626;
+    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
+}
+
+.filter-actions {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    align-items: flex-end;
+    min-width: 180px;
+}
+
+.btn-filter {
+    background: #DC2626;
+    color: white;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-filter:hover {
+    background: #B91C1C;
+    transform: translateY(-1px);
+}
+
+.btn-reset-filter {
+    background: var(--logs-hover);
+    color: var(--logs-text-secondary);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    font-family: 'Inter', sans-serif;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-reset-filter:hover {
+    background: var(--logs-border);
+    color: var(--logs-text);
+}
+
+/* ============================================================
+   TABLE CONTAINER - DARK MODE SUPPORT
    ============================================================ */
 .table-container {
-    background: var(--evening-card-bg);
+    background: var(--logs-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--logs-shadow);
+    border: 1px solid var(--logs-border);
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -785,7 +825,7 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--logs-border);
     flex-wrap: wrap;
     gap: 10px;
     transition: all 0.3s ease;
@@ -794,12 +834,12 @@ body {
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--evening-text);
+    color: var(--logs-text);
     margin: 0;
 }
 
 .table-header h3 i {
-    color: #3B82F6;
+    color: var(--logs-text-secondary);
     margin-right: 8px;
 }
 
@@ -813,44 +853,22 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--logs-border);
     font-size: 13px;
     outline: none;
     width: 200px;
     transition: all 0.3s ease;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--logs-input-bg);
+    color: var(--logs-text);
 }
 
 .search-input::placeholder {
-    color: var(--evening-text-light);
+    color: var(--logs-text-light);
 }
 
 .search-input:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-select {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--evening-border);
-    font-size: 13px;
-    outline: none;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.filter-select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
 }
 
 .table-responsive {
@@ -864,7 +882,7 @@ body {
 }
 
 /* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
+   TABLE HEADER - RED BACKGROUND (Stays Red in Dark Mode)
    ============================================================ */
 .data-table thead {
     background: #DC2626;
@@ -888,69 +906,58 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--logs-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--evening-hover);
+    background: var(--logs-hover);
 }
 
 .data-table tbody td {
-    padding: 12px 16px;
-    color: var(--evening-text);
+    padding: 10px 16px;
+    color: var(--logs-text);
     transition: color 0.3s ease;
 }
 
-/* Stock Number */
-.stock-number {
-    font-weight: 600;
-    color: #3B82F6;
-    font-size: 12px;
+/* User Cell */
+.user-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
-/* Employee Name */
-.employee-name {
+.user-name {
     font-weight: 500;
-    color: var(--evening-text);
+    color: var(--logs-text);
 }
 
-/* Branch Name */
-.branch-name {
-    background: var(--evening-hover);
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    color: var(--evening-text-secondary);
-    transition: all 0.3s ease;
-}
-
-/* Provider Count */
-.provider-count {
-    font-size: 12px;
-    color: var(--evening-text-secondary);
-}
-
-.provider-count i {
-    color: #3B82F6;
-    margin-right: 4px;
-}
-
-/* Amounts */
-.amount {
+.user-role-badge {
+    font-size: 9px;
     font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 10px;
+    display: inline-block;
+    width: fit-content;
 }
 
-.amount.cash {
-    color: #059669;
+.role-super-admin {
+    background: #FEF3C7;
+    color: #92400E;
 }
 
-.amount.float {
-    color: #1D4ED8;
+.role-admin {
+    background: #DBEAFE;
+    color: #1E40AF;
 }
 
-/* Status Badge */
-.status-badge {
+.role-employee {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+/* Action Badge */
+.action-badge {
     display: inline-block;
     padding: 3px 12px;
     border-radius: 12px;
@@ -958,29 +965,122 @@ body {
     font-weight: 600;
 }
 
-.status-approved {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.status-waiting {
+.action-login {
     background: #DBEAFE;
     color: #1E40AF;
 }
 
-.status-adjusted {
+.action-logout {
+    background: #FEE2E2;
+    color: #991B1B;
+}
+
+.action-add {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.action-edit {
+    background: #FEF3C7;
+    color: #92400E;
+}
+
+.action-delete {
+    background: #FEE2E2;
+    color: #991B1B;
+}
+
+.action-view {
     background: #EDE9FE;
     color: #5B21B6;
 }
 
-.status-rejected {
+.action-export {
+    background: #DBEAFE;
+    color: #1E40AF;
+}
+
+.action-print {
+    background: #F3F4F6;
+    color: #374151;
+}
+
+.action-generate {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.action-approve {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.action-reject {
     background: #FEE2E2;
     color: #991B1B;
+}
+
+.action-cancel {
+    background: #F3F4F6;
+    color: #6B7280;
+}
+
+.action-default {
+    background: #F3F4F6;
+    color: #374151;
+}
+
+/* Module Badge */
+.module-badge {
+    background: var(--logs-hover);
+    color: var(--logs-text-secondary);
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+/* Record ID */
+.record-id {
+    font-size: 12px;
+    color: var(--logs-text-light);
+    font-weight: 500;
+}
+
+/* IP Address */
+.ip-address {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: var(--logs-text-light);
+}
+
+/* Branch Name */
+.branch-name {
+    background: var(--logs-hover);
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--logs-text-secondary);
+    transition: all 0.3s ease;
+}
+
+/* DateTime Cell */
+.datetime-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.log-date {
+    font-weight: 500;
+    color: var(--logs-text);
+    font-size: 12px;
+}
+
+.log-time {
+    font-size: 11px;
+    color: var(--logs-text-light);
 }
 
 /* Action Buttons */
@@ -996,7 +1096,8 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    text-decoration: none;
+    border: none;
+    cursor: pointer;
     transition: all 0.2s ease;
     font-size: 13px;
 }
@@ -1011,16 +1112,6 @@ body {
     color: #1E40AF;
 }
 
-.btn-edit {
-    background: #D1FAE5;
-    color: #059669;
-}
-
-.btn-edit:hover {
-    background: #A7F3D0;
-    color: #047857;
-}
-
 .btn-delete {
     background: #FEE2E2;
     color: #DC2626;
@@ -1032,7 +1123,7 @@ body {
 }
 
 /* ============================================================
-   EMPTY STATE - DARK MODE
+   EMPTY STATE - DARK MODE SUPPORT
    ============================================================ */
 .empty-state {
     text-align: center;
@@ -1041,20 +1132,20 @@ body {
 
 .empty-state i {
     font-size: 60px;
-    color: #3B82F6;
+    color: var(--logs-text-light);
     margin-bottom: 16px;
 }
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--evening-text);
+    color: var(--logs-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--evening-text-secondary);
+    color: var(--logs-text-secondary);
     font-size: 14px;
-    margin: 0 0 24px 0;
+    margin: 0;
 }
 
 /* ============================================================
@@ -1075,14 +1166,11 @@ body {
     
     .header-actions {
         width: 100%;
-        flex-direction: column;
-        align-items: stretch;
     }
     
-    .header-actions .btn-add,
     .header-actions .btn-export {
-        justify-content: center;
         width: 100%;
+        justify-content: center;
     }
     
     .dropdown {
@@ -1103,10 +1191,24 @@ body {
         grid-column: span 2;
     }
     
-    .branch-filter-bar {
+    .filter-row {
         flex-direction: column;
-        gap: 8px;
-        align-items: flex-start;
+        gap: 10px;
+    }
+    
+    .filter-group {
+        min-width: 100%;
+    }
+    
+    .filter-actions {
+        flex-direction: row;
+        min-width: 100%;
+    }
+    
+    .filter-actions .btn-filter,
+    .filter-actions .btn-reset-filter {
+        flex: 1;
+        justify-content: center;
     }
     
     .table-header {
@@ -1121,10 +1223,6 @@ body {
     }
     
     .search-input {
-        width: 100%;
-    }
-    
-    .filter-select {
         width: 100%;
     }
     
@@ -1195,13 +1293,6 @@ body {
         height: 28px;
         font-size: 11px;
     }
-    
-    .btn-add-empty {
-        padding: 10px 20px;
-        font-size: 13px;
-        width: 100%;
-        justify-content: center;
-    }
 }
 
 /* ============================================================
@@ -1219,6 +1310,11 @@ body {
 .summary-card:nth-child(1) { animation-delay: 0.05s; }
 .summary-card:nth-child(2) { animation-delay: 0.10s; }
 .summary-card:nth-child(3) { animation-delay: 0.15s; }
+
+.filter-bar {
+    animation: fadeInUp 0.4s ease forwards;
+    animation-delay: 0.10s;
+}
 
 .table-container {
     animation: fadeInUp 0.4s ease forwards;
@@ -1251,7 +1347,7 @@ function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('stocksTable');
+    var table = document.getElementById('logsTable');
     if (!table) {
         alert('No data to export!');
         return;
@@ -1306,7 +1402,7 @@ function exportCSV(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.download = 'activity_logs_export_' + new Date().toISOString().slice(0,10) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1314,19 +1410,19 @@ function exportCSV(headers, data) {
 }
 
 // ============================================================
-// EXPORT EXCEL (HTML Table format)
+// EXPORT EXCEL
 // ============================================================
 function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+    var html = '<html><head><meta charset="UTF-8"><title>Activity Logs Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #3B82F6; }';
+    html += 'h1 { color: #DC2626; }';
     html += 'table { width: 100%; border-collapse: collapse; }';
     html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
     html += '</style>';
     html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
+    html += '<h1>Activity Logs Report</h1>';
     html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     html += '<table>';
     html += '<thead><tr>';
@@ -1350,7 +1446,7 @@ function exportExcel(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+    a.download = 'activity_logs_export_' + new Date().toISOString().slice(0,10) + '.xls';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1361,22 +1457,17 @@ function exportExcel(headers, data) {
 // EXPORT PDF
 // ============================================================
 function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
+    var printContent = '<html><head><title>Activity Logs Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #3B82F6; }';
+    printContent += 'h1 { color: #DC2626; }';
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
+    printContent += '<h1>Activity Logs Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    var totalFloat = 0;
-    var totalCash = 0;
-    
     printContent += '<table>';
     printContent += '<thead><tr>';
     headers.forEach(function(h) {
@@ -1386,32 +1477,13 @@ function exportPDF(headers, data) {
     
     data.forEach(function(row) {
         printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Float column (index 7)
-            if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
-                }
-            }
-            // Cash column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
-                }
-            }
+        row.forEach(function(cell) {
             printContent += '<td>' + cell + '</td>';
         });
         printContent += '</tr>';
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1422,27 +1494,19 @@ function exportPDF(headers, data) {
 }
 
 // ============================================================
-// FORMAT NUMBER
+// VIEW LOG DETAILS
 // ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+function viewLog(id) {
+    alert('View log details for ID: ' + id);
 }
 
 // ============================================================
-// FILTER BY STATUS
+// DELETE LOG
 // ============================================================
-function filterByStatus(status) {
-    var rows = document.querySelectorAll('#stocksTable tbody tr');
-    var statusFilter = status.toLowerCase();
-    
-    rows.forEach(function(row) {
-        var rowStatus = row.getAttribute('data-status');
-        if (statusFilter === '' || rowStatus === statusFilter) {
-            row.style.display = '';
-        } else {
-            row.style.display = 'none';
-        }
-    });
+function deleteLog(id) {
+    if (confirm('Are you sure you want to delete this log entry?')) {
+        alert('Delete log ID: ' + id);
+    }
 }
 
 // ============================================================
@@ -1453,7 +1517,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
             var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#stocksTable tbody tr');
+            var rows = document.querySelectorAll('#logsTable tbody tr');
             
             rows.forEach(function(row) {
                 var text = row.textContent.toLowerCase();

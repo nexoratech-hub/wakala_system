@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// WAKALA FINANCIAL SYSTEM - EVENING STOCK LIST
+// FILE: modules/branches/index.php
+// WAKALA FINANCIAL SYSTEM - BRANCHES LIST
 // WITH FULL DARK MODE SUPPORT
 // ================================================================
 
@@ -31,6 +31,14 @@ $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
 
 // ============================================================
+// CHECK PERMISSION - Only admin and super_admin can access
+// ============================================================
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
+
+// ============================================================
 // GET USER DATA
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
@@ -38,107 +46,41 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 // ============================================================
-// GET BRANCHES FOR FILTER
+// GET BRANCHES LIST
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+$sql = "SELECT 
+            b.id,
+            b.branch_code,
+            b.branch_name,
+            b.location,
+            b.phone,
+            b.email,
+            b.manager_id,
+            b.is_active,
+            b.created_at,
+            b.updated_at,
+            e.full_name as manager_name
+        FROM branches b
+        LEFT JOIN employees e ON b.manager_id = e.id
+        ORDER BY b.branch_name ASC";
+
+$stmt = $db->prepare($sql);
 $stmt->execute();
 $branches = $stmt->fetchAll();
 
-// ============================================================
-// BRANCH FILTER HANDLING
-// ============================================================
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+// Count branches
+$branch_count = count($branches);
 
-if (isset($_GET['branch'])) {
-    $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
-    $selected_branch = $_SESSION['selected_branch'];
-}
-
-$selected_branch = $selected_branch ?? 0;
-
-// Build branch filter for SQL
-$branch_filter = '';
-$branch_params = [];
-
-if ($selected_branch > 0) {
-    $branch_filter = " AND es.branch_id = ? ";
-    $branch_params[] = $selected_branch;
-}
-
-// Get branch name for display
-$branch_name = 'All Branches';
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
-            break;
-        }
+// Count active branches
+$active_count = 0;
+foreach ($branches as $b) {
+    if ($b['is_active'] == 1) {
+        $active_count++;
     }
 }
 
-// ============================================================
-// GET TODAY'S SUMMARIES FROM EVENING STOCK
-// ============================================================
-$today = date('Y-m-d');
-
-// TODAY FLOAT (cumm_total from evening_stock)
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$today_float = $result['total'] ?? 0;
-
-// TODAY CASH (cash_balance from evening_stock)
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$today_cash = $result['total'] ?? 0;
-
-// TODAY STOCK = FLOAT + CASH
-$today_stock = $today_float + $today_cash;
-
-// ============================================================
-// GET EVENING STOCKS LIST
-// ============================================================
-$sql = "SELECT 
-            es.id,
-            es.stock_number,
-            es.stock_date,
-            es.cash_balance,
-            es.cumm_total,
-            es.status,
-            es.submitted_at,
-            es.notes,
-            e.full_name as employee_name,
-            b.branch_name as branch_name,
-            b.id as branch_id
-        FROM evening_stocks es
-        LEFT JOIN employees e ON es.employee_id = e.id
-        LEFT JOIN branches b ON es.branch_id = b.id
-        WHERE 1=1 " . $branch_filter . "
-        ORDER BY es.stock_date DESC, es.id DESC";
-
-$params = $branch_params;
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$stocks = $stmt->fetchAll();
-
-// Count stocks
-$stock_count = count($stocks);
+// Count inactive branches
+$inactive_count = $branch_count - $active_count;
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -157,14 +99,14 @@ DASHBOARD CONTENT
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Evening Stocks</h2>
-                <span class="record-count"><?php echo $stock_count; ?> records</span>
+                <h2><i class="fas fa-store-alt"></i> Branches</h2>
+                <span class="record-count"><?php echo $branch_count; ?> records</span>
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
                     <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Branch
                     </a>
                     
                     <!-- Export Dropdown - SECOND -->
@@ -192,104 +134,78 @@ DASHBOARD CONTENT
             </div>
         </div>
 
-        <!-- ===== BRANCH FILTER ===== -->
-        <div class="branch-filter-bar">
-            <div class="branch-filter-left">
-                <i class="fas fa-store-alt"></i>
-                <span>Branch:</span>
-                <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
-                    <option value="0">All Branches</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <?php if ($selected_branch > 0): ?>
-                    <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
-                <?php endif; ?>
-            </div>
-            <div class="branch-filter-right">
-                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
-            </div>
-        </div>
-
         <!-- ============================================================
-        SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
+        SUMMARIES CARDS
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
-            <div class="summary-card card-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <!-- Total Branches - Blue -->
+            <div class="summary-card card-total">
+                <div class="summary-icon"><i class="fas fa-store-alt"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY STOCK</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_stock); ?></div>
-                    <div class="summary-sub">Float + Cash (Evening Stock)</div>
+                    <div class="summary-label">TOTAL BRANCHES</div>
+                    <div class="summary-value"><?php echo number_format($branch_count); ?></div>
+                    <div class="summary-sub">All Branches</div>
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
-            <div class="summary-card card-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <!-- Active Branches - Green -->
+            <div class="summary-card card-active">
+                <div class="summary-icon"><i class="fas fa-check-circle"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY FLOAT</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_float); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">ACTIVE BRANCHES</div>
+                    <div class="summary-value"><?php echo number_format($active_count); ?></div>
+                    <div class="summary-sub">Currently Active</div>
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
-            <div class="summary-card card-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <!-- Inactive Branches - Red -->
+            <div class="summary-card card-inactive">
+                <div class="summary-icon"><i class="fas fa-times-circle"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY CASH</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_cash); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">INACTIVE BRANCHES</div>
+                    <div class="summary-value"><?php echo number_format($inactive_count); ?></div>
+                    <div class="summary-sub">Currently Inactive</div>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        TABLE - EVENING STOCKS LIST
+        TABLE - BRANCHES LIST
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Evening Stocks</h3>
+                <h3><i class="fas fa-list"></i> All Branches</h3>
                 <div class="table-actions">
                     <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
                         <option value="">All Status</option>
-                        <option value="waiting">Waiting</option>
-                        <option value="pending">Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="adjusted">Adjusted</option>
-                        <option value="rejected">Rejected</option>
+                        <option value="1">Active</option>
+                        <option value="0">Inactive</option>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search stocks..." class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search branches..." class="search-input">
                 </div>
             </div>
 
-            <?php if (empty($stocks)): ?>
+            <?php if (empty($branches)): ?>
                 <div class="empty-state">
-                    <i class="fas fa-moon"></i>
-                    <h3>No Evening Stocks Found</h3>
-                    <p>Start by adding your first evening stock for today.</p>
+                    <i class="fas fa-store-alt"></i>
+                    <h3>No Branches Found</h3>
+                    <p>Start by adding your first branch.</p>
                     <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Branch
                     </a>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="data-table" id="stocksTable">
+                    <table class="data-table" id="branchesTable">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Stock No.</th>
-                                <th>Date</th>
-                                <th>Employee</th>
-                                <th>Branch</th>
-                                <th>Providers</th>
-                                <th>Cash</th>
-                                <th>Float</th>
+                                <th>Branch Code</th>
+                                <th>Branch Name</th>
+                                <th>Location</th>
+                                <th>Phone</th>
+                                <th>Email</th>
+                                <th>Manager</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -297,70 +213,59 @@ DASHBOARD CONTENT
                         <tbody>
                             <?php 
                             $counter = 1;
-                            foreach ($stocks as $stock): 
-                                // Get providers count
-                                $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
-                                $provider_count = count($provider_data);
-                                
-                                // Determine status
-                                $status = ucfirst($stock['status'] ?? 'pending');
-                                $status_colors = [
-                                    'waiting' => 'status-waiting',
-                                    'pending' => 'status-pending',
-                                    'approved' => 'status-approved',
-                                    'adjusted' => 'status-adjusted',
-                                    'rejected' => 'status-rejected'
-                                ];
-                                $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
+                            foreach ($branches as $branch): 
+                                $is_active = $branch['is_active'] ?? 1;
+                                $status = $is_active ? 'Active' : 'Inactive';
+                                $status_class = $is_active ? 'status-active' : 'status-inactive';
+                                $status_icon = $is_active ? 'fa-check-circle' : 'fa-times-circle';
                             ?>
-                                <tr data-status="<?php echo strtolower($stock['status'] ?? 'pending'); ?>">
+                                <tr data-status="<?php echo $is_active; ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="stock-number">
-                                            <?php echo htmlspecialchars($stock['stock_number']); ?>
-                                        </span>
-                                    </td>
-                                    <td><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></td>
-                                    <td>
-                                        <span class="employee-name">
-                                            <?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?>
+                                        <span class="branch-code">
+                                            <?php echo htmlspecialchars($branch['branch_code']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="branch-name">
-                                            <?php echo htmlspecialchars($stock['branch_name'] ?? 'Main'); ?>
+                                        <span class="branch-name-text">
+                                            <?php echo htmlspecialchars($branch['branch_name']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="provider-count">
-                                            <i class="fas fa-building"></i>
-                                            <?php echo $provider_count; ?> providers
+                                        <span class="branch-location">
+                                            <?php echo htmlspecialchars($branch['location'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="amount cash">
-                                            <?php echo formatCurrency($stock['cash_balance']); ?>
+                                        <span class="branch-phone">
+                                            <?php echo htmlspecialchars($branch['phone'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="amount float">
-                                            <?php echo formatCurrency($stock['cumm_total']); ?>
+                                        <span class="branch-email">
+                                            <?php echo htmlspecialchars($branch['email'] ?? '—'); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="manager-name">
+                                            <?php echo htmlspecialchars($branch['manager_name'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="status-badge <?php echo $status_class; ?>">
+                                            <i class="fas <?php echo $status_icon; ?>"></i>
                                             <?php echo $status; ?>
                                         </span>
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-view" title="View">
+                                            <a href="view.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
+                                            <a href="edit.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            <a href="delete.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this branch?')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -389,51 +294,51 @@ DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --evening-bg: #FFFFFF;
-    --evening-text: #1F2937;
-    --evening-text-secondary: #6B7280;
-    --evening-text-light: #9CA3AF;
-    --evening-border: #E5E7EB;
-    --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
-    --evening-input-bg: #F9FAFB;
-    --evening-hover: #F3F4F6;
-    --evening-shadow: rgba(0,0,0,0.06);
-    --evening-shadow-lg: rgba(0,0,0,0.12);
-    --evening-dropdown-bg: #FFFFFF;
-    --evening-dropdown-border: #E5E7EB;
+    --branches-bg: #FFFFFF;
+    --branches-text: #1F2937;
+    --branches-text-secondary: #6B7280;
+    --branches-text-light: #9CA3AF;
+    --branches-border: #E5E7EB;
+    --branches-card-bg: #FFFFFF;
+    --branches-card-header: #FAFBFC;
+    --branches-input-bg: #F9FAFB;
+    --branches-hover: #F3F4F6;
+    --branches-shadow: rgba(0,0,0,0.06);
+    --branches-shadow-lg: rgba(0,0,0,0.12);
+    --branches-dropdown-bg: #FFFFFF;
+    --branches-dropdown-border: #E5E7EB;
 }
 
 html.dark-mode {
-    --evening-bg: #1F2937;
-    --evening-text: #F9FAFB;
-    --evening-text-secondary: #9CA3AF;
-    --evening-text-light: #6B7280;
-    --evening-border: #374151;
-    --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
-    --evening-input-bg: #374151;
-    --evening-hover: #374151;
-    --evening-shadow: rgba(0,0,0,0.3);
-    --evening-shadow-lg: rgba(0,0,0,0.4);
-    --evening-dropdown-bg: #1F2937;
-    --evening-dropdown-border: #374151;
+    --branches-bg: #1F2937;
+    --branches-text: #F9FAFB;
+    --branches-text-secondary: #9CA3AF;
+    --branches-text-light: #6B7280;
+    --branches-border: #374151;
+    --branches-card-bg: #1F2937;
+    --branches-card-header: #374151;
+    --branches-input-bg: #374151;
+    --branches-hover: #374151;
+    --branches-shadow: rgba(0,0,0,0.3);
+    --branches-shadow-lg: rgba(0,0,0,0.4);
+    --branches-dropdown-bg: #1F2937;
+    --branches-dropdown-border: #374151;
 }
 
 /* Apply Dark Mode to Full Page */
 body {
-    background: var(--evening-bg) !important;
-    color: var(--evening-text);
+    background: var(--branches-bg) !important;
+    color: var(--branches-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
 .main-wrapper {
-    background: var(--evening-bg) !important;
+    background: var(--branches-bg) !important;
     transition: background 0.3s ease;
 }
 
 .main-content {
-    background: var(--evening-bg) !important;
+    background: var(--branches-bg) !important;
     transition: background 0.3s ease;
 }
 
@@ -457,7 +362,7 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--evening-text);
+    color: var(--branches-text);
     margin: 0;
     transition: color 0.3s ease;
 }
@@ -469,8 +374,8 @@ body {
 
 .record-count {
     font-size: 13px;
-    color: var(--evening-text-secondary);
-    background: var(--evening-hover);
+    color: var(--branches-text-secondary);
+    background: var(--branches-hover);
     padding: 2px 12px;
     border-radius: 12px;
     transition: all 0.3s ease;
@@ -575,11 +480,11 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--evening-dropdown-bg);
+    background: var(--branches-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--evening-shadow-lg);
-    border: 1px solid var(--evening-dropdown-border);
+    box-shadow: 0 4px 20px var(--branches-shadow-lg);
+    border: 1px solid var(--branches-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
@@ -596,14 +501,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--evening-text);
+    color: var(--branches-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--evening-hover);
+    background: var(--branches-hover);
 }
 
 .dropdown-menu a i {
@@ -617,75 +522,6 @@ body {
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
 /* ============================================================
-   BRANCH FILTER BAR - DARK MODE
-   ============================================================ */
-.branch-filter-bar {
-    background: var(--evening-card-bg);
-    border-radius: 10px;
-    padding: 12px 20px;
-    margin-bottom: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    color: var(--evening-text);
-}
-
-.branch-filter-left i {
-    color: #DC2626;
-    font-size: 16px;
-}
-
-.branch-filter-left select {
-    padding: 5px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
-    font-size: 13px;
-    color: var(--evening-text);
-    outline: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
-}
-
-.branch-badge {
-    background: #DC2626;
-    color: white;
-    padding: 2px 12px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.branch-filter-right .date-display {
-    font-size: 13px;
-    color: var(--evening-text-secondary);
-}
-
-.branch-filter-right .date-display i {
-    color: #DC2626;
-}
-
-/* ============================================================
    SUMMARIES GRID - 3 CARDS - DARK MODE
    ============================================================ */
 .summaries-grid-three {
@@ -696,14 +532,14 @@ body {
 }
 
 .summary-card {
-    background: var(--evening-card-bg);
+    background: var(--branches-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--branches-shadow);
+    border: 1px solid var(--branches-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -711,7 +547,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--evening-shadow-lg);
+    box-shadow: 0 4px 12px var(--branches-shadow-lg);
 }
 
 .summary-icon {
@@ -738,13 +574,13 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--evening-text-secondary);
+    color: var(--branches-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--evening-text);
+    color: var(--branches-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
@@ -754,28 +590,27 @@ body {
 
 .summary-sub {
     font-size: 11px;
-    color: var(--evening-text-light);
+    color: var(--branches-text-light);
     font-weight: 500;
 }
 
-/* Card Colors */
-.card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
-.card-stock { border-left: 4px solid #1E40AF; }
+.card-total .summary-icon { background: #DBEAFE; color: #1D4ED8; }
+.card-total { border-left: 4px solid #3B82F6; }
 
-.card-float .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-float { border-left: 4px solid #3B82F6; }
+.card-active .summary-icon { background: #D1FAE5; color: #065F46; }
+.card-active { border-left: 4px solid #10B981; }
 
-.card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-cash { border-left: 4px solid #10B981; }
+.card-inactive .summary-icon { background: #FEE2E2; color: #991B1B; }
+.card-inactive { border-left: 4px solid #DC2626; }
 
 /* ============================================================
    TABLE CONTAINER - DARK MODE
    ============================================================ */
 .table-container {
-    background: var(--evening-card-bg);
+    background: var(--branches-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--branches-shadow);
+    border: 1px solid var(--branches-border);
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -785,7 +620,7 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--branches-border);
     flex-wrap: wrap;
     gap: 10px;
     transition: all 0.3s ease;
@@ -794,7 +629,7 @@ body {
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--evening-text);
+    color: var(--branches-text);
     margin: 0;
 }
 
@@ -813,17 +648,17 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--branches-border);
     font-size: 13px;
     outline: none;
     width: 200px;
     transition: all 0.3s ease;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--branches-input-bg);
+    color: var(--branches-text);
 }
 
 .search-input::placeholder {
-    color: var(--evening-text-light);
+    color: var(--branches-text-light);
 }
 
 .search-input:focus {
@@ -834,11 +669,11 @@ body {
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--branches-border);
     font-size: 13px;
     outline: none;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--branches-input-bg);
+    color: var(--branches-text);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -849,8 +684,8 @@ body {
 }
 
 .filter-select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
+    background: var(--branches-dropdown-bg);
+    color: var(--branches-text);
 }
 
 .table-responsive {
@@ -888,65 +723,55 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--branches-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--evening-hover);
+    background: var(--branches-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--evening-text);
+    color: var(--branches-text);
     transition: color 0.3s ease;
 }
 
-/* Stock Number */
-.stock-number {
+/* Branch Code */
+.branch-code {
     font-weight: 600;
     color: #3B82F6;
     font-size: 12px;
-}
-
-/* Employee Name */
-.employee-name {
-    font-weight: 500;
-    color: var(--evening-text);
 }
 
 /* Branch Name */
-.branch-name {
-    background: var(--evening-hover);
-    padding: 2px 10px;
-    border-radius: 12px;
+.branch-name-text {
+    font-weight: 500;
+    color: var(--branches-text);
+}
+
+/* Branch Location */
+.branch-location {
+    color: var(--branches-text-secondary);
     font-size: 12px;
-    color: var(--evening-text-secondary);
-    transition: all 0.3s ease;
 }
 
-/* Provider Count */
-.provider-count {
+/* Branch Phone */
+.branch-phone {
+    color: var(--branches-text-secondary);
     font-size: 12px;
-    color: var(--evening-text-secondary);
 }
 
-.provider-count i {
-    color: #3B82F6;
-    margin-right: 4px;
+/* Branch Email */
+.branch-email {
+    color: var(--branches-text-secondary);
+    font-size: 12px;
 }
 
-/* Amounts */
-.amount {
-    font-weight: 600;
-}
-
-.amount.cash {
-    color: #059669;
-}
-
-.amount.float {
-    color: #1D4ED8;
+/* Manager Name */
+.manager-name {
+    font-weight: 500;
+    color: var(--branches-text);
 }
 
 /* Status Badge */
@@ -958,27 +783,17 @@ body {
     font-weight: 600;
 }
 
-.status-approved {
+.status-badge i {
+    margin-right: 4px;
+    font-size: 11px;
+}
+
+.status-active {
     background: #D1FAE5;
     color: #065F46;
 }
 
-.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.status-waiting {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.status-adjusted {
-    background: #EDE9FE;
-    color: #5B21B6;
-}
-
-.status-rejected {
+.status-inactive {
     background: #FEE2E2;
     color: #991B1B;
 }
@@ -1047,12 +862,12 @@ body {
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--evening-text);
+    color: var(--branches-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--evening-text-secondary);
+    color: var(--branches-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
@@ -1101,12 +916,6 @@ body {
     
     .summaries-grid-three .summary-card:last-child {
         grid-column: span 2;
-    }
-    
-    .branch-filter-bar {
-        flex-direction: column;
-        gap: 8px;
-        align-items: flex-start;
     }
     
     .table-header {
@@ -1251,7 +1060,7 @@ function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('stocksTable');
+    var table = document.getElementById('branchesTable');
     if (!table) {
         alert('No data to export!');
         return;
@@ -1306,7 +1115,7 @@ function exportCSV(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.download = 'branches_export_' + new Date().toISOString().slice(0,10) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1317,7 +1126,7 @@ function exportCSV(headers, data) {
 // EXPORT EXCEL (HTML Table format)
 // ============================================================
 function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+    var html = '<html><head><meta charset="UTF-8"><title>Branches Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
     html += 'h1 { color: #3B82F6; }';
@@ -1326,7 +1135,7 @@ function exportExcel(headers, data) {
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
     html += '</style>';
     html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
+    html += '<h1>Branches Report</h1>';
     html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     html += '<table>';
     html += '<thead><tr>';
@@ -1350,7 +1159,7 @@ function exportExcel(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+    a.download = 'branches_export_' + new Date().toISOString().slice(0,10) + '.xls';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1361,22 +1170,17 @@ function exportExcel(headers, data) {
 // EXPORT PDF
 // ============================================================
 function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
+    var printContent = '<html><head><title>Branches Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
     printContent += 'h1 { color: #3B82F6; }';
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
+    printContent += '<h1>Branches Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    var totalFloat = 0;
-    var totalCash = 0;
-    
     printContent += '<table>';
     printContent += '<thead><tr>';
     headers.forEach(function(h) {
@@ -1386,32 +1190,13 @@ function exportPDF(headers, data) {
     
     data.forEach(function(row) {
         printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Float column (index 7)
-            if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
-                }
-            }
-            // Cash column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
-                }
-            }
+        row.forEach(function(cell) {
             printContent += '<td>' + cell + '</td>';
         });
         printContent += '</tr>';
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1422,18 +1207,11 @@ function exportPDF(headers, data) {
 }
 
 // ============================================================
-// FORMAT NUMBER
-// ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-// ============================================================
 // FILTER BY STATUS
 // ============================================================
 function filterByStatus(status) {
-    var rows = document.querySelectorAll('#stocksTable tbody tr');
-    var statusFilter = status.toLowerCase();
+    var rows = document.querySelectorAll('#branchesTable tbody tr');
+    var statusFilter = status;
     
     rows.forEach(function(row) {
         var rowStatus = row.getAttribute('data-status');
@@ -1453,7 +1231,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
             var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#stocksTable tbody tr');
+            var rows = document.querySelectorAll('#branchesTable tbody tr');
             
             rows.forEach(function(row) {
                 var text = row.textContent.toLowerCase();

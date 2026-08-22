@@ -1,55 +1,180 @@
 <?php
 // ================================================================
-// FILE: C:\xampp\htdocs\wakala_system\includes\admin_topbar.php
+// FILE: includes/admin_topbar.php
 // WAKALA FINANCIAL SYSTEM - SHARED ADMIN TOP BAR
-// WITH PROFILE PIC, DARK MODE, GLOBAL SEARCH, LIVE DATE/TIME
+// WITH PROFILE PICTURE FROM DATABASE & DARK MODE SUPPORT
 // ================================================================
+
+$branches = [];
+try {
+    global $db;
+    if (isset($db)) {
+        $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+        $stmt->execute();
+        $branches = $stmt->fetchAll();
+    }
+} catch (Exception $e) {
+    $branches = [];
+}
+
+$current_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+if ($current_branch == 0 && isset($_SESSION['selected_branch'])) {
+    $current_branch = $_SESSION['selected_branch'];
+}
 
 $full_name = $_SESSION['full_name'] ?? 'Admin';
 $role = $_SESSION['role'] ?? 'admin';
-$profile_image = '../../assets/images/logo.PNG';
+$user_id = $_SESSION['user_id'] ?? 0;
+
+// ============================================================
+// GET PROFILE PICTURE FROM DATABASE
+// ============================================================
+$profile_image = '../../assets/images/logo.PNG'; // Default fallback
+
+if ($user_id > 0) {
+    try {
+        global $db;
+        $stmt = $db->prepare("SELECT profile_pic FROM employees WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user_data = $stmt->fetch();
+        
+        if ($user_data && !empty($user_data['profile_pic'])) {
+            $profile_pic = $user_data['profile_pic'];
+            
+            // Check if file exists in different possible paths
+            $paths_to_check = [
+                '../../' . $profile_pic,
+                $profile_pic,
+                '../../uploads/profiles/' . basename($profile_pic)
+            ];
+            
+            $found = false;
+            foreach ($paths_to_check as $path) {
+                if (file_exists($path)) {
+                    $profile_image = '../../' . $profile_pic;
+                    $found = true;
+                    break;
+                }
+            }
+            
+            // If still not found, try direct path
+            if (!$found && file_exists($profile_pic)) {
+                $profile_image = $profile_pic;
+                $found = true;
+            }
+            
+            // If still not found, try with different base path
+            if (!$found) {
+                $alt_path = __DIR__ . '/../' . $profile_pic;
+                if (file_exists($alt_path)) {
+                    $profile_image = '../../' . $profile_pic;
+                }
+            }
+        }
+    } catch (Exception $e) {
+        // If error, use default
+        $profile_image = '../../assets/images/logo.PNG';
+    }
+}
+
+// Store in session for quick access
+$_SESSION['profile_pic'] = $profile_image;
+
+$current_dir = basename(dirname($_SERVER['PHP_SELF']));
+$page_titles = [
+    'dashboard' => 'Dashboard',
+    'morning_report' => 'Morning Report',
+    'evening_stock' => 'Evening Stock',
+    'daily_report' => 'Daily Report',
+    'commissions' => 'Commissions',
+    'expenses' => 'Expenses',
+    'store_cash_out' => 'Store Cash Out',
+    'capital_management' => 'Capital Management',
+    'salaries' => 'Salaries',
+    'reports' => 'Reports',
+    'branches' => 'Branches',
+    'providers' => 'Providers',
+    'employees' => 'Employees',
+    'activity_logs' => 'Activity Logs',
+    'settings' => 'Settings',
+    'profile' => 'Profile'
+];
+$page_title = $page_titles[$current_dir] ?? 'Dashboard';
+
+$page_icons = [
+    'dashboard' => 'fa-chart-pie',
+    'morning_report' => 'fa-sun',
+    'evening_stock' => 'fa-moon',
+    'daily_report' => 'fa-file-alt',
+    'commissions' => 'fa-hand-holding-usd',
+    'expenses' => 'fa-receipt',
+    'store_cash_out' => 'fa-money-bill-wave',
+    'capital_management' => 'fa-building',
+    'salaries' => 'fa-wallet',
+    'reports' => 'fa-chart-bar',
+    'branches' => 'fa-store',
+    'providers' => 'fa-university',
+    'employees' => 'fa-users',
+    'activity_logs' => 'fa-history',
+    'settings' => 'fa-cog',
+    'profile' => 'fa-user'
+];
+$page_icon = $page_icons[$current_dir] ?? 'fa-chart-pie';
+
+$branch_name = 'All Branches';
+if ($current_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $current_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
 ?>
+
 <!-- ============================================================
 ADMIN TOP BAR
 ============================================================ -->
-<header class="admin-topbar">
+<header class="admin-topbar" id="adminTopbar">
     <div class="topbar-left">
-        <!-- Mobile sidebar toggle -->
         <button class="topbar-toggle" id="topbarToggle" aria-label="Toggle Sidebar">
             <i class="fas fa-bars"></i>
         </button>
-        
-        <!-- Page Title -->
         <h2 id="pageTitle">
-            <i class="fas fa-chart-pie page-icon"></i>
-            Dashboard
+            <i class="fas <?php echo $page_icon; ?> page-icon"></i>
+            <?php echo $page_title; ?>
         </h2>
     </div>
     
     <div class="topbar-right">
-        <!-- ============================================================
-        GLOBAL SEARCH
-        ============================================================ -->
+        <div class="branch-selector">
+            <i class="fas fa-store branch-icon"></i>
+            <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
+                <option value="0">All Branches</option>
+                <?php foreach ($branches as $branch): ?>
+                    <option value="<?php echo $branch['id']; ?>" <?php echo $current_branch == $branch['id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($branch['branch_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($current_branch > 0): ?>
+                <span class="branch-badge show">
+                    <i class="fas fa-check-circle"></i>
+                </span>
+            <?php endif; ?>
+        </div>
+        
         <div class="global-search">
             <i class="fas fa-search search-icon"></i>
-            <input type="text" 
-                   id="globalSearch" 
-                   placeholder="Search anything..." 
-                   autocomplete="off">
-            <span class="search-shortcut">Ctrl+K</span>
+            <input type="text" id="globalSearch" placeholder="Search..." autocomplete="off">
+            <span class="search-shortcut">⌘K</span>
             <div class="search-results" id="searchResults"></div>
         </div>
         
-        <!-- ============================================================
-        DARK MODE TOGGLE
-        ============================================================ -->
         <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle Dark Mode">
             <i class="fas fa-moon" id="darkModeIcon"></i>
         </button>
         
-        <!-- ============================================================
-        NOTIFICATIONS
-        ============================================================ -->
         <div class="notification-wrapper">
             <button class="notification-btn" id="notificationBtn">
                 <i class="fas fa-bell"></i>
@@ -61,30 +186,27 @@ ADMIN TOP BAR
                     <button class="mark-all-read">Mark all read</button>
                 </div>
                 <div class="notification-list" id="notificationList">
-                    <div style="padding:20px;text-align:center;color:var(--text-light);">
-                        <i class="fas fa-bell-slash" style="font-size:24px;display:block;margin-bottom:8px;"></i>
+                    <div style="padding:16px;text-align:center;color:var(--topbar-text-light);">
+                        <i class="fas fa-bell-slash" style="font-size:20px;display:block;margin-bottom:6px;"></i>
                         No notifications
                     </div>
                 </div>
             </div>
         </div>
         
-        <!-- ============================================================
-        LIVE DATE & TIME
-        ============================================================ -->
         <div class="live-datetime" id="liveDateTime">
-            <i class="fas fa-clock" style="color:var(--text-light);"></i>
+            <i class="fas fa-clock"></i>
             <span id="liveTime">--:--:--</span>
             <span class="date-separator">|</span>
             <span id="liveDate">--/--/----</span>
         </div>
         
-        <!-- ============================================================
-        USER PROFILE
-        ============================================================ -->
-        <div class="user-profile">
-            <img src="<?php echo $profile_image; ?>" alt="Profile" 
-                 onerror="this.src='../../assets/images/default-avatar.png'">
+        <div class="user-profile" id="userProfileContainer">
+            <div class="profile-img-wrapper">
+                <img src="<?php echo $profile_image; ?>" alt="Profile" id="topbarProfileImage"
+                     onerror="this.src='../../assets/images/logo.PNG'">
+                <span class="online-dot"></span>
+            </div>
             <div class="user-info">
                 <div class="user-name"><?php echo htmlspecialchars($full_name); ?></div>
                 <span class="user-role"><?php echo strtoupper($role); ?></span>
@@ -93,8 +215,16 @@ ADMIN TOP BAR
                 <i class="fas fa-chevron-down"></i>
             </button>
             
-            <!-- User Dropdown -->
             <div class="user-dropdown" id="userDropdown">
+                <div class="dropdown-header">
+                    <img src="<?php echo $profile_image; ?>" alt="Profile" 
+                         onerror="this.src='../../assets/images/logo.PNG'">
+                    <div>
+                        <div class="dd-user-name"><?php echo htmlspecialchars($full_name); ?></div>
+                        <div class="dd-user-role"><?php echo ucfirst($role); ?></div>
+                    </div>
+                </div>
+                <hr>
                 <a href="../profile/index.php">
                     <i class="fas fa-user"></i> My Profile
                 </a>
@@ -107,148 +237,231 @@ ADMIN TOP BAR
                 </a>
             </div>
         </div>
-        
-        <!-- ============================================================
-        LAST UPDATED
-        ============================================================ -->
-        <div class="last-updated" id="lastUpdated">
-            <i class="fas fa-check-circle" style="color:var(--success);"></i>
-            <span>Updated: Just now</span>
-        </div>
     </div>
 </header>
 
 <!-- ============================================================
-STYLES
+TOPBAR STYLES
 ============================================================ -->
 <style>
 /* ============================================================
-   ADMIN TOPBAR - COMPLETE
+   TOPBAR - COMPLETE DARK MODE SUPPORT
    ============================================================ */
+
+:root {
+    --topbar-bg: #FFFFFF;
+    --topbar-text: #1F2937;
+    --topbar-text-secondary: #6B7280;
+    --topbar-text-light: #9CA3AF;
+    --topbar-border: #E5E7EB;
+    --topbar-input-bg: #F9FAFB;
+    --topbar-hover: #F3F4F6;
+    --topbar-card-bg: #FFFFFF;
+    --topbar-shadow: rgba(0,0,0,0.06);
+    --topbar-shadow-lg: rgba(0,0,0,0.12);
+    --topbar-dropdown-bg: #FFFFFF;
+    --topbar-dropdown-border: #E5E7EB;
+    --topbar-icon-color: #6B7280;
+}
+
+html.dark-mode {
+    --topbar-bg: #1F2937;
+    --topbar-text: #F9FAFB;
+    --topbar-text-secondary: #9CA3AF;
+    --topbar-text-light: #6B7280;
+    --topbar-border: #374151;
+    --topbar-input-bg: #374151;
+    --topbar-hover: #374151;
+    --topbar-card-bg: #1F2937;
+    --topbar-shadow: rgba(0,0,0,0.3);
+    --topbar-shadow-lg: rgba(0,0,0,0.4);
+    --topbar-dropdown-bg: #1F2937;
+    --topbar-dropdown-border: #374151;
+    --topbar-icon-color: #9CA3AF;
+}
+
 .admin-topbar {
-    background: var(--topbar-bg, #FFFFFF);
-    padding: 12px 25px;
-    border-radius: 14px;
+    position: fixed;
+    top: 0;
+    left: 260px;
+    right: 0;
+    height: 64px;
+    background: var(--topbar-bg);
+    padding: 0 24px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 25px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    transition: background 0.3s ease, box-shadow 0.3s ease;
-    position: sticky;
-    top: 0;
-    z-index: 500;
-    border-bottom: 1px solid var(--border-color, #E5E7EB);
+    box-shadow: 0 1px 3px var(--topbar-shadow);
+    border-bottom: 1px solid var(--topbar-border);
+    transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    z-index: 999;
 }
 
-/* Topbar Left */
 .topbar-left {
     display: flex;
     align-items: center;
-    gap: 15px;
+    gap: 14px;
+    flex-shrink: 0;
 }
 
 .topbar-toggle {
     display: none;
     background: none;
     border: none;
-    font-size: 20px;
-    color: var(--text-color, #1F2937);
+    font-size: 18px;
+    color: var(--topbar-text);
     cursor: pointer;
-    padding: 5px 8px;
-    border-radius: 8px;
-    transition: background 0.3s ease;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.3s ease, color 0.3s ease;
 }
 
 .topbar-toggle:hover {
-    background: var(--bg-hover, #F3F4F6);
+    background: var(--topbar-hover);
 }
 
 .topbar-left h2 {
     font-size: 18px;
     font-weight: 700;
-    color: var(--text-color, #1F2937);
+    color: var(--topbar-text);
     transition: color 0.3s ease;
+    margin: 0;
+    white-space: nowrap;
 }
 
 .topbar-left h2 .page-icon {
-    margin-right: 8px;
-    color: var(--primary, #DC2626);
+    margin-right: 10px;
+    color: #DC2626;
 }
 
-/* Topbar Right */
 .topbar-right {
     display: flex;
     align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
+    gap: 12px;
+    flex-wrap: nowrap;
 }
 
-/* ============================================================
-   GLOBAL SEARCH
-   ============================================================ */
+/* Branch Selector */
+.branch-selector {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px 4px 4px;
+    background: var(--topbar-input-bg);
+    border-radius: 8px;
+    border: 1.5px solid var(--topbar-border);
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+}
+
+.branch-selector:hover {
+    border-color: #DC2626;
+}
+
+.branch-selector .branch-icon {
+    color: #DC2626;
+    font-size: 13px;
+    padding: 4px 6px;
+}
+
+.branch-selector select {
+    background: transparent;
+    border: none;
+    padding: 5px 4px 5px 0;
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    color: var(--topbar-text);
+    cursor: pointer;
+    outline: none;
+    min-width: 100px;
+    max-width: 140px;
+    transition: color 0.3s ease;
+}
+
+.branch-selector select option {
+    background: var(--topbar-dropdown-bg);
+    color: var(--topbar-text);
+    padding: 4px 8px;
+}
+
+.branch-selector .branch-badge {
+    font-size: 9px;
+    font-weight: 600;
+    color: #10B981;
+    display: none;
+}
+
+.branch-selector .branch-badge.show {
+    display: inline-block;
+}
+
+/* Global Search */
 .global-search {
     position: relative;
     display: flex;
     align-items: center;
+    flex-shrink: 1;
+    min-width: 140px;
+    max-width: 220px;
 }
 
 .global-search .search-icon {
     position: absolute;
-    left: 14px;
-    color: var(--text-light, #9CA3AF);
-    font-size: 14px;
+    left: 12px;
+    color: var(--topbar-text-light);
+    font-size: 13px;
+    transition: color 0.3s ease;
 }
 
 .global-search input {
-    width: 260px;
-    padding: 9px 14px 9px 42px;
-    border: 2px solid var(--border-color, #E5E7EB);
-    border-radius: 10px;
-    font-size: 14px;
+    width: 100%;
+    padding: 7px 12px 7px 36px;
+    border: 1.5px solid var(--topbar-border);
+    border-radius: 8px;
+    font-size: 13px;
     font-family: 'Inter', sans-serif;
     transition: all 0.3s ease;
-    background: var(--bg-input, #F9FAFB);
-    color: var(--text-color, #1F2937);
+    background: var(--topbar-input-bg);
+    color: var(--topbar-text);
+}
+
+.global-search input::placeholder {
+    color: var(--topbar-text-light);
 }
 
 .global-search input:focus {
     outline: none;
-    border-color: var(--primary, #DC2626);
-    box-shadow: 0 0 0 4px rgba(220,38,38,0.08);
-    background: var(--bg-card, #FFFFFF);
-}
-
-.global-search input::placeholder {
-    color: var(--text-light, #9CA3AF);
+    border-color: #DC2626;
+    box-shadow: 0 0 0 3px rgba(220,38,38,0.08);
+    background: var(--topbar-card-bg);
 }
 
 .global-search .search-shortcut {
     position: absolute;
     right: 10px;
     font-size: 10px;
-    color: var(--text-light, #9CA3AF);
-    background: var(--border-color, #E5E7EB);
+    color: var(--topbar-text-light);
+    background: var(--topbar-border);
     padding: 1px 8px;
     border-radius: 4px;
     font-weight: 600;
+    transition: background 0.3s ease, color 0.3s ease;
 }
 
-/* Search Results */
 .search-results {
     display: none;
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 6px);
     left: 0;
     right: 0;
-    background: var(--bg-card, #FFFFFF);
-    border-radius: 12px;
-    box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.12));
-    border: 1px solid var(--border-color, #E5E7EB);
-    max-height: 400px;
+    background: var(--topbar-dropdown-bg);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px var(--topbar-shadow-lg);
+    border: 1px solid var(--topbar-dropdown-border);
+    max-height: 350px;
     overflow-y: auto;
     z-index: 1001;
-    padding: 6px 0;
+    padding: 4px 0;
 }
 
 .search-results.active {
@@ -258,116 +471,111 @@ STYLES
 .search-results .result-item {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 16px;
-    color: var(--text-color, #1F2937);
+    gap: 10px;
+    padding: 8px 14px;
+    color: var(--topbar-text);
     text-decoration: none;
     transition: background 0.2s ease;
     cursor: pointer;
+    font-size: 13px;
 }
 
 .search-results .result-item:hover {
-    background: var(--bg-hover, #F3F4F6);
+    background: var(--topbar-hover);
 }
 
 .search-results .result-item i {
-    width: 18px;
-    color: var(--text-light, #9CA3AF);
-    font-size: 14px;
-}
-
-.search-results .result-item .result-title {
-    font-weight: 500;
-    font-size: 14px;
+    width: 16px;
+    color: var(--topbar-text-light);
+    font-size: 13px;
 }
 
 .search-results .result-empty {
-    padding: 20px;
+    padding: 16px;
     text-align: center;
-    color: var(--text-light, #9CA3AF);
+    color: var(--topbar-text-light);
+    font-size: 13px;
 }
 
-/* ============================================================
-   DARK MODE TOGGLE
-   ============================================================ */
+/* Dark Mode Toggle */
 .dark-mode-toggle {
     background: none;
     border: none;
-    font-size: 20px;
-    color: var(--text-secondary, #6B7280);
+    font-size: 17px;
+    color: var(--topbar-icon-color);
     cursor: pointer;
-    padding: 8px;
-    border-radius: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
     transition: all 0.3s ease;
+    flex-shrink: 0;
 }
 
 .dark-mode-toggle:hover {
-    background: var(--bg-hover, #F3F4F6);
-    color: var(--text-color, #1F2937);
+    background: var(--topbar-hover);
+    color: var(--topbar-text);
 }
 
-/* ============================================================
-   LIVE DATE & TIME
-   ============================================================ */
+/* Live Date/Time */
 .live-datetime {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--text-secondary, #6B7280);
+    gap: 4px;
+    font-size: 11px;
+    color: var(--topbar-text-secondary);
     font-weight: 500;
     padding: 4px 12px;
-    background: var(--bg-hover, #F3F4F6);
+    background: var(--topbar-hover);
     border-radius: 8px;
-    border: 1px solid var(--border-color, #E5E7EB);
+    border: 1px solid var(--topbar-border);
     white-space: nowrap;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
 }
 
 .live-datetime i {
-    font-size: 14px;
-    color: var(--primary, #DC2626);
+    font-size: 11px;
+    color: #DC2626;
 }
 
 .live-datetime .date-separator {
-    color: var(--text-light, #9CA3AF);
+    color: var(--topbar-text-light);
     margin: 0 2px;
 }
 
-/* ============================================================
-   NOTIFICATIONS
-   ============================================================ */
+/* Notifications */
 .notification-wrapper {
     position: relative;
+    flex-shrink: 0;
 }
 
 .notification-btn {
     background: none;
     border: none;
-    font-size: 20px;
-    color: var(--text-secondary, #6B7280);
+    font-size: 17px;
+    color: var(--topbar-icon-color);
     cursor: pointer;
-    padding: 8px;
-    border-radius: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
     transition: all 0.3s ease;
     position: relative;
 }
 
 .notification-btn:hover {
-    background: var(--bg-hover, #F3F4F6);
-    color: var(--text-color, #1F2937);
+    background: var(--topbar-hover);
+    color: var(--topbar-text);
 }
 
 .notification-badge {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    background: var(--danger, #DC2626);
-    color: white;
+    top: 0px;
+    right: 0px;
+    background: #DC2626;
+    color: #FFFFFF;
     border-radius: 50%;
-    padding: 1px 6px;
-    font-size: 10px;
+    padding: 1px 5px;
+    font-size: 8px;
     font-weight: 700;
-    min-width: 18px;
+    min-width: 16px;
     text-align: center;
     display: none;
 }
@@ -379,14 +587,14 @@ STYLES
 .notification-dropdown {
     display: none;
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 6px);
     right: 0;
-    background: var(--bg-card, #FFFFFF);
-    border-radius: 12px;
-    box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.12));
-    border: 1px solid var(--border-color, #E5E7EB);
-    width: 380px;
-    max-height: 450px;
+    background: var(--topbar-dropdown-bg);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px var(--topbar-shadow-lg);
+    border: 1px solid var(--topbar-dropdown-border);
+    width: 320px;
+    max-height: 400px;
     overflow: hidden;
     z-index: 1001;
 }
@@ -399,51 +607,51 @@ STYLES
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border-color, #E5E7EB);
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--topbar-border);
 }
 
 .notification-header h4 {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--text-color, #1F2937);
+    color: var(--topbar-text);
 }
 
 .notification-header .mark-all-read {
     background: none;
     border: none;
-    color: var(--primary, #DC2626);
-    font-size: 12px;
+    color: #DC2626;
+    font-size: 11px;
     font-weight: 500;
     cursor: pointer;
 }
 
 .notification-list {
-    max-height: 350px;
+    max-height: 320px;
     overflow-y: auto;
 }
 
 .notification-item {
     display: flex;
-    gap: 12px;
-    padding: 12px 18px;
-    border-bottom: 1px solid var(--border-color, #F3F4F6);
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--topbar-border);
     transition: background 0.2s ease;
     cursor: pointer;
 }
 
 .notification-item:hover {
-    background: var(--bg-hover, #F9FAFB);
+    background: var(--topbar-hover);
 }
 
 .notification-item .notif-icon {
-    width: 36px;
-    height: 36px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
+    font-size: 12px;
     flex-shrink: 0;
 }
 
@@ -458,62 +666,81 @@ STYLES
 
 .notification-item .notif-title {
     font-weight: 500;
-    font-size: 13px;
-    color: var(--text-color, #1F2937);
+    font-size: 12px;
+    color: var(--topbar-text);
 }
 
 .notification-item .notif-message {
-    font-size: 12px;
-    color: var(--text-secondary, #6B7280);
+    font-size: 11px;
+    color: var(--topbar-text-secondary);
 }
 
 .notification-item .notif-time {
-    font-size: 11px;
-    color: var(--text-light, #9CA3AF);
+    font-size: 10px;
+    color: var(--topbar-text-light);
 }
 
-/* ============================================================
-   USER PROFILE
-   ============================================================ */
+/* User Profile */
 .user-profile {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 4px 12px 4px 4px;
-    border-radius: 10px;
+    gap: 8px;
+    padding: 2px 10px 2px 2px;
+    border-radius: 8px;
     cursor: pointer;
     transition: background 0.3s ease;
     position: relative;
+    flex-shrink: 0;
 }
 
 .user-profile:hover {
-    background: var(--bg-hover, #F3F4F6);
+    background: var(--topbar-hover);
 }
 
-.user-profile img {
-    width: 38px;
-    height: 38px;
+.profile-img-wrapper {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+}
+
+.profile-img-wrapper img {
+    width: 34px;
+    height: 34px;
     border-radius: 50%;
     object-fit: cover;
-    border: 2px solid var(--primary, #DC2626);
-    background: white;
-    padding: 2px;
+    border: 2px solid #DC2626;
+    background: #ffffff;
+    display: block;
+}
+
+.profile-img-wrapper .online-dot {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 10px;
+    height: 10px;
+    background: #10B981;
+    border-radius: 50%;
+    border: 2px solid var(--topbar-bg);
+    transition: border-color 0.3s ease;
 }
 
 .user-profile .user-info {
-    line-height: 1.3;
+    line-height: 1.2;
 }
 
 .user-profile .user-name {
     font-weight: 600;
-    font-size: 14px;
-    color: var(--text-color, #1F2937);
+    font-size: 12px;
+    color: var(--topbar-text);
+    transition: color 0.3s ease;
 }
 
 .user-profile .user-role {
-    font-size: 10px;
+    font-size: 8px;
     font-weight: 600;
-    color: var(--primary, #DC2626);
+    color: #DC2626;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
@@ -521,11 +748,11 @@ STYLES
 .user-dropdown-btn {
     background: none;
     border: none;
-    color: var(--text-light, #9CA3AF);
+    color: var(--topbar-text-light);
     cursor: pointer;
-    padding: 2px;
-    font-size: 12px;
-    transition: transform 0.3s ease;
+    padding: 1px;
+    font-size: 10px;
+    transition: transform 0.3s ease, color 0.3s ease;
 }
 
 .user-dropdown-btn.rotate {
@@ -536,14 +763,14 @@ STYLES
 .user-dropdown {
     display: none;
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 6px);
     right: 0;
-    background: var(--bg-card, #FFFFFF);
-    border-radius: 12px;
-    box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.12));
-    border: 1px solid var(--border-color, #E5E7EB);
+    background: var(--topbar-dropdown-bg);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px var(--topbar-shadow-lg);
+    border: 1px solid var(--topbar-dropdown-border);
     min-width: 200px;
-    padding: 6px 0;
+    padding: 4px 0;
     z-index: 1001;
 }
 
@@ -551,168 +778,148 @@ STYLES
     display: block;
 }
 
+.user-dropdown .dropdown-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--topbar-border);
+}
+
+.user-dropdown .dropdown-header img {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #DC2626;
+}
+
+.user-dropdown .dropdown-header .dd-user-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--topbar-text);
+}
+
+.user-dropdown .dropdown-header .dd-user-role {
+    font-size: 10px;
+    color: var(--topbar-text-secondary);
+}
+
 .user-dropdown a {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 18px;
-    color: var(--text-color, #1F2937);
+    gap: 10px;
+    padding: 8px 14px;
+    color: var(--topbar-text);
     text-decoration: none;
-    font-size: 14px;
-    transition: background 0.2s ease;
+    font-size: 13px;
+    transition: background 0.2s ease, color 0.2s ease;
 }
 
 .user-dropdown a:hover {
-    background: var(--bg-hover, #F3F4F6);
+    background: var(--topbar-hover);
 }
 
 .user-dropdown a i {
-    width: 18px;
-    color: var(--text-light, #9CA3AF);
-    font-size: 14px;
+    width: 16px;
+    color: var(--topbar-text-light);
+    font-size: 13px;
 }
 
 .user-dropdown hr {
     border: none;
-    border-top: 1px solid var(--border-color, #E5E7EB);
-    margin: 4px 12px;
+    border-top: 1px solid var(--topbar-border);
+    margin: 3px 10px;
 }
 
 .user-dropdown .logout-dropdown {
-    color: var(--danger, #DC2626);
+    color: #DC2626;
 }
 
 .user-dropdown .logout-dropdown i {
-    color: var(--danger, #DC2626);
+    color: #DC2626;
 }
 
 /* ============================================================
-   LAST UPDATED
+   MAIN WRAPPER COMPENSATION
    ============================================================ */
-.last-updated {
-    font-size: 12px;
-    color: var(--text-light, #9CA3AF);
+.main-wrapper {
+    margin-left: 260px;
+    padding-top: 64px;
+    min-height: 100vh;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
+    flex-direction: column;
 }
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1200px) {
+    .global-search { min-width: 120px; max-width: 180px; }
+}
+
 @media (max-width: 1024px) {
-    .global-search input {
-        width: 180px;
-    }
+    .global-search { min-width: 100px; max-width: 150px; }
+    .branch-selector select { min-width: 80px; max-width: 110px; font-size: 12px; }
 }
 
 @media (max-width: 768px) {
     .admin-topbar {
-        padding: 10px 15px;
-        border-radius: 10px;
-        flex-wrap: wrap;
-        gap: 10px;
+        left: 0;
+        height: 56px;
+        padding: 0 14px;
+        flex-wrap: nowrap;
+        gap: 4px;
     }
-    
-    .topbar-toggle {
-        display: block;
-    }
-    
-    .topbar-left h2 {
-        font-size: 16px;
-    }
-    
-    .topbar-right {
-        width: 100%;
-        justify-content: space-between;
-        flex-wrap: wrap;
-    }
-    
-    .global-search {
-        order: 10;
-        width: 100%;
-    }
-    
-    .global-search input {
-        width: 100%;
-    }
-    
-    .live-datetime {
-        font-size: 12px;
-        padding: 3px 10px;
-    }
-    
-    .user-profile .user-info {
-        display: none;
-    }
-    
-    .notification-dropdown {
-        width: 320px;
-        right: -40px;
-    }
-    
-    .last-updated {
-        font-size: 10px;
-    }
+    .topbar-toggle { display: block; font-size: 16px; padding: 4px 6px; }
+    .topbar-left h2 { font-size: 15px; }
+    .topbar-left h2 .page-icon { display: none; }
+    .topbar-right { gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding: 2px 0; }
+    .global-search { min-width: 80px; max-width: 120px; }
+    .global-search input { font-size: 11px; padding: 5px 8px 5px 28px; }
+    .global-search .search-shortcut { display: none; }
+    .global-search .search-icon { font-size: 11px; left: 8px; }
+    .branch-selector { padding: 2px 6px 2px 2px; }
+    .branch-selector select { font-size: 11px; min-width: 60px; max-width: 90px; }
+    .branch-selector .branch-badge { display: none !important; }
+    .live-datetime { font-size: 10px; padding: 2px 8px; }
+    .live-datetime .date-separator { margin: 0 1px; }
+    .user-profile .user-info { display: none; }
+    .profile-img-wrapper { width: 28px; height: 28px; }
+    .profile-img-wrapper img { width: 28px; height: 28px; }
+    .user-profile { padding: 2px 4px 2px 2px; }
+    .dark-mode-toggle { font-size: 15px; padding: 4px 6px; }
+    .notification-btn { font-size: 15px; padding: 4px 6px; }
+    .notification-dropdown { width: 280px; right: -30px; }
+    .main-wrapper { margin-left: 0; padding-top: 56px; }
 }
 
 @media (max-width: 480px) {
-    .admin-topbar {
-        padding: 8px 12px;
-    }
-    
-    .topbar-left h2 {
-        font-size: 14px;
-    }
-    
-    .topbar-left h2 .page-icon {
-        display: none;
-    }
-    
-    .global-search input {
-        font-size: 13px;
-        padding: 7px 12px 7px 36px;
-    }
-    
-    .global-search .search-shortcut {
-        display: none;
-    }
-    
-    .live-datetime {
-        font-size: 10px;
-        padding: 2px 8px;
-    }
-    
-    .live-datetime .date-separator {
-        margin: 0 1px;
-    }
-    
-    .user-profile img {
-        width: 32px;
-        height: 32px;
-    }
-    
-    .notification-dropdown {
-        width: 290px;
-        right: -60px;
-    }
-    
-    .last-updated {
-        display: none;
-    }
+    .admin-topbar { height: 50px; padding: 0 10px; }
+    .topbar-left h2 { font-size: 13px; }
+    .topbar-toggle { font-size: 14px; padding: 3px 5px; }
+    .topbar-right { gap: 4px; }
+    .global-search { min-width: 60px; max-width: 90px; }
+    .global-search input { font-size: 10px; padding: 4px 6px 4px 24px; }
+    .global-search .search-icon { font-size: 9px; left: 6px; }
+    .branch-selector select { font-size: 10px; min-width: 50px; max-width: 70px; }
+    .branch-selector .branch-icon { font-size: 10px; padding: 2px 4px; }
+    .live-datetime { font-size: 9px; padding: 2px 6px; }
+    .live-datetime i { display: none; }
+    .profile-img-wrapper { width: 24px; height: 24px; }
+    .profile-img-wrapper img { width: 24px; height: 24px; }
+    .dark-mode-toggle { font-size: 13px; padding: 3px 4px; }
+    .notification-btn { font-size: 13px; padding: 3px 4px; }
+    .notification-dropdown { width: 260px; right: -50px; }
+    .main-wrapper { padding-top: 50px; }
 }
 </style>
 
 <script>
-// ============================================================
-// TOPBAR JAVASCRIPT
-// ============================================================
-
 document.addEventListener('DOMContentLoaded', function() {
     
     // ============================================================
-    // SIDEBAR TOGGLE (Mobile)
+    // SIDEBAR TOGGLE
     // ============================================================
     const topbarToggle = document.getElementById('topbarToggle');
     const sidebar = document.getElementById('adminSidebar');
@@ -723,7 +930,6 @@ document.addEventListener('DOMContentLoaded', function() {
             sidebar.classList.toggle('open');
             overlay.classList.toggle('active');
         });
-        
         overlay.addEventListener('click', function() {
             sidebar.classList.remove('open');
             overlay.classList.remove('active');
@@ -731,34 +937,35 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // DARK MODE TOGGLE - FIXED
+    // DARK MODE - COMPLETE
     // ============================================================
     const darkToggle = document.getElementById('darkModeToggle');
     const darkIcon = document.getElementById('darkModeIcon');
     const htmlRoot = document.documentElement;
     
-    // Load saved preference from localStorage
-    const savedDarkMode = localStorage.getItem('darkMode') === 'true';
-    
-    // Apply dark mode if saved
-    if (savedDarkMode) {
+    const savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode === 'true') {
         htmlRoot.classList.add('dark-mode');
-        darkIcon.className = 'fas fa-sun';
+        if (darkIcon) darkIcon.className = 'fas fa-sun';
+    } else {
+        htmlRoot.classList.remove('dark-mode');
+        if (darkIcon) darkIcon.className = 'fas fa-moon';
     }
     
     if (darkToggle) {
-        darkToggle.addEventListener('click', function() {
-            // Toggle dark mode class on html element
+        darkToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
             htmlRoot.classList.toggle('dark-mode');
-            
-            // Update icon
             const isDark = htmlRoot.classList.contains('dark-mode');
-            darkIcon.className = isDark ? 'fas fa-sun' : 'fas fa-moon';
             
-            // Save preference
+            if (darkIcon) {
+                darkIcon.className = isDark ? 'fas fa-sun' : 'fas fa-moon';
+            }
+            
             localStorage.setItem('darkMode', isDark);
-            
-            console.log('Dark mode:', isDark ? 'ON' : 'OFF');
+            console.log('🌙 Dark Mode:', isDark ? 'ON' : 'OFF');
         });
     }
     
@@ -774,7 +981,6 @@ document.addEventListener('DOMContentLoaded', function() {
             userDropdown.classList.toggle('show');
             this.classList.toggle('rotate');
         });
-        
         document.addEventListener('click', function(e) {
             if (!userDropdown.contains(e.target) && !userDropdownBtn.contains(e.target)) {
                 userDropdown.classList.remove('show');
@@ -794,34 +1000,11 @@ document.addEventListener('DOMContentLoaded', function() {
             e.stopPropagation();
             notificationDropdown.classList.toggle('show');
         });
-        
         document.addEventListener('click', function(e) {
             if (!notificationDropdown.contains(e.target) && !notificationBtn.contains(e.target)) {
                 notificationDropdown.classList.remove('show');
             }
         });
-        
-        // Mark all read
-        const markAllRead = document.querySelector('.mark-all-read');
-        if (markAllRead) {
-            markAllRead.addEventListener('click', function() {
-                const badge = document.getElementById('notificationBadge');
-                if (badge) {
-                    badge.textContent = '0';
-                    badge.classList.remove('show');
-                }
-                const list = document.getElementById('notificationList');
-                if (list) {
-                    list.innerHTML = `
-                        <div style="padding:20px;text-align:center;color:var(--text-light);">
-                            <i class="fas fa-check-circle" style="font-size:24px;display:block;margin-bottom:8px;color:var(--success);"></i>
-                            All notifications read
-                        </div>
-                    `;
-                }
-                notificationDropdown.classList.remove('show');
-            });
-        }
     }
     
     // ============================================================
@@ -832,7 +1015,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (searchInput && searchResults) {
         const searchData = [
-            { title: 'Dashboard', icon: 'fa-home', url: '#' },
+            { title: 'Dashboard', icon: 'fa-home', url: '../dashboard/admin.php' },
             { title: 'Morning Report', icon: 'fa-sun', url: '../morning_report/index.php' },
             { title: 'Evening Stock', icon: 'fa-moon', url: '../evening_stock/index.php' },
             { title: 'Daily Report', icon: 'fa-file-alt', url: '../daily_report/index.php' },
@@ -842,45 +1025,35 @@ document.addEventListener('DOMContentLoaded', function() {
             { title: 'Capital Management', icon: 'fa-building', url: '../capital_management/index.php' },
             { title: 'Salaries', icon: 'fa-wallet', url: '../salaries/index.php' },
             { title: 'Reports', icon: 'fa-chart-bar', url: '../reports/index.php' },
+            { title: 'Branches', icon: 'fa-store', url: '../branches/index.php' },
+            { title: 'Providers', icon: 'fa-university', url: '../providers/index.php' },
             { title: 'Employees', icon: 'fa-users', url: '../employees/index.php' },
             { title: 'Activity Logs', icon: 'fa-history', url: '../activity_logs/index.php' },
             { title: 'Settings', icon: 'fa-cog', url: '../settings/index.php' },
             { title: 'My Profile', icon: 'fa-user', url: '../profile/index.php' },
-            { title: 'Change Password', icon: 'fa-key', url: '../profile/change_password.php' },
         ];
         
         searchInput.addEventListener('input', function() {
             const query = this.value.toLowerCase().trim();
-            
             if (query.length === 0) {
                 searchResults.classList.remove('active');
                 return;
             }
-            
             const results = searchData.filter(item => 
                 item.title.toLowerCase().includes(query)
             );
-            
             if (results.length === 0) {
-                searchResults.innerHTML = `
-                    <div class="result-empty">
-                        <i class="fas fa-search"></i>
-                        <p>No results found for "<strong>${query}</strong>"</p>
-                    </div>
-                `;
+                searchResults.innerHTML = `<div class="result-empty">No results found for "<strong>${query}</strong>"</div>`;
             } else {
                 let html = '';
                 results.forEach(item => {
-                    html += `
-                        <a href="${item.url}" class="result-item">
-                            <i class="fas ${item.icon}"></i>
-                            <span class="result-title">${item.title}</span>
-                        </a>
-                    `;
+                    html += `<a href="${item.url}" class="result-item">
+                        <i class="fas ${item.icon}"></i>
+                        <span class="result-title">${item.title}</span>
+                    </a>`;
                 });
                 searchResults.innerHTML = html;
             }
-            
             searchResults.classList.add('active');
         });
         
@@ -890,7 +1063,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
-        // Keyboard shortcut: Ctrl+K
         document.addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
                 e.preventDefault();
@@ -901,43 +1073,40 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // LIVE DATE & TIME
+    // LIVE DATE/TIME
     // ============================================================
     function updateLiveDateTime() {
         const now = new Date();
-        
-        // Time
         const timeEl = document.getElementById('liveTime');
+        const dateEl = document.getElementById('liveDate');
         if (timeEl) {
             timeEl.textContent = now.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
             });
         }
-        
-        // Date
-        const dateEl = document.getElementById('liveDate');
         if (dateEl) {
             dateEl.textContent = now.toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
+                year: 'numeric', month: 'short', day: 'numeric'
             });
         }
     }
-    
-    // Update immediately and every second
     updateLiveDateTime();
     setInterval(updateLiveDateTime, 1000);
     
-    // ============================================================
-    // CONSOLE
-    // ============================================================
-    console.log('%c WAKALA ADMIN v2.0 ',
+    console.log('%c 🏪 WAKALA ADMIN v2.0 (DARK MODE READY)',
         'background:#8B0000; color:white; padding:8px 16px; border-radius:4px; font-size:14px; font-weight:bold;');
     console.log('%c 🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'),
         'color:#6B7280; font-size:12px;');
-    console.log('%c 🔍 Press Ctrl+K to search', 'color:#6B7280; font-size:12px;');
+    
+    // ============================================================
+    // PROFILE PICTURE UPDATE LISTENER
+    // ============================================================
+    // Listen for profile picture updates from profile page
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'profile_pic_updated' && e.newValue === 'true') {
+            // Reload the page to refresh profile picture
+            window.location.reload();
+        }
+    });
 });
 </script>

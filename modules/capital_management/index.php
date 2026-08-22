@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/index.php
-// WAKALA SYSTEM - MORNING REPORT LIST
+// FILE: modules/capital_management/index.php
+// WAKALA SYSTEM - CAPITAL MANAGEMENT LIST
 // WITH DARK MODE SUPPORT
 // ================================================================
 
@@ -50,67 +50,103 @@ $branches = $stmt->fetchAll();
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
 
 // ============================================================
+// TRANSACTION TYPE FILTER
+// ============================================================
+$type_filter = isset($_GET['type']) ? $_GET['type'] : '';
+
+// ============================================================
 // DATE FILTER
 // ============================================================
 $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 
 // ============================================================
-// GET MORNING REPORTS WITH FILTERS
+// GET CAPITAL TRANSACTIONS WITH FILTERS
 // ============================================================
-$sql = "SELECT mr.*, 
+$sql = "SELECT cm.*, 
         e.full_name as employee_name, 
         b.branch_name as branch_name
-        FROM morning_reports mr
-        LEFT JOIN employees e ON mr.employee_id = e.id
-        LEFT JOIN branches b ON mr.branch_id = b.id
-        WHERE mr.report_date BETWEEN ? AND ?";
+        FROM capital_management cm
+        LEFT JOIN employees e ON cm.employee_id = e.id
+        LEFT JOIN branches b ON cm.branch_id = b.id
+        WHERE cm.transaction_date BETWEEN ? AND ?";
 
 $params = [$from_date, $to_date];
 
 if ($selected_branch > 0) {
-    $sql .= " AND mr.branch_id = ?";
+    $sql .= " AND cm.branch_id = ?";
     $params[] = $selected_branch;
 }
 
-// If employee, show only their reports
+if (!empty($type_filter)) {
+    $sql .= " AND cm.transaction_type = ?";
+    $params[] = $type_filter;
+}
+
+// If employee, show only their transactions
 if ($role == 'employee') {
-    $sql .= " AND mr.employee_id = ?";
+    $sql .= " AND cm.employee_id = ?";
     $params[] = $user_id;
 }
 
-$sql .= " ORDER BY mr.report_date DESC, mr.submitted_at DESC";
+$sql .= " ORDER BY cm.transaction_date DESC, cm.created_at DESC";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$reports = $stmt->fetchAll();
+$transactions = $stmt->fetchAll();
 
 // ============================================================
-// GET SUMMARY TOTALS
+// GET CAPITAL SUMMARY
 // ============================================================
-$sql_summary = "SELECT 
-        COUNT(*) as total_reports,
-        SUM(cumm_total) as total_float,
-        SUM(cash_balance) as total_cash,
-        SUM(cumm_total + cash_balance) as total_stock
-        FROM morning_reports
-        WHERE report_date BETWEEN ? AND ?";
+// Get current capital (opening + additions + profit - cashout - adjustments)
+$sql_capital = "SELECT 
+        SUM(CASE WHEN transaction_type IN ('opening', 'additional', 'profit_allocation') THEN amount ELSE 0 END) as total_in,
+        SUM(CASE WHEN transaction_type IN ('cash_out', 'adjustment') THEN amount ELSE 0 END) as total_out,
+        (SELECT amount FROM capital_management 
+         WHERE transaction_type = 'opening' 
+         ORDER BY transaction_date ASC LIMIT 1) as opening_capital
+        FROM capital_management
+        WHERE transaction_date BETWEEN ? AND ?";
 
-$params_summary = [$from_date, $to_date];
+$params_capital = [$from_date, $to_date];
 
 if ($selected_branch > 0) {
-    $sql_summary .= " AND branch_id = ?";
-    $params_summary[] = $selected_branch;
+    $sql_capital .= " AND branch_id = ?";
+    $params_capital[] = $selected_branch;
 }
 
-if ($role == 'employee') {
-    $sql_summary .= " AND employee_id = ?";
-    $params_summary[] = $user_id;
+$stmt = $db->prepare($sql_capital);
+$stmt->execute($params_capital);
+$capital_summary = $stmt->fetch();
+
+// Calculate current capital
+$opening = $capital_summary['opening_capital'] ?? 0;
+$total_in = $capital_summary['total_in'] ?? 0;
+$total_out = $capital_summary['total_out'] ?? 0;
+$current_capital = $opening + $total_in - $total_out;
+
+// ============================================================
+// GET SUMMARY BY TYPE
+// ============================================================
+$sql_types = "SELECT 
+        transaction_type,
+        COUNT(*) as count,
+        SUM(amount) as total
+        FROM capital_management
+        WHERE transaction_date BETWEEN ? AND ?";
+
+$params_types = [$from_date, $to_date];
+
+if ($selected_branch > 0) {
+    $sql_types .= " AND branch_id = ?";
+    $params_types[] = $selected_branch;
 }
 
-$stmt = $db->prepare($sql_summary);
-$stmt->execute($params_summary);
-$summary = $stmt->fetch();
+$sql_types .= " GROUP BY transaction_type";
+
+$stmt = $db->prepare($sql_types);
+$stmt->execute($params_types);
+$type_summaries = $stmt->fetchAll();
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -137,16 +173,19 @@ PAGE CONTENT
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-sun" style="color:#bb0404;"></i> Morning Reports</h2>
-                <p class="text-muted">Manage and view all morning reports</p>
+                <h2><i class="fas fa-building" style="color:#bb0404;"></i> Capital Management</h2>
+                <p class="text-muted">Manage and view all capital transactions</p>
             </div>
             <div class="header-right">
                 <a href="add.php" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add Report
+                    <i class="fas fa-plus"></i> New Transaction
+                </a>
+                <a href="history.php" class="btn btn-info">
+                    <i class="fas fa-history"></i> Full History
                 </a>
                 <!-- ===== EXPORT DROPDOWN ===== -->
                 <div class="dropdown export-dropdown">
-                    <button class="btn btn-success dropdown-toggle" type="button" id="exportDropdown" onclick="toggleExportDropdown()">
+                    <button class="btn btn-export dropdown-toggle" type="button" id="exportDropdown" onclick="toggleDropdown()">
                         <i class="fas fa-file-export"></i> Export
                         <i class="fas fa-chevron-down" style="margin-left: 6px; font-size: 11px;"></i>
                     </button>
@@ -167,6 +206,63 @@ PAGE CONTENT
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- ===== CAPITAL SUMMARY CARD ===== -->
+        <div class="capital-summary-card">
+            <div class="capital-summary-content">
+                <div class="capital-summary-item opening">
+                    <span class="capital-summary-label">Opening Capital</span>
+                    <span class="capital-summary-value"><?php echo formatCurrency($opening); ?></span>
+                </div>
+                <div class="capital-summary-item incoming">
+                    <span class="capital-summary-label">Total Incoming</span>
+                    <span class="capital-summary-value text-success">+ <?php echo formatCurrency($total_in); ?></span>
+                </div>
+                <div class="capital-summary-item outgoing">
+                    <span class="capital-summary-label">Total Outgoing</span>
+                    <span class="capital-summary-value text-danger">- <?php echo formatCurrency($total_out); ?></span>
+                </div>
+                <div class="capital-summary-item current">
+                    <span class="capital-summary-label">Current Capital</span>
+                    <span class="capital-summary-value current-value"><?php echo formatCurrency($current_capital); ?></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== TYPE SUMMARY CARDS ===== -->
+        <div class="type-summary-cards">
+            <?php 
+            $type_labels = [
+                'opening' => ['label' => 'Opening', 'icon' => 'fa-play', 'color' => 'blue'],
+                'additional' => ['label' => 'Additional', 'icon' => 'fa-plus-circle', 'color' => 'green'],
+                'profit_allocation' => ['label' => 'Profit Allocation', 'icon' => 'fa-chart-line', 'color' => 'purple'],
+                'cash_out' => ['label' => 'Cash Out', 'icon' => 'fa-money-bill-wave', 'color' => 'red'],
+                'adjustment' => ['label' => 'Adjustment', 'icon' => 'fa-sliders-h', 'color' => 'orange']
+            ];
+            
+            foreach ($type_summaries as $type_summary):
+                $type = $type_summary['transaction_type'];
+                $info = $type_labels[$type] ?? ['label' => ucfirst($type), 'icon' => 'fa-circle', 'color' => 'gray'];
+            ?>
+                <div class="type-card type-<?php echo $info['color']; ?>">
+                    <div class="type-icon"><i class="fas <?php echo $info['icon']; ?>"></i></div>
+                    <div class="type-info">
+                        <span class="type-label"><?php echo $info['label']; ?></span>
+                        <span class="type-value"><?php echo formatCurrency($type_summary['total'] ?? 0); ?></span>
+                        <span class="type-count"><?php echo $type_summary['count']; ?> transactions</span>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            
+            <?php if (count($type_summaries) == 0): ?>
+                <div class="type-card type-gray" style="grid-column: span 5;">
+                    <div class="type-info" style="text-align:center;">
+                        <span class="type-label">No capital transactions found</span>
+                        <span class="type-value" style="font-size:14px;color:var(--text-muted);">Start by adding a transaction</span>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- ===== FILTERS ===== -->
@@ -194,6 +290,17 @@ PAGE CONTENT
                 </div>
                 <?php endif; ?>
                 <div class="filter-group">
+                    <label>Type</label>
+                    <select name="type" class="form-control">
+                        <option value="">All Types</option>
+                        <option value="opening" <?php echo $type_filter == 'opening' ? 'selected' : ''; ?>>Opening</option>
+                        <option value="additional" <?php echo $type_filter == 'additional' ? 'selected' : ''; ?>>Additional</option>
+                        <option value="profit_allocation" <?php echo $type_filter == 'profit_allocation' ? 'selected' : ''; ?>>Profit Allocation</option>
+                        <option value="cash_out" <?php echo $type_filter == 'cash_out' ? 'selected' : ''; ?>>Cash Out</option>
+                        <option value="adjustment" <?php echo $type_filter == 'adjustment' ? 'selected' : ''; ?>>Adjustment</option>
+                    </select>
+                </div>
+                <div class="filter-group">
                     <button type="submit" class="btn btn-filter">
                         <i class="fas fa-search"></i> Filter
                     </button>
@@ -204,43 +311,11 @@ PAGE CONTENT
             </form>
         </div>
 
-        <!-- ===== SUMMARY CARDS ===== -->
-        <div class="summary-cards">
-            <div class="summary-card total-reports">
-                <div class="summary-icon"><i class="fas fa-file-alt"></i></div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Reports</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_reports'] ?? 0); ?></span>
-                </div>
-            </div>
-            <div class="summary-card total-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Float</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_float'] ?? 0); ?></span>
-                </div>
-            </div>
-            <div class="summary-card total-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Cash</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_cash'] ?? 0); ?></span>
-                </div>
-            </div>
-            <div class="summary-card total-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Stock</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['total_stock'] ?? 0); ?></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- ===== REPORTS TABLE ===== -->
+        <!-- ===== TRANSACTIONS TABLE ===== -->
         <div class="table-container" id="printableArea">
             <div class="table-header">
-                <h4><i class="fas fa-list"></i> Morning Reports List</h4>
-                <span class="record-count"><?php echo count($reports); ?> records found</span>
+                <h4><i class="fas fa-list"></i> Capital Transactions</h4>
+                <span class="record-count"><?php echo count($transactions); ?> records found</span>
             </div>
             
             <div class="table-responsive">
@@ -248,47 +323,63 @@ PAGE CONTENT
                     <thead>
                         <tr>
                             <th>#</th>
-                            <th>Report Number</th>
+                            <th>Capital Number</th>
                             <th>Date</th>
                             <th>Branch</th>
                             <th>Employee</th>
-                            <th>Float</th>
-                            <th>Cash</th>
-                            <th>Total Stock</th>
+                            <th>Type</th>
+                            <th>Amount</th>
+                            <th>Description</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if (count($reports) > 0): ?>
+                        <?php if (count($transactions) > 0): ?>
                             <?php $counter = 1; ?>
-                            <?php foreach ($reports as $report): ?>
+                            <?php foreach ($transactions as $transaction): ?>
+                                <?php 
+                                    $type_labels = [
+                                        'opening' => ['label' => 'Opening', 'class' => 'type-opening'],
+                                        'additional' => ['label' => 'Additional', 'class' => 'type-additional'],
+                                        'profit_allocation' => ['label' => 'Profit Allocation', 'class' => 'type-profit'],
+                                        'cash_out' => ['label' => 'Cash Out', 'class' => 'type-cashout'],
+                                        'adjustment' => ['label' => 'Adjustment', 'class' => 'type-adjustment']
+                                    ];
+                                    $type_info = $type_labels[$transaction['transaction_type']] ?? ['label' => $transaction['transaction_type'], 'class' => 'type-other'];
+                                    
+                                    $amount_class = in_array($transaction['transaction_type'], ['cash_out', 'adjustment']) ? 'text-danger' : 'text-success';
+                                    $amount_sign = in_array($transaction['transaction_type'], ['cash_out', 'adjustment']) ? '-' : '+';
+                                ?>
                                 <tr>
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="report-number"><?php echo htmlspecialchars($report['report_number']); ?></span>
+                                        <span class="capital-number"><?php echo htmlspecialchars($transaction['capital_number']); ?></span>
                                     </td>
-                                    <td><?php echo date('d M Y', strtotime($report['report_date'])); ?></td>
+                                    <td><?php echo date('d M Y', strtotime($transaction['transaction_date'])); ?></td>
                                     <td>
                                         <span class="branch-badge">
-                                            <?php echo htmlspecialchars($report['branch_name'] ?? 'N/A'); ?>
+                                            <?php echo htmlspecialchars($transaction['branch_name'] ?? 'N/A'); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></td>
-                                    <td class="text-primary"><?php echo formatCurrency($report['cumm_total'] ?? 0); ?></td>
-                                    <td class="text-success"><?php echo formatCurrency($report['cash_balance'] ?? 0); ?></td>
-                                    <td class="text-info font-bold"><?php echo formatCurrency(($report['cumm_total'] ?? 0) + ($report['cash_balance'] ?? 0)); ?></td>
+                                    <td><?php echo htmlspecialchars($transaction['employee_name'] ?? 'N/A'); ?></td>
+                                    <td>
+                                        <span class="type-badge <?php echo $type_info['class']; ?>">
+                                            <?php echo $type_info['label']; ?>
+                                        </span>
+                                    </td>
+                                    <td class="<?php echo $amount_class; ?> font-bold">
+                                        <?php echo $amount_sign . ' ' . formatCurrency($transaction['amount'] ?? 0); ?>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($transaction['description'] ?? 'N/A'); ?></td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $report['id']; ?>" class="btn-action view" title="View">
+                                            <a href="view.php?id=<?php echo $transaction['id']; ?>" class="btn-action view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $report['id']; ?>" class="btn-action edit" title="Edit">
+                                            <a href="edit.php?id=<?php echo $transaction['id']; ?>" class="btn-action edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="print.php?id=<?php echo $report['id']; ?>" class="btn-action print" title="Print" target="_blank">
-                                                <i class="fas fa-print"></i>
-                                            </a>
-                                            <button onclick="deleteReport(<?php echo $report['id']; ?>)" class="btn-action delete" title="Delete">
+                                            <button onclick="deleteTransaction(<?php echo $transaction['id']; ?>)" class="btn-action delete" title="Delete">
                                                 <i class="fas fa-trash"></i>
                                             </button>
                                         </div>
@@ -299,9 +390,9 @@ PAGE CONTENT
                             <tr>
                                 <td colspan="9" class="text-center no-data">
                                     <i class="fas fa-inbox" style="font-size:48px;color:var(--text-light);display:block;margin:20px 0;"></i>
-                                    <p style="color:var(--text-muted);">No morning reports found for the selected filters</p>
+                                    <p style="color:var(--text-muted);">No capital transactions found for the selected filters</p>
                                     <a href="add.php" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-plus"></i> Add First Report
+                                        <i class="fas fa-plus"></i> Add First Transaction
                                     </a>
                                 </td>
                             </tr>
@@ -333,7 +424,6 @@ STYLES WITH DARK MODE SUPPORT
     --bg-card-hover: #f9fafb;
     --bg-table-even: #fafafa;
     --bg-table-hover: #f3f4f6;
-    --bg-header: #ffffff;
     --bg-input: #f9fafb;
     --bg-empty: #f9fafb;
     --text-primary: #1f2937;
@@ -343,6 +433,9 @@ STYLES WITH DARK MODE SUPPORT
     --border-color: #e5e7eb;
     --shadow-color: rgba(0,0,0,0.06);
     --shadow-hover: rgba(0,0,0,0.08);
+    --dropdown-bg: #ffffff;
+    --dropdown-hover: #f3f4f6;
+    --card-bg: #ffffff;
 }
 
 /* Dark Mode - Full Page */
@@ -353,7 +446,6 @@ body.dark-mode {
     --bg-card-hover: #334155;
     --bg-table-even: #1a2332;
     --bg-table-hover: #2d3a4f;
-    --bg-header: #1e293b;
     --bg-input: #334155;
     --bg-empty: #1a2332;
     --text-primary: #f1f5f9;
@@ -363,6 +455,9 @@ body.dark-mode {
     --border-color: #334155;
     --shadow-color: rgba(0,0,0,0.4);
     --shadow-hover: rgba(0,0,0,0.6);
+    --dropdown-bg: #1e293b;
+    --dropdown-hover: #334155;
+    --card-bg: #1e293b;
 }
 
 /* Apply Dark Mode to Full Page */
@@ -452,6 +547,9 @@ body {
     align-items: center;
 }
 
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn-primary {
     background: #bb0404;
     color: #ffffff;
@@ -475,8 +573,8 @@ body {
     color: #ffffff;
 }
 
-.btn-success {
-    background: #10B981;
+.btn-info {
+    background: #3B82F6;
     color: #ffffff;
     border: none;
     padding: 8px 18px;
@@ -491,10 +589,10 @@ body {
     transition: all 0.3s ease;
 }
 
-.btn-success:hover {
-    background: #059669;
+.btn-info:hover {
+    background: #2563EB;
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    box-shadow: 0 4px 12px rgba(59,130,246,0.3);
     color: #ffffff;
 }
 
@@ -506,7 +604,7 @@ body {
     display: inline-block;
 }
 
-.export-dropdown .dropdown-toggle {
+.btn-export {
     background: #10B981;
     color: #ffffff;
     border: none;
@@ -521,13 +619,14 @@ body {
     transition: all 0.3s ease;
 }
 
-.export-dropdown .dropdown-toggle:hover {
+.btn-export:hover {
     background: #059669;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    color: #ffffff;
 }
 
-.export-dropdown .dropdown-toggle i {
+.btn-export i {
     font-size: 14px;
 }
 
@@ -537,10 +636,10 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--bg-card);
+    background: var(--dropdown-bg);
     border: 1px solid var(--border-color);
     border-radius: 10px;
-    box-shadow: 0 10px 30px var(--shadow-color);
+    box-shadow: 0 10px 30px var(--shadow-hover);
     min-width: 200px;
     z-index: 1000;
     padding: 6px 0;
@@ -581,7 +680,7 @@ body {
 }
 
 .export-dropdown .dropdown-item:hover {
-    background: var(--bg-card-hover);
+    background: var(--dropdown-hover);
     color: #bb0404;
 }
 
@@ -596,6 +695,149 @@ body {
     background: var(--border-color);
     margin: 4px 0;
 }
+
+/* ============================================================
+   CAPITAL SUMMARY CARD
+   ============================================================ */
+.capital-summary-card {
+    background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 100%);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
+}
+
+.capital-summary-content {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+}
+
+.capital-summary-item {
+    text-align: center;
+    padding: 8px 12px;
+}
+
+.capital-summary-item .capital-summary-label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.6);
+    letter-spacing: 1px;
+    font-weight: 600;
+}
+
+.capital-summary-item .capital-summary-value {
+    display: block;
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-top: 4px;
+}
+
+.capital-summary-item .capital-summary-value.text-success {
+    color: #6EE7B7;
+}
+
+.capital-summary-item .capital-summary-value.text-danger {
+    color: #FCA5A5;
+}
+
+.capital-summary-item.current .capital-summary-value {
+    font-size: 26px;
+    color: #FCD34D;
+}
+
+.capital-summary-item.opening {
+    border-right: 1px solid rgba(255,255,255,0.1);
+}
+.capital-summary-item.incoming {
+    border-right: 1px solid rgba(255,255,255,0.1);
+}
+.capital-summary-item.outgoing {
+    border-right: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ============================================================
+   TYPE SUMMARY CARDS
+   ============================================================ */
+.type-summary-cards {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.type-card {
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: 0 1px 3px var(--shadow-color);
+    border: 1px solid var(--border-color);
+    transition: all 0.3s ease;
+}
+
+.type-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--shadow-hover);
+}
+
+.type-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.type-info {
+    flex: 1;
+}
+
+.type-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--text-muted);
+    display: block;
+}
+
+.type-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: block;
+}
+
+.type-count {
+    font-size: 10px;
+    color: var(--text-light);
+}
+
+/* Type Colors */
+.type-blue .type-icon { background: #DBEAFE; color: #1D4ED8; }
+.type-blue { border-left: 4px solid #3B82F6; }
+
+.type-green .type-icon { background: #D1FAE5; color: #065F46; }
+.type-green { border-left: 4px solid #10B981; }
+
+.type-purple .type-icon { background: #EDE9FE; color: #6D28D9; }
+.type-purple { border-left: 4px solid #8B5CF6; }
+
+.type-red .type-icon { background: #FEE2E2; color: #991B1B; }
+.type-red { border-left: 4px solid #DC2626; }
+
+.type-orange .type-icon { background: #FEF3C7; color: #92400E; }
+.type-orange { border-left: 4px solid #F59E0B; }
+
+.type-gray .type-icon { background: #F3F4F6; color: #6B7280; }
+.type-gray { border-left: 4px solid #9CA3AF; }
 
 /* ============================================================
    FILTERS BAR
@@ -687,86 +929,6 @@ body {
 }
 
 /* ============================================================
-   SUMMARY CARDS
-   ============================================================ */
-.summary-cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-}
-
-.summary-card {
-    background: var(--bg-card);
-    border-radius: 10px;
-    padding: 16px 20px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
-    transition: all 0.3s ease;
-}
-
-.summary-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--shadow-hover);
-}
-
-.summary-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
-}
-
-.summary-info {
-    flex: 1;
-}
-
-.summary-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    font-weight: 600;
-    color: var(--text-muted);
-    display: block;
-}
-
-.summary-value {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.summary-card.total-reports .summary-icon {
-    background: #DBEAFE;
-    color: #1D4ED8;
-}
-.summary-card.total-reports { border-left: 4px solid #3B82F6; }
-
-.summary-card.total-float .summary-icon {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-.summary-card.total-float { border-left: 4px solid #1E40AF; }
-
-.summary-card.total-cash .summary-icon {
-    background: #D1FAE5;
-    color: #065F46;
-}
-.summary-card.total-cash { border-left: 4px solid #10B981; }
-
-.summary-card.total-stock .summary-icon {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-.summary-card.total-stock { border-left: 4px solid #1E40AF; }
-
-/* ============================================================
    TABLE CONTAINER
    ============================================================ */
 .table-container {
@@ -854,7 +1016,7 @@ body {
     padding: 40px 20px;
 }
 
-.report-number {
+.capital-number {
     font-weight: 600;
     color: var(--text-primary);
     font-size: 12px;
@@ -869,18 +1031,13 @@ body {
     font-weight: 500;
 }
 
-.text-primary {
-    color: #1E40AF;
-    font-weight: 600;
-}
-
 .text-success {
     color: #10B981;
     font-weight: 600;
 }
 
-.text-info {
-    color: #3B82F6;
+.text-danger {
+    color: #DC2626;
     font-weight: 600;
 }
 
@@ -890,6 +1047,46 @@ body {
 
 .text-muted {
     color: var(--text-muted);
+}
+
+/* ============================================================
+   TYPE BADGES
+   ============================================================ */
+.type-badge {
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.type-opening {
+    background: #DBEAFE;
+    color: #1D4ED8;
+}
+
+.type-additional {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.type-profit {
+    background: #EDE9FE;
+    color: #6D28D9;
+}
+
+.type-cashout {
+    background: #FEE2E2;
+    color: #991B1B;
+}
+
+.type-adjustment {
+    background: #FEF3C7;
+    color: #92400E;
+}
+
+.type-other {
+    background: #F3F4F6;
+    color: #6B7280;
 }
 
 /* ============================================================
@@ -932,15 +1129,6 @@ body {
     color: #ffffff;
 }
 
-.btn-action.print {
-    background: #FEF3C7;
-    color: #92400E;
-}
-.btn-action.print:hover {
-    background: #92400E;
-    color: #ffffff;
-}
-
 .btn-action.delete {
     background: #FEE2E2;
     color: #991B1B;
@@ -954,8 +1142,16 @@ body {
    RESPONSIVE
    ============================================================ */
 @media (max-width: 1024px) {
-    .summary-cards {
+    .type-summary-cards {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .capital-summary-content {
         grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+    .capital-summary-item.opening,
+    .capital-summary-item.incoming {
+        border-right: none;
     }
 }
 
@@ -973,14 +1169,14 @@ body {
     .page-header .header-right .btn,
     .page-header .header-right .export-dropdown {
         flex: 1;
-        min-width: 120px;
+        min-width: 100px;
     }
     
     .page-header .header-right .btn {
         justify-content: center;
     }
     
-    .export-dropdown .dropdown-toggle {
+    .btn-export {
         width: 100%;
         justify-content: center;
     }
@@ -1003,17 +1199,21 @@ body {
         width: 100%;
     }
     
-    .summary-cards {
+    .type-summary-cards {
         grid-template-columns: 1fr 1fr;
-        gap: 10px;
     }
     
-    .summary-card {
-        padding: 12px 16px;
+    .capital-summary-content {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
     }
     
-    .summary-value {
-        font-size: 16px;
+    .capital-summary-item .capital-summary-value {
+        font-size: 18px;
+    }
+    
+    .capital-summary-item.current .capital-summary-value {
+        font-size: 20px;
     }
     
     .table-container {
@@ -1033,10 +1233,6 @@ body {
 }
 
 @media (max-width: 480px) {
-    .summary-cards {
-        grid-template-columns: 1fr;
-    }
-    
     .page-header .header-right .btn,
     .page-header .header-right .export-dropdown {
         flex: 1 1 100%;
@@ -1046,6 +1242,24 @@ body {
         left: 0;
         right: auto;
         min-width: 160px;
+    }
+    
+    .type-summary-cards {
+        grid-template-columns: 1fr;
+    }
+    
+    .capital-summary-content {
+        grid-template-columns: 1fr;
+    }
+    
+    .capital-summary-item {
+        border-right: none !important;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        padding: 6px 0;
+    }
+    
+    .capital-summary-item:last-child {
+        border-bottom: none;
     }
     
     .action-buttons {
@@ -1071,14 +1285,18 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-.summary-card {
+.capital-summary-card {
     animation: fadeInUp 0.3s ease forwards;
 }
 
-.summary-card:nth-child(1) { animation-delay: 0.05s; }
-.summary-card:nth-child(2) { animation-delay: 0.10s; }
-.summary-card:nth-child(3) { animation-delay: 0.15s; }
-.summary-card:nth-child(4) { animation-delay: 0.20s; }
+.type-card {
+    animation: fadeInUp 0.3s ease forwards;
+}
+.type-card:nth-child(1) { animation-delay: 0.05s; }
+.type-card:nth-child(2) { animation-delay: 0.10s; }
+.type-card:nth-child(3) { animation-delay: 0.15s; }
+.type-card:nth-child(4) { animation-delay: 0.20s; }
+.type-card:nth-child(5) { animation-delay: 0.25s; }
 </style>
 
 <!-- ============================================================
@@ -1124,7 +1342,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================================
 // EXPORT DROPDOWN TOGGLE
 // ============================================================
-function toggleExportDropdown() {
+function toggleDropdown() {
     var menu = document.getElementById('exportMenu');
     menu.classList.toggle('show');
 }
@@ -1144,57 +1362,61 @@ document.addEventListener('click', function(e) {
 // EXPORT FUNCTIONS
 // ============================================================
 function getFilterParams() {
-    const fromDate = document.querySelector('input[name="from_date"]')?.value || '';
-    const toDate = document.querySelector('input[name="to_date"]')?.value || '';
-    const branch = document.querySelector('select[name="branch"]')?.value || '0';
-    return { from_date: fromDate, to_date: toDate, branch: branch };
+    var fromDate = document.querySelector('input[name="from_date"]')?.value || '';
+    var toDate = document.querySelector('input[name="to_date"]')?.value || '';
+    var branch = document.querySelector('select[name="branch"]')?.value || '0';
+    var type = document.querySelector('select[name="type"]')?.value || '';
+    return { from_date: fromDate, to_date: toDate, branch: branch, type: type };
 }
 
 function exportData(format) {
-    const params = getFilterParams();
-    const url = 'export.php?format=' + format + 
-                '&from_date=' + params.from_date + 
-                '&to_date=' + params.to_date + 
-                '&branch=' + params.branch;
+    var params = getFilterParams();
+    var url = 'export.php?format=' + format + 
+              '&from_date=' + params.from_date + 
+              '&to_date=' + params.to_date + 
+              '&branch=' + params.branch + 
+              '&type=' + params.type;
     window.location.href = url;
 }
 
 function printData() {
-    // Get the table content
-    const table = document.getElementById('dataTable');
-    const title = 'Morning Reports List';
-    const dateRange = document.querySelector('input[name="from_date"]')?.value + ' to ' + document.querySelector('input[name="to_date"]')?.value || '';
+    var table = document.getElementById('dataTable');
+    var title = 'Capital Management Transactions';
+    var dateRange = document.querySelector('input[name="from_date"]')?.value + ' to ' + document.querySelector('input[name="to_date"]')?.value || '';
     
-    // Create print window
-    const printWindow = window.open('', '_blank', 'width=1000,height=600');
-    printWindow.document.write('<html><head><title>Morning Reports</title>');
+    var printWindow = window.open('', '_blank', 'width=1000,height=600');
+    printWindow.document.write('<html><head><title>Capital Management</title>');
     printWindow.document.write('<style>');
     printWindow.document.write(`
         body { font-family: Arial, sans-serif; padding: 20px; }
-        h2 { color: #bb0404; margin-bottom: 5px; }
+        h2 { color: #1E40AF; margin-bottom: 5px; }
         .subtitle { color: #6B7280; font-size: 14px; margin-bottom: 20px; }
         table { width: 100%; border-collapse: collapse; font-size: 12px; }
         th { background: #bb0404; color: white; padding: 8px 12px; text-align: left; }
         td { padding: 8px 12px; border-bottom: 1px solid #E5E7EB; }
         tr:nth-child(even) { background: #FAFAFA; }
-        .branch-badge { background: #DBEAFE; color: #1D4ED8; padding: 2px 8px; border-radius: 4px; }
-        .text-primary { color: #1E40AF; }
+        .type-opening { color: #1D4ED8; }
+        .type-additional { color: #065F46; }
+        .type-profit { color: #6D28D9; }
+        .type-cashout { color: #991B1B; }
+        .type-adjustment { color: #92400E; }
         .text-success { color: #10B981; }
-        .text-info { color: #3B82F6; }
+        .text-danger { color: #DC2626; }
         .footer { margin-top: 20px; font-size: 11px; color: #9CA3AF; text-align: center; border-top: 1px solid #E5E7EB; padding-top: 10px; }
         .print-date { float: right; color: #6B7280; font-size: 12px; }
+        .branch-badge { background: #DBEAFE; color: #1D4ED8; padding: 2px 8px; border-radius: 4px; }
+        .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; }
     `);
     printWindow.document.write('</style>');
     printWindow.document.write('</head><body>');
-    printWindow.document.write('<h2><i class="fas fa-sun"></i> Morning Reports</h2>');
+    printWindow.document.write('<h2><i class="fas fa-building"></i> Capital Management Transactions</h2>');
     printWindow.document.write('<div class="subtitle">Date Range: ' + dateRange + '</div>');
     printWindow.document.write('<div class="print-date">Printed: ' + new Date().toLocaleString() + '</div>');
     printWindow.document.write(table.outerHTML);
-    printWindow.document.write('<div class="footer">Wakala System - Morning Reports</div>');
+    printWindow.document.write('<div class="footer">Wakala System - Capital Management</div>');
     printWindow.document.write('</body></html>');
     printWindow.document.close();
     
-    // Wait for content to load then print
     printWindow.onload = function() {
         printWindow.print();
         printWindow.close();
@@ -1204,8 +1426,8 @@ function printData() {
 // ============================================================
 // DELETE FUNCTION
 // ============================================================
-function deleteReport(id) {
-    if (confirm('Are you sure you want to delete this morning report? This action cannot be undone.')) {
+function deleteTransaction(id) {
+    if (confirm('Are you sure you want to delete this capital transaction? This action cannot be undone.')) {
         window.location.href = 'delete.php?id=' + id;
     }
 }

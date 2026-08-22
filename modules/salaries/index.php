@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// WAKALA FINANCIAL SYSTEM - EVENING STOCK LIST
-// WITH FULL DARK MODE SUPPORT
+// FILE: modules/salaries/index.php
+// WAKALA FINANCIAL SYSTEM - SALARIES LIST
+// WITH DARK MODE SUPPORT
 // ================================================================
 
 // ============================================================
@@ -62,7 +62,7 @@ $branch_filter = '';
 $branch_params = [];
 
 if ($selected_branch > 0) {
-    $branch_filter = " AND es.branch_id = ? ";
+    $branch_filter = " AND s.branch_id = ? ";
     $branch_params[] = $selected_branch;
 }
 
@@ -78,67 +78,94 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// GET TODAY'S SUMMARIES FROM EVENING STOCK
+// GET SALARY SUMMARIES
 // ============================================================
 $today = date('Y-m-d');
+$month = date('m');
+$year = date('Y');
 
-// TODAY FLOAT (cumm_total from evening_stock)
+// TODAY SALARIES (Paid today)
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE DATE(payment_date) = ? AND branch_id = ? AND status = 'paid'";
     $params = [$today, $selected_branch];
 } else {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ?";
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE DATE(payment_date) = ? AND status = 'paid'";
     $params = [$today];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_float = $result['total'] ?? 0;
+$today_salaries = $result['total'] ?? 0;
 
-// TODAY CASH (cash_balance from evening_stock)
+// THIS MONTH SALARIES
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE MONTH(salary_month) = ? AND YEAR(salary_month) = ? AND branch_id = ? AND status = 'paid'";
+    $params = [$month, $year, $selected_branch];
 } else {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE MONTH(salary_month) = ? AND YEAR(salary_month) = ? AND status = 'paid'";
+    $params = [$month, $year];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_cash = $result['total'] ?? 0;
+$this_month_salaries = $result['total'] ?? 0;
 
-// TODAY STOCK = FLOAT + CASH
-$today_stock = $today_float + $today_cash;
+// TOTAL SALARIES (All time - paid only)
+if ($selected_branch > 0) {
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE branch_id = ? AND status = 'paid'";
+    $params = [$selected_branch];
+} else {
+    $sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE status = 'paid'";
+    $params = [];
+}
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$result = $stmt->fetch();
+$total_salaries_all = $result['total'] ?? 0;
 
 // ============================================================
-// GET EVENING STOCKS LIST
+// GET SALARIES LIST
 // ============================================================
 $sql = "SELECT 
-            es.id,
-            es.stock_number,
-            es.stock_date,
-            es.cash_balance,
-            es.cumm_total,
-            es.status,
-            es.submitted_at,
-            es.notes,
-            e.full_name as employee_name,
+            s.id,
+            s.salary_number,
+            s.salary_month,
+            s.base_salary,
+            s.bonus,
+            s.overtime_pay,
+            s.allowances,
+            s.total_gross,
+            s.tax,
+            s.deductions,
+            s.net_pay,
+            s.payment_date,
+            s.payment_method,
+            s.transaction_reference,
+            s.description,
+            s.status,
+            s.created_at,
+            s.notes,
+            emp.full_name as employee_name,
+            emp.employee_id as employee_code,
             b.branch_name as branch_name,
-            b.id as branch_id
-        FROM evening_stocks es
-        LEFT JOIN employees e ON es.employee_id = e.id
-        LEFT JOIN branches b ON es.branch_id = b.id
+            b.id as branch_id,
+            paid_by.full_name as paid_by_name,
+            approved_by.full_name as approved_by_name
+        FROM employee_salaries s
+        LEFT JOIN employees emp ON s.employee_id = emp.id
+        LEFT JOIN branches b ON s.branch_id = b.id
+        LEFT JOIN employees paid_by ON s.paid_by = paid_by.id
+        LEFT JOIN employees approved_by ON s.approved_by = approved_by.id
         WHERE 1=1 " . $branch_filter . "
-        ORDER BY es.stock_date DESC, es.id DESC";
+        ORDER BY s.salary_month DESC, s.id DESC";
 
 $params = $branch_params;
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$stocks = $stmt->fetchAll();
+$salaries = $stmt->fetchAll();
 
-// Count stocks
-$stock_count = count($stocks);
+// Count salaries
+$salary_count = count($salaries);
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -157,14 +184,14 @@ DASHBOARD CONTENT
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Evening Stocks</h2>
-                <span class="record-count"><?php echo $stock_count; ?> records</span>
+                <h2><i class="fas fa-wallet"></i> Salaries</h2>
+                <span class="record-count"><?php echo $salary_count; ?> records</span>
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
                     <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Salary
                     </a>
                     
                     <!-- Export Dropdown - SECOND -->
@@ -215,81 +242,81 @@ DASHBOARD CONTENT
         </div>
 
         <!-- ============================================================
-        SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
+        SUMMARIES CARDS - TODAY, THIS MONTH, TOTAL
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
-            <div class="summary-card card-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <!-- TODAY SALARIES - Maroon -->
+            <div class="summary-card card-today">
+                <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY STOCK</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_stock); ?></div>
-                    <div class="summary-sub">Float + Cash (Evening Stock)</div>
+                    <div class="summary-label">TODAY SALARIES</div>
+                    <div class="summary-value"><?php echo formatCurrency($today_salaries); ?></div>
+                    <div class="summary-sub"><?php echo date('d M Y'); ?></div>
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
-            <div class="summary-card card-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <!-- THIS MONTH SALARIES - Orange -->
+            <div class="summary-card card-month">
+                <div class="summary-icon"><i class="fas fa-calendar-alt"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY FLOAT</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_float); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">THIS MONTH</div>
+                    <div class="summary-value"><?php echo formatCurrency($this_month_salaries); ?></div>
+                    <div class="summary-sub"><?php echo date('F Y'); ?></div>
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
-            <div class="summary-card card-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <!-- TOTAL SALARIES - Maroon Dark -->
+            <div class="summary-card card-total">
+                <div class="summary-icon"><i class="fas fa-chart-pie"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY CASH</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_cash); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">TOTAL SALARIES</div>
+                    <div class="summary-value"><?php echo formatCurrency($total_salaries_all); ?></div>
+                    <div class="summary-sub">All Time (Paid)</div>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        TABLE - EVENING STOCKS LIST
+        TABLE - SALARIES LIST
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Evening Stocks</h3>
+                <h3><i class="fas fa-list"></i> All Salaries</h3>
                 <div class="table-actions">
                     <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
                         <option value="">All Status</option>
-                        <option value="waiting">Waiting</option>
+                        <option value="paid">Paid</option>
                         <option value="pending">Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="adjusted">Adjusted</option>
-                        <option value="rejected">Rejected</option>
+                        <option value="cancelled">Cancelled</option>
+                        <option value="reversed">Reversed</option>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search stocks..." class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search salaries..." class="search-input">
                 </div>
             </div>
 
-            <?php if (empty($stocks)): ?>
+            <?php if (empty($salaries)): ?>
                 <div class="empty-state">
-                    <i class="fas fa-moon"></i>
-                    <h3>No Evening Stocks Found</h3>
-                    <p>Start by adding your first evening stock for today.</p>
+                    <i class="fas fa-wallet"></i>
+                    <h3>No Salaries Found</h3>
+                    <p>Start by adding your first salary record.</p>
                     <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Salary
                     </a>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="data-table" id="stocksTable">
+                    <table class="data-table" id="salariesTable">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Stock No.</th>
-                                <th>Date</th>
+                                <th>Salary No.</th>
                                 <th>Employee</th>
+                                <th>Month</th>
                                 <th>Branch</th>
-                                <th>Providers</th>
-                                <th>Cash</th>
-                                <th>Float</th>
+                                <th>Gross Pay</th>
+                                <th>Tax</th>
+                                <th>Deductions</th>
+                                <th>Net Pay</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -297,54 +324,57 @@ DASHBOARD CONTENT
                         <tbody>
                             <?php 
                             $counter = 1;
-                            foreach ($stocks as $stock): 
-                                // Get providers count
-                                $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
-                                $provider_count = count($provider_data);
-                                
-                                // Determine status
-                                $status = ucfirst($stock['status'] ?? 'pending');
+                            foreach ($salaries as $salary): 
+                                // Status colors
+                                $status = ucfirst($salary['status'] ?? 'pending');
                                 $status_colors = [
-                                    'waiting' => 'status-waiting',
+                                    'paid' => 'status-paid',
                                     'pending' => 'status-pending',
-                                    'approved' => 'status-approved',
-                                    'adjusted' => 'status-adjusted',
-                                    'rejected' => 'status-rejected'
+                                    'cancelled' => 'status-cancelled',
+                                    'reversed' => 'status-reversed'
                                 ];
                                 $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
                             ?>
-                                <tr data-status="<?php echo strtolower($stock['status'] ?? 'pending'); ?>">
+                                <tr data-status="<?php echo strtolower($salary['status'] ?? 'pending'); ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="stock-number">
-                                            <?php echo htmlspecialchars($stock['stock_number']); ?>
+                                        <span class="salary-number">
+                                            <?php echo htmlspecialchars($salary['salary_number']); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></td>
                                     <td>
                                         <span class="employee-name">
-                                            <?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?>
+                                            <?php echo htmlspecialchars($salary['employee_name'] ?? 'N/A'); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="salary-month">
+                                            <?php echo date('M Y', strtotime($salary['salary_month'])); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-name">
-                                            <?php echo htmlspecialchars($stock['branch_name'] ?? 'Main'); ?>
+                                            <?php echo htmlspecialchars($salary['branch_name'] ?? 'Main'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="provider-count">
-                                            <i class="fas fa-building"></i>
-                                            <?php echo $provider_count; ?> providers
+                                        <span class="amount gross">
+                                            <?php echo formatCurrency($salary['total_gross']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="amount cash">
-                                            <?php echo formatCurrency($stock['cash_balance']); ?>
+                                        <span class="amount tax">
+                                            <?php echo formatCurrency($salary['tax']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="amount float">
-                                            <?php echo formatCurrency($stock['cumm_total']); ?>
+                                        <span class="amount deductions">
+                                            <?php echo formatCurrency($salary['deductions']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="amount net-pay">
+                                            <?php echo formatCurrency($salary['net_pay']); ?>
                                         </span>
                                     </td>
                                     <td>
@@ -354,13 +384,13 @@ DASHBOARD CONTENT
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-view" title="View">
+                                            <a href="view.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
+                                            <a href="edit.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            <a href="delete.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this salary record?')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -382,63 +412,46 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+DASHBOARD STYLES - WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --evening-bg: #FFFFFF;
-    --evening-text: #1F2937;
-    --evening-text-secondary: #6B7280;
-    --evening-text-light: #9CA3AF;
-    --evening-border: #E5E7EB;
-    --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
-    --evening-input-bg: #F9FAFB;
-    --evening-hover: #F3F4F6;
-    --evening-shadow: rgba(0,0,0,0.06);
-    --evening-shadow-lg: rgba(0,0,0,0.12);
-    --evening-dropdown-bg: #FFFFFF;
-    --evening-dropdown-border: #E5E7EB;
+    --salaries-bg: #FFFFFF;
+    --salaries-text: #1F2937;
+    --salaries-text-secondary: #6B7280;
+    --salaries-text-light: #9CA3AF;
+    --salaries-border: #E5E7EB;
+    --salaries-card-bg: #FFFFFF;
+    --salaries-card-header: #FAFBFC;
+    --salaries-input-bg: #F9FAFB;
+    --salaries-hover: #F3F4F6;
+    --salaries-shadow: rgba(0,0,0,0.06);
+    --salaries-shadow-lg: rgba(0,0,0,0.12);
+    --salaries-dropdown-bg: #FFFFFF;
+    --salaries-dropdown-border: #E5E7EB;
 }
 
 html.dark-mode {
-    --evening-bg: #1F2937;
-    --evening-text: #F9FAFB;
-    --evening-text-secondary: #9CA3AF;
-    --evening-text-light: #6B7280;
-    --evening-border: #374151;
-    --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
-    --evening-input-bg: #374151;
-    --evening-hover: #374151;
-    --evening-shadow: rgba(0,0,0,0.3);
-    --evening-shadow-lg: rgba(0,0,0,0.4);
-    --evening-dropdown-bg: #1F2937;
-    --evening-dropdown-border: #374151;
-}
-
-/* Apply Dark Mode to Full Page */
-body {
-    background: var(--evening-bg) !important;
-    color: var(--evening-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
-}
-
-.main-content {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
+    --salaries-bg: #1F2937;
+    --salaries-text: #F9FAFB;
+    --salaries-text-secondary: #9CA3AF;
+    --salaries-text-light: #6B7280;
+    --salaries-border: #374151;
+    --salaries-card-bg: #1F2937;
+    --salaries-card-header: #374151;
+    --salaries-input-bg: #374151;
+    --salaries-hover: #374151;
+    --salaries-shadow: rgba(0,0,0,0.3);
+    --salaries-shadow-lg: rgba(0,0,0,0.4);
+    --salaries-dropdown-bg: #1F2937;
+    --salaries-dropdown-border: #374151;
 }
 
 /* ============================================================
-   PAGE HEADER - DARK MODE
+   PAGE HEADER - DARK MODE SUPPORT
    ============================================================ */
 .page-header {
     display: flex;
@@ -457,20 +470,20 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     margin: 0;
     transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
-    color: #3B82F6;
+    color: #7F1D1D;
     margin-right: 8px;
 }
 
 .record-count {
     font-size: 13px;
-    color: var(--evening-text-secondary);
-    background: var(--evening-hover);
+    color: var(--salaries-text-secondary);
+    background: var(--salaries-hover);
     padding: 2px 12px;
     border-radius: 12px;
     transition: all 0.3s ease;
@@ -575,11 +588,11 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--evening-dropdown-bg);
+    background: var(--salaries-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--evening-shadow-lg);
-    border: 1px solid var(--evening-dropdown-border);
+    box-shadow: 0 4px 20px var(--salaries-shadow-lg);
+    border: 1px solid var(--salaries-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
@@ -596,14 +609,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--evening-hover);
+    background: var(--salaries-hover);
 }
 
 .dropdown-menu a i {
@@ -617,18 +630,18 @@ body {
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
 /* ============================================================
-   BRANCH FILTER BAR - DARK MODE
+   BRANCH FILTER BAR - DARK MODE SUPPORT
    ============================================================ */
 .branch-filter-bar {
-    background: var(--evening-card-bg);
+    background: var(--salaries-card-bg);
     border-radius: 10px;
     padding: 12px 20px;
     margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--salaries-shadow);
+    border: 1px solid var(--salaries-border);
     transition: all 0.3s ease;
 }
 
@@ -637,7 +650,7 @@ body {
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--salaries-text);
 }
 
 .branch-filter-left i {
@@ -648,10 +661,10 @@ body {
 .branch-filter-left select {
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
+    border: 1px solid var(--salaries-border);
+    background: var(--salaries-input-bg);
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     outline: none;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -663,8 +676,8 @@ body {
 }
 
 .branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
+    background: var(--salaries-dropdown-bg);
+    color: var(--salaries-text);
 }
 
 .branch-badge {
@@ -678,7 +691,7 @@ body {
 
 .branch-filter-right .date-display {
     font-size: 13px;
-    color: var(--evening-text-secondary);
+    color: var(--salaries-text-secondary);
 }
 
 .branch-filter-right .date-display i {
@@ -686,7 +699,7 @@ body {
 }
 
 /* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
+   SUMMARIES GRID - 3 CARDS - DARK MODE SUPPORT
    ============================================================ */
 .summaries-grid-three {
     display: grid;
@@ -696,14 +709,14 @@ body {
 }
 
 .summary-card {
-    background: var(--evening-card-bg);
+    background: var(--salaries-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--salaries-shadow);
+    border: 1px solid var(--salaries-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -711,7 +724,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--evening-shadow-lg);
+    box-shadow: 0 4px 12px var(--salaries-shadow-lg);
 }
 
 .summary-icon {
@@ -738,13 +751,13 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--evening-text-secondary);
+    color: var(--salaries-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
@@ -754,28 +767,28 @@ body {
 
 .summary-sub {
     font-size: 11px;
-    color: var(--evening-text-light);
+    color: var(--salaries-text-light);
     font-weight: 500;
 }
 
 /* Card Colors */
-.card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
-.card-stock { border-left: 4px solid #1E40AF; }
+.card-today .summary-icon { background: #FECACA; color: #7F1D1D; }
+.card-today { border-left: 4px solid #7F1D1D; }
 
-.card-float .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-float { border-left: 4px solid #3B82F6; }
+.card-month .summary-icon { background: #FEF3C7; color: #D97706; }
+.card-month { border-left: 4px solid #D97706; }
 
-.card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-cash { border-left: 4px solid #10B981; }
+.card-total .summary-icon { background: #FECACA; color: #5C1313; }
+.card-total { border-left: 4px solid #5C1313; }
 
 /* ============================================================
-   TABLE CONTAINER - DARK MODE
+   TABLE CONTAINER - DARK MODE SUPPORT
    ============================================================ */
 .table-container {
-    background: var(--evening-card-bg);
+    background: var(--salaries-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--salaries-shadow);
+    border: 1px solid var(--salaries-border);
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -785,7 +798,7 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--salaries-border);
     flex-wrap: wrap;
     gap: 10px;
     transition: all 0.3s ease;
@@ -794,12 +807,12 @@ body {
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     margin: 0;
 }
 
 .table-header h3 i {
-    color: #3B82F6;
+    color: #7F1D1D;
     margin-right: 8px;
 }
 
@@ -813,17 +826,17 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--salaries-border);
     font-size: 13px;
     outline: none;
     width: 200px;
     transition: all 0.3s ease;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--salaries-input-bg);
+    color: var(--salaries-text);
 }
 
 .search-input::placeholder {
-    color: var(--evening-text-light);
+    color: var(--salaries-text-light);
 }
 
 .search-input:focus {
@@ -834,11 +847,11 @@ body {
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--salaries-border);
     font-size: 13px;
     outline: none;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--salaries-input-bg);
+    color: var(--salaries-text);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -849,8 +862,8 @@ body {
 }
 
 .filter-select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
+    background: var(--salaries-dropdown-bg);
+    color: var(--salaries-text);
 }
 
 .table-responsive {
@@ -864,7 +877,7 @@ body {
 }
 
 /* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
+   TABLE HEADER - RED BACKGROUND
    ============================================================ */
 .data-table thead {
     background: #DC2626;
@@ -888,52 +901,48 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--salaries-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--evening-hover);
+    background: var(--salaries-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     transition: color 0.3s ease;
 }
 
-/* Stock Number */
-.stock-number {
+/* Salary Number */
+.salary-number {
     font-weight: 600;
-    color: #3B82F6;
+    color: #7F1D1D;
     font-size: 12px;
 }
 
 /* Employee Name */
 .employee-name {
     font-weight: 500;
-    color: var(--evening-text);
+    color: var(--salaries-text);
+}
+
+/* Salary Month */
+.salary-month {
+    font-weight: 500;
+    color: var(--salaries-text-secondary);
+    font-size: 12px;
 }
 
 /* Branch Name */
 .branch-name {
-    background: var(--evening-hover);
+    background: var(--salaries-hover);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    color: var(--evening-text-secondary);
+    color: var(--salaries-text-secondary);
     transition: all 0.3s ease;
-}
-
-/* Provider Count */
-.provider-count {
-    font-size: 12px;
-    color: var(--evening-text-secondary);
-}
-
-.provider-count i {
-    color: #3B82F6;
-    margin-right: 4px;
 }
 
 /* Amounts */
@@ -941,12 +950,21 @@ body {
     font-weight: 600;
 }
 
-.amount.cash {
-    color: #059669;
+.amount.gross {
+    color: #1D4ED8;
 }
 
-.amount.float {
-    color: #1D4ED8;
+.amount.tax {
+    color: #DC2626;
+}
+
+.amount.deductions {
+    color: #D97706;
+}
+
+.amount.net-pay {
+    color: #059669;
+    font-weight: 700;
 }
 
 /* Status Badge */
@@ -958,7 +976,7 @@ body {
     font-weight: 600;
 }
 
-.status-approved {
+.status-paid {
     background: #D1FAE5;
     color: #065F46;
 }
@@ -968,19 +986,14 @@ body {
     color: #92400E;
 }
 
-.status-waiting {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.status-adjusted {
-    background: #EDE9FE;
-    color: #5B21B6;
-}
-
-.status-rejected {
+.status-cancelled {
     background: #FEE2E2;
     color: #991B1B;
+}
+
+.status-reversed {
+    background: #EDE9FE;
+    color: #5B21B6;
 }
 
 /* Action Buttons */
@@ -1032,7 +1045,7 @@ body {
 }
 
 /* ============================================================
-   EMPTY STATE - DARK MODE
+   EMPTY STATE - DARK MODE SUPPORT
    ============================================================ */
 .empty-state {
     text-align: center;
@@ -1041,18 +1054,18 @@ body {
 
 .empty-state i {
     font-size: 60px;
-    color: #3B82F6;
+    color: #7F1D1D;
     margin-bottom: 16px;
 }
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--evening-text);
+    color: var(--salaries-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--evening-text-secondary);
+    color: var(--salaries-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
@@ -1251,7 +1264,7 @@ function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('stocksTable');
+    var table = document.getElementById('salariesTable');
     if (!table) {
         alert('No data to export!');
         return;
@@ -1306,7 +1319,7 @@ function exportCSV(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1317,16 +1330,16 @@ function exportCSV(headers, data) {
 // EXPORT EXCEL (HTML Table format)
 // ============================================================
 function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+    var html = '<html><head><meta charset="UTF-8"><title>Salaries Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #3B82F6; }';
+    html += 'h1 { color: #7F1D1D; }';
     html += 'table { width: 100%; border-collapse: collapse; }';
     html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
     html += '</style>';
     html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
+    html += '<h1>Salaries Report</h1>';
     html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     html += '<table>';
     html += '<thead><tr>';
@@ -1350,7 +1363,7 @@ function exportExcel(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+    a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.xls';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1361,21 +1374,23 @@ function exportExcel(headers, data) {
 // EXPORT PDF
 // ============================================================
 function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
+    var printContent = '<html><head><title>Salaries Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #3B82F6; }';
+    printContent += 'h1 { color: #7F1D1D; }';
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
     printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
+    printContent += '<h1>Salaries Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     
-    var totalFloat = 0;
-    var totalCash = 0;
+    var totalGross = 0;
+    var totalTax = 0;
+    var totalDeductions = 0;
+    var totalNetPay = 0;
     
     printContent += '<table>';
     printContent += '<thead><tr>';
@@ -1387,20 +1402,36 @@ function exportPDF(headers, data) {
     data.forEach(function(row) {
         printContent += '<tr>';
         row.forEach(function(cell, index) {
-            // Float column (index 7)
-            if (index === 7) {
+            // Gross Pay column (index 5)
+            if (index === 5) {
                 var cleanAmount = cell.replace(/[^0-9,]/g, '');
                 var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
                 if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
+                    totalGross += numAmount;
                 }
             }
-            // Cash column (index 6)
+            // Tax column (index 6)
             if (index === 6) {
                 var cleanAmount = cell.replace(/[^0-9,]/g, '');
                 var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
                 if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
+                    totalTax += numAmount;
+                }
+            }
+            // Deductions column (index 7)
+            if (index === 7) {
+                var cleanAmount = cell.replace(/[^0-9,]/g, '');
+                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
+                if (!isNaN(numAmount)) {
+                    totalDeductions += numAmount;
+                }
+            }
+            // Net Pay column (index 8)
+            if (index === 8) {
+                var cleanAmount = cell.replace(/[^0-9,]/g, '');
+                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
+                if (!isNaN(numAmount)) {
+                    totalNetPay += numAmount;
                 }
             }
             printContent += '<td>' + cell + '</td>';
@@ -1409,9 +1440,10 @@ function exportPDF(headers, data) {
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
+    printContent += '<div class="total">Total Gross Pay: ' + formatNumber(totalGross) + '</div>';
+    printContent += '<div class="total">Total Tax: ' + formatNumber(totalTax) + '</div>';
+    printContent += '<div class="total">Total Deductions: ' + formatNumber(totalDeductions) + '</div>';
+    printContent += '<div class="total">Total Net Pay: ' + formatNumber(totalNetPay) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1432,7 +1464,7 @@ function formatNumber(num) {
 // FILTER BY STATUS
 // ============================================================
 function filterByStatus(status) {
-    var rows = document.querySelectorAll('#stocksTable tbody tr');
+    var rows = document.querySelectorAll('#salariesTable tbody tr');
     var statusFilter = status.toLowerCase();
     
     rows.forEach(function(row) {
@@ -1453,7 +1485,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
             var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#stocksTable tbody tr');
+            var rows = document.querySelectorAll('#salariesTable tbody tr');
             
             rows.forEach(function(row) {
                 var text = row.textContent.toLowerCase();
@@ -1481,6 +1513,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     syncDarkMode();
     
+    // Listen for dark mode changes
     document.addEventListener('darkModeChanged', function(e) {
         syncDarkMode();
     });

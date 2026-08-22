@@ -3,12 +3,32 @@
 // FILE: C:\xampp\htdocs\wakala_system\includes\admin_footer.php
 // WAKALA FINANCIAL SYSTEM - SHARED ADMIN FOOTER
 // ================================================================
+
+// ============================================================
+// GET COMPANY NAME FROM DATABASE
+// ============================================================
+$company_name = 'Wakala System'; // Default name
+
+try {
+    global $db;
+    if (isset($db)) {
+        $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        if ($result && !empty($result['setting_value'])) {
+            $company_name = $result['setting_value'];
+        }
+    }
+} catch (Exception $e) {
+    // Settings table might not exist yet
+    $company_name = 'Wakala System';
+}
 ?>
     <!-- ============================================================
     FOOTER
     ============================================================ -->
     <footer class="admin-footer">
-        <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?></p>
+        <p>&copy; <?php echo date('Y'); ?> <?php echo htmlspecialchars($company_name); ?></p>
         <div class="footer-info">
             <span>Version 2.0.0</span>
             <span>|</span>

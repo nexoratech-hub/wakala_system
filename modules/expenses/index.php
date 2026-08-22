@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// WAKALA FINANCIAL SYSTEM - EVENING STOCK LIST
-// WITH FULL DARK MODE SUPPORT
+// FILE: modules/expenses/index.php
+// WAKALA FINANCIAL SYSTEM - EXPENSES LIST
+// WITH DARK MODE SUPPORT (SYSTEM-WIDE)
 // ================================================================
 
 // ============================================================
@@ -45,6 +45,13 @@ $stmt->execute();
 $branches = $stmt->fetchAll();
 
 // ============================================================
+// GET EXPENSE CATEGORIES FOR FILTER
+// ============================================================
+$stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
+$stmt->execute();
+$categories = $stmt->fetchAll();
+
+// ============================================================
 // BRANCH FILTER HANDLING
 // ============================================================
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
@@ -62,7 +69,7 @@ $branch_filter = '';
 $branch_params = [];
 
 if ($selected_branch > 0) {
-    $branch_filter = " AND es.branch_id = ? ";
+    $branch_filter = " AND e.branch_id = ? ";
     $branch_params[] = $selected_branch;
 }
 
@@ -78,67 +85,84 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// GET TODAY'S SUMMARIES FROM EVENING STOCK
+// GET EXPENSES SUMMARIES
 // ============================================================
 $today = date('Y-m-d');
+$month_start = date('Y-m-01');
+$month = date('m');
+$year = date('Y');
 
-// TODAY FLOAT (cumm_total from evening_stock)
+// TODAY EXPENSES
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE DATE(expense_date) = ? AND branch_id = ? AND is_business_expense = 1";
     $params = [$today, $selected_branch];
 } else {
-    $sql = "SELECT SUM(cumm_total) as total FROM evening_stocks WHERE stock_date = ?";
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE DATE(expense_date) = ? AND is_business_expense = 1";
     $params = [$today];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_float = $result['total'] ?? 0;
+$today_expenses = $result['total'] ?? 0;
 
-// TODAY CASH (cash_balance from evening_stock)
+// THIS MONTH EXPENSES
 if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ? AND branch_id = ? AND is_business_expense = 1";
+    $params = [$month, $year, $selected_branch];
 } else {
-    $sql = "SELECT SUM(cash_balance) as total FROM evening_stocks WHERE stock_date = ?";
-    $params = [$today];
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ? AND is_business_expense = 1";
+    $params = [$month, $year];
 }
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $result = $stmt->fetch();
-$today_cash = $result['total'] ?? 0;
+$this_month_expenses = $result['total'] ?? 0;
 
-// TODAY STOCK = FLOAT + CASH
-$today_stock = $today_float + $today_cash;
+// TOTAL EXPENSES (All time)
+if ($selected_branch > 0) {
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE branch_id = ? AND is_business_expense = 1";
+    $params = [$selected_branch];
+} else {
+    $sql = "SELECT SUM(amount) as total FROM expenses WHERE is_business_expense = 1";
+    $params = [];
+}
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$result = $stmt->fetch();
+$total_expenses_all = $result['total'] ?? 0;
 
 // ============================================================
-// GET EVENING STOCKS LIST
+// GET EXPENSES LIST
 // ============================================================
 $sql = "SELECT 
-            es.id,
-            es.stock_number,
-            es.stock_date,
-            es.cash_balance,
-            es.cumm_total,
-            es.status,
-            es.submitted_at,
-            es.notes,
-            e.full_name as employee_name,
+            e.id,
+            e.expense_number,
+            e.expense_date,
+            e.expense_name,
+            e.category,
+            e.amount,
+            e.description,
+            e.receipt_path,
+            e.is_business_expense,
+            e.is_salary_related,
+            e.created_at,
+            e.notes,
+            emp.full_name as employee_name,
             b.branch_name as branch_name,
             b.id as branch_id
-        FROM evening_stocks es
-        LEFT JOIN employees e ON es.employee_id = e.id
-        LEFT JOIN branches b ON es.branch_id = b.id
+        FROM expenses e
+        LEFT JOIN employees emp ON e.employee_id = emp.id
+        LEFT JOIN branches b ON e.branch_id = b.id
         WHERE 1=1 " . $branch_filter . "
-        ORDER BY es.stock_date DESC, es.id DESC";
+        ORDER BY e.expense_date DESC, e.id DESC";
 
 $params = $branch_params;
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$stocks = $stmt->fetchAll();
+$expenses = $stmt->fetchAll();
 
-// Count stocks
-$stock_count = count($stocks);
+// Count expenses
+$expense_count = count($expenses);
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -157,14 +181,14 @@ DASHBOARD CONTENT
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Evening Stocks</h2>
-                <span class="record-count"><?php echo $stock_count; ?> records</span>
+                <h2><i class="fas fa-receipt"></i> Expenses</h2>
+                <span class="record-count"><?php echo $expense_count; ?> records</span>
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
                     <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Expense
                     </a>
                     
                     <!-- Export Dropdown - SECOND -->
@@ -215,81 +239,80 @@ DASHBOARD CONTENT
         </div>
 
         <!-- ============================================================
-        SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
+        SUMMARIES CARDS - TODAY, THIS MONTH, TOTAL
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
-            <div class="summary-card card-stock">
-                <div class="summary-icon"><i class="fas fa-boxes"></i></div>
+            <!-- TODAY EXPENSES - Red -->
+            <div class="summary-card card-today">
+                <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY STOCK</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_stock); ?></div>
-                    <div class="summary-sub">Float + Cash (Evening Stock)</div>
+                    <div class="summary-label">TODAY EXPENSES</div>
+                    <div class="summary-value"><?php echo formatCurrency($today_expenses); ?></div>
+                    <div class="summary-sub"><?php echo date('d M Y'); ?></div>
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
-            <div class="summary-card card-float">
-                <div class="summary-icon"><i class="fas fa-coins"></i></div>
+            <!-- THIS MONTH EXPENSES - Orange -->
+            <div class="summary-card card-month">
+                <div class="summary-icon"><i class="fas fa-calendar-alt"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY FLOAT</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_float); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">THIS MONTH</div>
+                    <div class="summary-value"><?php echo formatCurrency($this_month_expenses); ?></div>
+                    <div class="summary-sub"><?php echo date('F Y'); ?></div>
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
-            <div class="summary-card card-cash">
-                <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <!-- TOTAL EXPENSES - Maroon -->
+            <div class="summary-card card-total">
+                <div class="summary-icon"><i class="fas fa-chart-pie"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">TODAY CASH</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_cash); ?></div>
-                    <div class="summary-sub">Today's Evening Stock</div>
+                    <div class="summary-label">TOTAL EXPENSES</div>
+                    <div class="summary-value"><?php echo formatCurrency($total_expenses_all); ?></div>
+                    <div class="summary-sub">All Time</div>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        TABLE - EVENING STOCKS LIST
+        TABLE - EXPENSES LIST
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Evening Stocks</h3>
+                <h3><i class="fas fa-list"></i> All Expenses</h3>
                 <div class="table-actions">
-                    <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
-                        <option value="">All Status</option>
-                        <option value="waiting">Waiting</option>
-                        <option value="pending">Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="adjusted">Adjusted</option>
-                        <option value="rejected">Rejected</option>
+                    <select id="categoryFilter" class="filter-select" onchange="filterByCategory(this.value)">
+                        <option value="">All Categories</option>
+                        <?php foreach ($categories as $cat): ?>
+                            <option value="<?php echo htmlspecialchars($cat['category_name']); ?>">
+                                <?php echo htmlspecialchars($cat['category_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search stocks..." class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search expenses..." class="search-input">
                 </div>
             </div>
 
-            <?php if (empty($stocks)): ?>
+            <?php if (empty($expenses)): ?>
                 <div class="empty-state">
-                    <i class="fas fa-moon"></i>
-                    <h3>No Evening Stocks Found</h3>
-                    <p>Start by adding your first evening stock for today.</p>
+                    <i class="fas fa-receipt"></i>
+                    <h3>No Expenses Found</h3>
+                    <p>Start by adding your first expense record.</p>
                     <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Evening Stock
+                        <i class="fas fa-plus-circle"></i> Add Expense
                     </a>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="data-table" id="stocksTable">
+                    <table class="data-table" id="expensesTable">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Stock No.</th>
+                                <th>Expense No.</th>
                                 <th>Date</th>
                                 <th>Employee</th>
                                 <th>Branch</th>
-                                <th>Providers</th>
-                                <th>Cash</th>
-                                <th>Float</th>
+                                <th>Category</th>
+                                <th>Amount</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -297,54 +320,42 @@ DASHBOARD CONTENT
                         <tbody>
                             <?php 
                             $counter = 1;
-                            foreach ($stocks as $stock): 
-                                // Get providers count
-                                $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
-                                $provider_count = count($provider_data);
-                                
+                            foreach ($expenses as $expense): 
                                 // Determine status
-                                $status = ucfirst($stock['status'] ?? 'pending');
-                                $status_colors = [
-                                    'waiting' => 'status-waiting',
-                                    'pending' => 'status-pending',
-                                    'approved' => 'status-approved',
-                                    'adjusted' => 'status-adjusted',
-                                    'rejected' => 'status-rejected'
-                                ];
-                                $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
+                                $status = 'Active';
+                                $status_class = 'status-active';
+                                
+                                if ($expense['is_salary_related'] == 1) {
+                                    $status = 'Salary';
+                                    $status_class = 'status-salary';
+                                }
                             ?>
-                                <tr data-status="<?php echo strtolower($stock['status'] ?? 'pending'); ?>">
+                                <tr data-category="<?php echo strtolower(htmlspecialchars($expense['category'])); ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="stock-number">
-                                            <?php echo htmlspecialchars($stock['stock_number']); ?>
+                                        <span class="expense-number">
+                                            <?php echo htmlspecialchars($expense['expense_number']); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></td>
+                                    <td><?php echo date('d M Y', strtotime($expense['expense_date'])); ?></td>
                                     <td>
                                         <span class="employee-name">
-                                            <?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?>
+                                            <?php echo htmlspecialchars($expense['employee_name'] ?? 'N/A'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-name">
-                                            <?php echo htmlspecialchars($stock['branch_name'] ?? 'Main'); ?>
+                                            <?php echo htmlspecialchars($expense['branch_name'] ?? 'Main'); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="provider-count">
-                                            <i class="fas fa-building"></i>
-                                            <?php echo $provider_count; ?> providers
+                                        <span class="category-badge">
+                                            <?php echo htmlspecialchars($expense['category']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="amount cash">
-                                            <?php echo formatCurrency($stock['cash_balance']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount float">
-                                            <?php echo formatCurrency($stock['cumm_total']); ?>
+                                        <span class="amount expense">
+                                            <?php echo formatCurrency($expense['amount']); ?>
                                         </span>
                                     </td>
                                     <td>
@@ -354,13 +365,13 @@ DASHBOARD CONTENT
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-view" title="View">
+                                            <a href="view.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
+                                            <a href="edit.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            <a href="delete.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this expense?')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -382,58 +393,58 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+DASHBOARD STYLES WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --evening-bg: #FFFFFF;
-    --evening-text: #1F2937;
-    --evening-text-secondary: #6B7280;
-    --evening-text-light: #9CA3AF;
-    --evening-border: #E5E7EB;
-    --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
-    --evening-input-bg: #F9FAFB;
-    --evening-hover: #F3F4F6;
-    --evening-shadow: rgba(0,0,0,0.06);
-    --evening-shadow-lg: rgba(0,0,0,0.12);
-    --evening-dropdown-bg: #FFFFFF;
-    --evening-dropdown-border: #E5E7EB;
+    --expenses-bg: #FFFFFF;
+    --expenses-text: #1F2937;
+    --expenses-text-secondary: #6B7280;
+    --expenses-text-light: #9CA3AF;
+    --expenses-border: #E5E7EB;
+    --expenses-card-bg: #FFFFFF;
+    --expenses-card-header: #FAFBFC;
+    --expenses-input-bg: #F9FAFB;
+    --expenses-hover: #F3F4F6;
+    --expenses-shadow: rgba(0,0,0,0.06);
+    --expenses-shadow-lg: rgba(0,0,0,0.12);
+    --expenses-dropdown-bg: #FFFFFF;
+    --expenses-dropdown-border: #E5E7EB;
 }
 
 html.dark-mode {
-    --evening-bg: #1F2937;
-    --evening-text: #F9FAFB;
-    --evening-text-secondary: #9CA3AF;
-    --evening-text-light: #6B7280;
-    --evening-border: #374151;
-    --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
-    --evening-input-bg: #374151;
-    --evening-hover: #374151;
-    --evening-shadow: rgba(0,0,0,0.3);
-    --evening-shadow-lg: rgba(0,0,0,0.4);
-    --evening-dropdown-bg: #1F2937;
-    --evening-dropdown-border: #374151;
+    --expenses-bg: #1F2937;
+    --expenses-text: #F9FAFB;
+    --expenses-text-secondary: #9CA3AF;
+    --expenses-text-light: #6B7280;
+    --expenses-border: #374151;
+    --expenses-card-bg: #1F2937;
+    --expenses-card-header: #374151;
+    --expenses-input-bg: #374151;
+    --expenses-hover: #374151;
+    --expenses-shadow: rgba(0,0,0,0.3);
+    --expenses-shadow-lg: rgba(0,0,0,0.4);
+    --expenses-dropdown-bg: #1F2937;
+    --expenses-dropdown-border: #374151;
 }
 
 /* Apply Dark Mode to Full Page */
 body {
-    background: var(--evening-bg) !important;
-    color: var(--evening-text);
+    background: var(--expenses-bg) !important;
+    color: var(--expenses-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
 .main-wrapper {
-    background: var(--evening-bg) !important;
+    background: var(--expenses-bg) !important;
     transition: background 0.3s ease;
 }
 
 .main-content {
-    background: var(--evening-bg) !important;
+    background: var(--expenses-bg) !important;
     transition: background 0.3s ease;
 }
 
@@ -457,20 +468,20 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     margin: 0;
     transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
-    color: #3B82F6;
+    color: #DC2626;
     margin-right: 8px;
 }
 
 .record-count {
     font-size: 13px;
-    color: var(--evening-text-secondary);
-    background: var(--evening-hover);
+    color: var(--expenses-text-secondary);
+    background: var(--expenses-hover);
     padding: 2px 12px;
     border-radius: 12px;
     transition: all 0.3s ease;
@@ -575,11 +586,11 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--evening-dropdown-bg);
+    background: var(--expenses-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--evening-shadow-lg);
-    border: 1px solid var(--evening-dropdown-border);
+    box-shadow: 0 4px 20px var(--expenses-shadow-lg);
+    border: 1px solid var(--expenses-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
@@ -596,14 +607,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--evening-hover);
+    background: var(--expenses-hover);
 }
 
 .dropdown-menu a i {
@@ -620,15 +631,15 @@ body {
    BRANCH FILTER BAR - DARK MODE
    ============================================================ */
 .branch-filter-bar {
-    background: var(--evening-card-bg);
+    background: var(--expenses-card-bg);
     border-radius: 10px;
     padding: 12px 20px;
     margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--expenses-shadow);
+    border: 1px solid var(--expenses-border);
     transition: all 0.3s ease;
 }
 
@@ -637,7 +648,7 @@ body {
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--expenses-text);
 }
 
 .branch-filter-left i {
@@ -648,10 +659,10 @@ body {
 .branch-filter-left select {
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
+    border: 1px solid var(--expenses-border);
+    background: var(--expenses-input-bg);
     font-size: 13px;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     outline: none;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -663,8 +674,8 @@ body {
 }
 
 .branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
+    background: var(--expenses-dropdown-bg);
+    color: var(--expenses-text);
 }
 
 .branch-badge {
@@ -678,7 +689,7 @@ body {
 
 .branch-filter-right .date-display {
     font-size: 13px;
-    color: var(--evening-text-secondary);
+    color: var(--expenses-text-secondary);
 }
 
 .branch-filter-right .date-display i {
@@ -696,14 +707,14 @@ body {
 }
 
 .summary-card {
-    background: var(--evening-card-bg);
+    background: var(--expenses-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--expenses-shadow);
+    border: 1px solid var(--expenses-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -711,7 +722,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--evening-shadow-lg);
+    box-shadow: 0 4px 12px var(--expenses-shadow-lg);
 }
 
 .summary-icon {
@@ -738,13 +749,13 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--evening-text-secondary);
+    color: var(--expenses-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
@@ -754,28 +765,28 @@ body {
 
 .summary-sub {
     font-size: 11px;
-    color: var(--evening-text-light);
+    color: var(--expenses-text-light);
     font-weight: 500;
 }
 
 /* Card Colors */
-.card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
-.card-stock { border-left: 4px solid #1E40AF; }
+.card-today .summary-icon { background: #FEE2E2; color: #DC2626; }
+.card-today { border-left: 4px solid #DC2626; }
 
-.card-float .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-float { border-left: 4px solid #3B82F6; }
+.card-month .summary-icon { background: #FEF3C7; color: #D97706; }
+.card-month { border-left: 4px solid #D97706; }
 
-.card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-cash { border-left: 4px solid #10B981; }
+.card-total .summary-icon { background: #FECACA; color: #7F1D1D; }
+.card-total { border-left: 4px solid #7F1D1D; }
 
 /* ============================================================
    TABLE CONTAINER - DARK MODE
    ============================================================ */
 .table-container {
-    background: var(--evening-card-bg);
+    background: var(--expenses-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
+    box-shadow: 0 1px 3px var(--expenses-shadow);
+    border: 1px solid var(--expenses-border);
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -785,7 +796,7 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--expenses-border);
     flex-wrap: wrap;
     gap: 10px;
     transition: all 0.3s ease;
@@ -794,12 +805,12 @@ body {
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     margin: 0;
 }
 
 .table-header h3 i {
-    color: #3B82F6;
+    color: #DC2626;
     margin-right: 8px;
 }
 
@@ -813,17 +824,17 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--expenses-border);
     font-size: 13px;
     outline: none;
     width: 200px;
     transition: all 0.3s ease;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--expenses-input-bg);
+    color: var(--expenses-text);
 }
 
 .search-input::placeholder {
-    color: var(--evening-text-light);
+    color: var(--expenses-text-light);
 }
 
 .search-input:focus {
@@ -834,11 +845,11 @@ body {
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--evening-border);
+    border: 1px solid var(--expenses-border);
     font-size: 13px;
     outline: none;
-    background: var(--evening-input-bg);
-    color: var(--evening-text);
+    background: var(--expenses-input-bg);
+    color: var(--expenses-text);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -849,8 +860,8 @@ body {
 }
 
 .filter-select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
+    background: var(--expenses-dropdown-bg);
+    color: var(--expenses-text);
 }
 
 .table-responsive {
@@ -888,65 +899,60 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--evening-border);
+    border-bottom: 1px solid var(--expenses-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--evening-hover);
+    background: var(--expenses-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     transition: color 0.3s ease;
 }
 
-/* Stock Number */
-.stock-number {
+/* Expense Number */
+.expense-number {
     font-weight: 600;
-    color: #3B82F6;
+    color: #DC2626;
     font-size: 12px;
 }
 
 /* Employee Name */
 .employee-name {
     font-weight: 500;
-    color: var(--evening-text);
+    color: var(--expenses-text);
 }
 
 /* Branch Name */
 .branch-name {
-    background: var(--evening-hover);
+    background: var(--expenses-hover);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    color: var(--evening-text-secondary);
+    color: var(--expenses-text-secondary);
     transition: all 0.3s ease;
 }
 
-/* Provider Count */
-.provider-count {
+/* Category Badge */
+.category-badge {
+    background: #EDE9FE;
+    color: #5B21B6;
+    padding: 2px 10px;
+    border-radius: 12px;
     font-size: 12px;
-    color: var(--evening-text-secondary);
+    font-weight: 500;
 }
 
-.provider-count i {
-    color: #3B82F6;
-    margin-right: 4px;
-}
-
-/* Amounts */
+/* Amount */
 .amount {
     font-weight: 600;
 }
 
-.amount.cash {
-    color: #059669;
-}
-
-.amount.float {
-    color: #1D4ED8;
+.amount.expense {
+    color: #DC2626;
 }
 
 /* Status Badge */
@@ -958,29 +964,14 @@ body {
     font-weight: 600;
 }
 
-.status-approved {
+.status-active {
     background: #D1FAE5;
     color: #065F46;
 }
 
-.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.status-waiting {
+.status-salary {
     background: #DBEAFE;
     color: #1E40AF;
-}
-
-.status-adjusted {
-    background: #EDE9FE;
-    color: #5B21B6;
-}
-
-.status-rejected {
-    background: #FEE2E2;
-    color: #991B1B;
 }
 
 /* Action Buttons */
@@ -1041,18 +1032,18 @@ body {
 
 .empty-state i {
     font-size: 60px;
-    color: #3B82F6;
+    color: #DC2626;
     margin-bottom: 16px;
 }
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--evening-text);
+    color: var(--expenses-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--evening-text-secondary);
+    color: var(--expenses-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
@@ -1251,7 +1242,7 @@ function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('stocksTable');
+    var table = document.getElementById('expensesTable');
     if (!table) {
         alert('No data to export!');
         return;
@@ -1306,7 +1297,7 @@ function exportCSV(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.download = 'expenses_export_' + new Date().toISOString().slice(0,10) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1317,16 +1308,16 @@ function exportCSV(headers, data) {
 // EXPORT EXCEL (HTML Table format)
 // ============================================================
 function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+    var html = '<html><head><meta charset="UTF-8"><title>Expenses Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #3B82F6; }';
+    html += 'h1 { color: #DC2626; }';
     html += 'table { width: 100%; border-collapse: collapse; }';
     html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
     html += '</style>';
     html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
+    html += '<h1>Expenses Report</h1>';
     html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     html += '<table>';
     html += '<thead><tr>';
@@ -1350,7 +1341,7 @@ function exportExcel(headers, data) {
     var url = window.URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+    a.download = 'expenses_export_' + new Date().toISOString().slice(0,10) + '.xls';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1358,24 +1349,25 @@ function exportExcel(headers, data) {
 }
 
 // ============================================================
-// EXPORT PDF
+// EXPORT PDF (using window.print)
 // ============================================================
 function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
+    // Create printable version
+    var printContent = '<html><head><title>Expenses Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #3B82F6; }';
+    printContent += 'h1 { color: #DC2626; }';
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
     printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
+    printContent += '<h1>Expenses Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
     
-    var totalFloat = 0;
-    var totalCash = 0;
+    // Calculate total
+    var totalAmount = 0;
     
     printContent += '<table>';
     printContent += '<thead><tr>';
@@ -1387,20 +1379,12 @@ function exportPDF(headers, data) {
     data.forEach(function(row) {
         printContent += '<tr>';
         row.forEach(function(cell, index) {
-            // Float column (index 7)
-            if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
-                }
-            }
-            // Cash column (index 6)
+            // Check if this is the Amount column (index 6)
             if (index === 6) {
                 var cleanAmount = cell.replace(/[^0-9,]/g, '');
                 var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
                 if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
+                    totalAmount += numAmount;
                 }
             }
             printContent += '<td>' + cell + '</td>';
@@ -1409,9 +1393,7 @@ function exportPDF(headers, data) {
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
+    printContent += '<div class="total">Total Amount: ' + formatNumber(totalAmount) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1429,15 +1411,15 @@ function formatNumber(num) {
 }
 
 // ============================================================
-// FILTER BY STATUS
+// FILTER BY CATEGORY
 // ============================================================
-function filterByStatus(status) {
-    var rows = document.querySelectorAll('#stocksTable tbody tr');
-    var statusFilter = status.toLowerCase();
+function filterByCategory(category) {
+    var rows = document.querySelectorAll('#expensesTable tbody tr');
+    var categoryFilter = category.toLowerCase();
     
     rows.forEach(function(row) {
-        var rowStatus = row.getAttribute('data-status');
-        if (statusFilter === '' || rowStatus === statusFilter) {
+        var rowCategory = row.getAttribute('data-category');
+        if (categoryFilter === '' || rowCategory === categoryFilter) {
             row.style.display = '';
         } else {
             row.style.display = 'none';
@@ -1453,7 +1435,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
             var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#stocksTable tbody tr');
+            var rows = document.querySelectorAll('#expensesTable tbody tr');
             
             rows.forEach(function(row) {
                 var text = row.textContent.toLowerCase();
