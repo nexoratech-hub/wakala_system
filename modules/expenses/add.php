@@ -27,6 +27,33 @@ if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
 $error = '';
 $success = '';
 
+// Get user's branch
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
+
+// Get branch name
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
+    }
+}
+
 try {
     // Get categories
     $stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
@@ -83,13 +110,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $expense_number = generateNumber('EXP');
             
             // Get branch name
-            $branch_name = 'Main';
+            $branch_name_db = 'Main';
             if ($branch_id > 0) {
                 $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
                 $stmt->execute([$branch_id]);
                 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($branch) {
-                    $branch_name = $branch['branch_name'];
+                    $branch_name_db = $branch['branch_name'];
                 }
             }
 
@@ -118,7 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $result = $stmt->execute([
                 $expense_number,
                 $user_id,
-                $branch_name,
+                $branch_name_db,
                 $branch_id > 0 ? $branch_id : null,
                 $expense_date,
                 $expense_name,
@@ -163,11 +190,32 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Current Branch</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                    <?php if ($branch_code): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php if ($branch_location): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($branch_location); ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display">
+                    <i class="far fa-calendar-alt"></i> 
+                    <?php echo date('d M Y'); ?>
+                </span>
+            </div>
         </div>
 
         <div class="page-header">
@@ -228,7 +276,7 @@ include_once '../../includes/admin_topbar.php';
                         <select name="branch_id" class="form-control">
                             <option value="0">Main Branch</option>
                             <?php foreach ($branches as $b): ?>
-                                <option value="<?php echo $b['id']; ?>" <?php echo ($user_branch_id == $b['id']) ? 'selected' : ''; ?>>
+                                <option value="<?php echo $b['id']; ?>" <?php echo ($selected_branch == $b['id']) ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($b['branch_name']); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -284,25 +332,169 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
+/* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    padding: 14px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.35);
+    border: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.branch-indicator::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 200px;
+    height: 200px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator::after {
+    content: '';
+    position: absolute;
+    bottom: -60%;
+    left: 30%;
+    width: 150px;
+    height: 150px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: #FFFFFF;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+
+.branch-icon-wrapper {
+    width: 44px;
+    height: 44px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.branch-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.branch-indicator-label {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 16px;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+
+.branch-indicator-code {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+    color: #FFFFFF;
+    padding: 2px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location i {
+    font-size: 12px;
+}
+
+.branch-indicator-right {
+    position: relative;
+    z-index: 1;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.branch-indicator-right .date-display i {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* ============================================================
+   FORM CARD
+   ============================================================ */
 .form-card {
     background: var(--bg-card);
-    border-radius: 10px;
-    padding: 24px;
+    border-radius: 12px;
+    padding: 28px 32px;
     border: 1px solid var(--border-color);
     margin-bottom: 20px;
+    box-shadow: 0 1px 3px var(--shadow-color);
 }
 
 .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
+    gap: 18px;
+    margin-bottom: 18px;
 }
 
 .form-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
 }
 
 .form-group label {
@@ -343,7 +535,7 @@ textarea.form-control {
     display: flex;
     gap: 12px;
     margin-top: 8px;
-    padding-top: 16px;
+    padding-top: 18px;
     border-top: 1px solid var(--border-color);
 }
 
@@ -367,6 +559,63 @@ textarea.form-control {
     color: var(--text-muted);
 }
 
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.page-header .header-left h2 i {
+    margin-right: 10px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-primary { background: #bb0404; color: white; }
+.btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); }
+
 .btn-secondary {
     background: var(--bg-table-even);
     color: var(--text-secondary);
@@ -374,6 +623,9 @@ textarea.form-control {
 }
 .btn-secondary:hover { background: var(--bg-table-hover); }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -385,7 +637,9 @@ textarea.form-control {
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 
-/* Dark Mode */
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -401,54 +655,15 @@ textarea.form-control {
     --shadow-hover: rgba(0,0,0,0.08);
 }
 
-body.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
-}
-
 body {
     background: var(--bg-body) !important;
     color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
     .form-row {
         grid-template-columns: 1fr;
@@ -460,35 +675,60 @@ body {
         width: 100%;
         justify-content: center;
     }
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .header-right {
+        width: 100%;
+    }
+    .header-right .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .branch-indicator {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 16px 18px;
+    }
+    .branch-indicator-left {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    .branch-info {
+        flex-wrap: wrap;
+    }
+    .branch-indicator-right {
+        width: 100%;
+    }
+    .branch-indicator-right .date-display {
+        width: 100%;
+        justify-content: center;
+    }
+    .form-card {
+        padding: 20px 16px;
+    }
+}
+
+@media (max-width: 480px) {
+    .branch-indicator-name {
+        font-size: 14px;
+    }
+    .branch-location {
+        font-size: 11px;
+        padding: 3px 10px;
+    }
+    .branch-indicator-code {
+        font-size: 10px;
+    }
+    .branch-icon-wrapper {
+        width: 38px;
+        height: 38px;
+        font-size: 17px;
+    }
 }
 </style>
-
-<script>
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    if (document.body.classList.contains('dark-mode')) {
-        btn.querySelector('i').className = 'fas fa-sun';
-        btn.querySelector('span').textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        btn.querySelector('i').className = 'fas fa-moon';
-        btn.querySelector('span').textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
-});
-</script>
 
 </body>
 </html>

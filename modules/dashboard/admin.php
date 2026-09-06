@@ -42,33 +42,40 @@ $user = $stmt->fetch();
 $profile_image = '../../assets/images/logo.PNG';
 
 // ============================================================
-// GET BRANCHES FOR FILTER
+// GET USER'S BRANCH FROM SESSION OR DATABASE
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-$stmt->execute();
-$branches = $stmt->fetchAll();
+// First try to get from session
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
 
-// ============================================================
-// BRANCH FILTER HANDLING
-// ============================================================
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
-
-if (isset($_GET['branch'])) {
-    $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
-    $selected_branch = $_SESSION['selected_branch'];
+// If not in session, get from database
+if ($selected_branch == 0 && isset($user['branch_id'])) {
+    $selected_branch = intval($user['branch_id']);
+    $_SESSION['user_branch_id'] = $selected_branch;
 }
 
-$selected_branch = $selected_branch ?? 0;
+// If still 0, try to get branch from employees table
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $emp = $stmt->fetch();
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
 
-// Get branch name for display
+// Get branch name
 $branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
 if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
-            break;
-        }
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch();
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
     }
 }
 
@@ -110,9 +117,7 @@ $total_cash = $result['total'] ?? 0;
 $total_stock = $total_float + $total_cash;
 
 // --- 4. TOTAL DEPOSIT (This Month) ---
-// Check if daily_report_transactions table exists
 try {
-    // Try using daily_report_transactions first
     if ($selected_branch > 0) {
         $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
                 JOIN daily_reports dr ON drt.daily_report_id = dr.id 
@@ -131,7 +136,6 @@ try {
     $result = $stmt->fetch();
     $total_deposits = $result['total'] ?? 0;
 } catch (Exception $e) {
-    // If table doesn't exist, use daily_reports total_deposits column
     if ($selected_branch > 0) {
         $sql = "SELECT SUM(IFNULL(total_deposits, 0)) as total FROM daily_reports 
                 WHERE MONTH(report_date) = ? AND YEAR(report_date) = ? 
@@ -150,7 +154,6 @@ try {
 
 // --- 5. TOTAL WITHDRAWAL (This Month) ---
 try {
-    // Try using daily_report_transactions first
     if ($selected_branch > 0) {
         $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
                 JOIN daily_reports dr ON drt.daily_report_id = dr.id 
@@ -169,7 +172,6 @@ try {
     $result = $stmt->fetch();
     $total_withdrawals = $result['total'] ?? 0;
 } catch (Exception $e) {
-    // If table doesn't exist, use daily_reports total_withdrawals column
     if ($selected_branch > 0) {
         $sql = "SELECT SUM(IFNULL(total_withdrawals, 0)) as total FROM daily_reports 
                 WHERE MONTH(report_date) = ? AND YEAR(report_date) = ? 
@@ -338,24 +340,20 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== BRANCH FILTER ===== -->
-        <div class="branch-filter-bar">
-            <div class="branch-filter-left">
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
                 <i class="fas fa-store-alt"></i>
-                <span>Branch:</span>
-                <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
-                    <option value="0">All Branches</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <?php if ($selected_branch > 0): ?>
-                    <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
+                <span class="branch-indicator-label">Current Branch:</span>
+                <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                <?php if ($branch_code): ?>
+                    <span class="branch-indicator-code">(<?php echo htmlspecialchars($branch_code); ?>)</span>
+                <?php endif; ?>
+                <?php if ($branch_location): ?>
+                    <span class="branch-indicator-location"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_location); ?></span>
                 <?php endif; ?>
             </div>
-            <div class="branch-filter-right">
+            <div class="branch-indicator-right">
                 <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
             </div>
         </div>
@@ -389,7 +387,7 @@ DASHBOARD CONTENT
         </div>
 
         <!-- ============================================================
-        SUMMARIES CARDS (8 Cards) with increased height
+        SUMMARIES CARDS (8 Cards) 
         ============================================================ -->
         <div class="summaries-grid">
             <!-- 1. TOTAL FLOAT - Light Blue -->
@@ -596,65 +594,71 @@ body {
 }
 
 /* ============================================================
-   BRANCH FILTER BAR
+   BRANCH INDICATOR CARD - RED
    ============================================================ */
-.branch-filter-bar {
-    background: var(--bg-card);
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 10px;
-    padding: 10px 18px;
-    margin-bottom: 14px;
+    padding: 12px 20px;
+    margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    border: none;
 }
 
-.branch-filter-left {
+.branch-indicator-left {
     display: flex;
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--text-primary);
+    color: #FFFFFF;
 }
 
-.branch-filter-left i {
-    color: #DC2626;
-    font-size: 16px;
+.branch-indicator-left i {
+    font-size: 18px;
+    color: rgba(255,255,255,0.9);
 }
 
-.branch-filter-left select {
-    padding: 5px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-input);
+.branch-indicator-label {
+    font-weight: 500;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-code {
+    font-size: 12px;
+    opacity: 0.7;
+    color: #FFFFFF;
+}
+
+.branch-indicator-location {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.branch-indicator-location i {
+    font-size: 12px;
+}
+
+.branch-indicator-right .date-display {
     font-size: 13px;
-    color: var(--text-primary);
-    outline: none;
-    cursor: pointer;
+    color: rgba(255,255,255,0.8);
 }
 
-.branch-filter-left select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-badge {
-    background: #DC2626;
-    color: white;
-    padding: 2px 12px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.branch-filter-right .date-display {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.branch-filter-right .date-display i {
-    color: #DC2626;
+.branch-indicator-right .date-display i {
+    margin-right: 4px;
 }
 
 /* ============================================================
@@ -777,7 +781,7 @@ body {
 .btn-daily:hover { background: #4B5563; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(107,114,128,0.3); }
 
 /* ============================================================
-   SUMMARIES GRID - 8 CARDS with increased height
+   SUMMARIES GRID - 8 CARDS 
    ============================================================ */
 .summaries-grid {
     display: grid;
@@ -1046,10 +1050,15 @@ body {
         align-items: center;
     }
     
-    .branch-filter-bar {
+    .branch-indicator {
         flex-direction: column;
         gap: 8px;
         align-items: flex-start;
+        padding: 12px 16px;
+    }
+    
+    .branch-indicator-left {
+        flex-wrap: wrap;
     }
     
     .quick-actions {
@@ -1091,6 +1100,14 @@ body {
     .profit-total .profit-value {
         font-size: 14px;
     }
+    
+    .branch-indicator-name {
+        font-size: 13px;
+    }
+    
+    .branch-indicator-location {
+        font-size: 11px;
+    }
 }
 
 /* ============================================================
@@ -1115,6 +1132,10 @@ body {
 .summary-card:nth-child(8) { animation-delay: 0.24s; }
 
 .capital-card {
+    animation: fadeInUp 0.3s ease forwards;
+}
+
+.branch-indicator {
     animation: fadeInUp 0.3s ease forwards;
 }
 

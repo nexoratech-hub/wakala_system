@@ -26,6 +26,33 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 $error = '';
 $success = '';
 
+// Get user's branch
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
+
+// Get branch name
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
+    }
+}
+
 try {
     // Get branches
     $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
@@ -65,7 +92,7 @@ try {
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     try {
         $report_date = $_POST['report_date'] ?? date('Y-m-d');
-        $branch_id = intval($_POST['branch_id'] ?? 0);
+        $branch_id = !empty($_POST['branch_id']) ? intval($_POST['branch_id']) : $selected_branch;
         $provider_id = !empty($_POST['provider_id']) ? intval($_POST['provider_id']) : null;
         $morning_report_id = !empty($_POST['morning_report_id']) ? intval($_POST['morning_report_id']) : null;
         $evening_stock_id = !empty($_POST['evening_stock_id']) ? intval($_POST['evening_stock_id']) : null;
@@ -99,13 +126,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $report_number = generateNumber('DR');
             
             // Get branch name
-            $branch_name = 'Main';
+            $branch_name_db = 'Main';
             if ($branch_id > 0) {
                 $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
                 $stmt->execute([$branch_id]);
                 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($branch) {
-                    $branch_name = $branch['branch_name'];
+                    $branch_name_db = $branch['branch_name'];
                 }
             }
             
@@ -143,7 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $result = $stmt->execute([
                 $report_number,
                 $user_id,
-                $branch_name,
+                $branch_name_db,
                 $branch_id > 0 ? $branch_id : null,
                 $provider_id,
                 $provider_code,
@@ -177,7 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 logActivity($user_id, 'Add Daily Report', 'Daily Report', $new_id, null, json_encode([
                     'report_number' => $report_number,
                     'date' => $report_date,
-                    'branch' => $branch_name
+                    'branch' => $branch_name_db
                 ]));
                 
                 $success = 'Daily report added successfully!';
@@ -200,11 +227,22 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <i class="fas fa-store-alt"></i>
+                <span class="branch-indicator-label">Current Branch:</span>
+                <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                <?php if ($branch_code): ?>
+                    <span class="branch-indicator-code">(<?php echo htmlspecialchars($branch_code); ?>)</span>
+                <?php endif; ?>
+                <?php if ($branch_location): ?>
+                    <span class="branch-indicator-location"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_location); ?></span>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
+            </div>
         </div>
 
         <div class="page-header">
@@ -242,7 +280,9 @@ include_once '../../includes/admin_topbar.php';
                             <select name="branch_id" class="form-control">
                                 <option value="0">Main Branch</option>
                                 <?php foreach ($branches as $b): ?>
-                                    <option value="<?php echo $b['id']; ?>"><?php echo htmlspecialchars($b['branch_name']); ?></option>
+                                    <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                                    </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -407,6 +447,77 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
+/* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 10px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    border: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-left i {
+    font-size: 18px;
+    color: rgba(255,255,255,0.9);
+}
+
+.branch-indicator-label {
+    font-weight: 500;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-code {
+    font-size: 12px;
+    opacity: 0.7;
+    color: #FFFFFF;
+}
+
+.branch-indicator-location {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.branch-indicator-location i {
+    font-size: 12px;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    color: rgba(255,255,255,0.8);
+}
+
+.branch-indicator-right .date-display i {
+    margin-right: 4px;
+}
+
+/* ============================================================
+   FORM STYLES
+   ============================================================ */
 .form-card {
     background: var(--bg-card);
     border-radius: 10px;
@@ -491,14 +602,51 @@ textarea.form-control {
     min-height: 60px;
 }
 
-.form-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
+.form-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
 }
 
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.page-header .header-left h2 i {
+    margin-right: 10px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn {
     padding: 10px 24px;
     border: none;
@@ -524,6 +672,17 @@ textarea.form-control {
 }
 .btn-secondary:hover { background: var(--bg-table-hover); }
 
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -535,13 +694,9 @@ textarea.form-control {
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 
-.form-text {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 4px;
-}
-
-/* Dark Mode */
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -557,54 +712,15 @@ textarea.form-control {
     --shadow-hover: rgba(0,0,0,0.08);
 }
 
-body.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
-}
-
 body {
     background: var(--bg-body) !important;
     color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
     .form-row {
         grid-template-columns: 1fr;
@@ -619,6 +735,31 @@ body {
     .page-header {
         flex-direction: column;
         align-items: flex-start;
+    }
+    .header-right {
+        width: 100%;
+    }
+    .header-right .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .branch-indicator {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 12px 16px;
+    }
+    .branch-indicator-left {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 480px) {
+    .branch-indicator-name {
+        font-size: 13px;
+    }
+    .branch-indicator-location {
+        font-size: 11px;
     }
 }
 </style>
@@ -657,34 +798,6 @@ document.addEventListener('DOMContentLoaded', function() {
     openingCapital.addEventListener('input', calculateCurrentCapital);
     additionalCapital.addEventListener('input', calculateCurrentCapital);
     profitAllocated.addEventListener('input', calculateCurrentCapital);
-});
-
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    if (document.body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
 });
 </script>
 

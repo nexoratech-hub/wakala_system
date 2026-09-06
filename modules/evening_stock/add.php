@@ -38,11 +38,35 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 // ============================================================
-// GET BRANCHES FOR DROPDOWN
+// GET BRANCHES FOR REFERENCE
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
 $branches = $stmt->fetchAll();
+
+// ============================================================
+// GET SELECTED BRANCH FROM SESSION OR GET
+// ============================================================
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+
+$selected_branch = $selected_branch ?? 0;
+
+// Get branch name for display
+$branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
 
 // ============================================================
 // GET PROVIDERS
@@ -71,10 +95,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Please select a branch.');
         }
         
-        $branch_name = '';
+        $branch_name_selected = '';
         foreach ($branches as $b) {
             if ($b['id'] == $branch_id) {
-                $branch_name = $b['branch_name'];
+                $branch_name_selected = $b['branch_name'];
                 break;
             }
         }
@@ -116,7 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $insert_stmt->execute([
             $stock_number,
             $user_id,
-            $branch_name,
+            $branch_name_selected,
             $branch_id,
             $stock_date,
             $provider_json,
@@ -128,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $stock_id = $db->lastInsertId();
         
-        logActivity($user_id, 'Add Evening Stock', 'Evening Stock', $stock_id, '', 'New evening stock added for branch: ' . $branch_name);
+        logActivity($user_id, 'Add Evening Stock', 'Evening Stock', $stock_id, '', 'New evening stock added for branch: ' . $branch_name_selected);
         
         $success_message = 'Evening stock added successfully! Stock Number: ' . $stock_number;
         $show_success = true;
@@ -152,6 +176,13 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Current Branch:</span>
+            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
+        </div>
+
         <div class="page-header">
             <div class="page-header-left">
                 <h2><i class="fas fa-moon"></i> Add Evening Stock</h2>
@@ -183,6 +214,7 @@ include_once '../../includes/admin_topbar.php';
         <div class="form-container">
             <form method="POST" action="" class="main-form" id="eveningStockForm" onsubmit="return validateForm()">
                 <input type="hidden" name="action" value="add_evening_stock">
+                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
                 
                 <div class="form-section">
                     <div class="section-header">
@@ -200,17 +232,12 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         </div>
                         <div class="form-group">
-                            <label for="branch_id">Branch <span class="required">*</span></label>
+                            <label for="branch_display">Branch <span class="required">*</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <select id="branch_id" name="branch_id" class="form-control" required onchange="window.location.href='?branch='+this.value">
-                                    <option value="">Select Branch</option>
-                                    <?php foreach ($branches as $b): ?>
-                                        <option value="<?php echo $b['id']; ?>">
-                                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <input type="text" id="branch_display" 
+                                       value="<?php echo htmlspecialchars($branch_name); ?>" 
+                                       class="form-control" disabled>
                             </div>
                         </div>
                     </div>
@@ -388,6 +415,46 @@ body {
 .main-wrapper { background: var(--form-bg) !important; }
 .main-content { background: var(--form-bg) !important; }
 
+/* ============================================================
+   BRANCH CARD - RED CARD
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-name {
+    font-weight: 700;
+    font-size: 15px;
+}
+
+/* Dark mode support for branch card */
+html.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -441,6 +508,9 @@ body {
     color: var(--form-text);
 }
 
+/* ============================================================
+   ALERT MESSAGES
+   ============================================================ */
 .alert {
     padding: 14px 18px;
     border-radius: 8px;
@@ -484,6 +554,9 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* ============================================================
+   FORM CONTAINER
+   ============================================================ */
 .form-container {
     background: var(--form-card-bg);
     border-radius: 12px;
@@ -589,9 +662,9 @@ body {
     box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
 }
 
-.input-group .form-control:focus + .input-icon,
-.input-group .form-control:focus ~ .input-icon {
-    color: #3B82F6;
+.input-group .form-control:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
 }
 
 .input-group select.form-control {
@@ -624,6 +697,9 @@ html.dark-mode .input-group select.form-control {
     margin-top: 2px;
 }
 
+/* ============================================================
+   PROVIDERS GRID
+   ============================================================ */
 .providers-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -710,6 +786,9 @@ html.dark-mode .provider-input .form-control {
     letter-spacing: 0.5px;
 }
 
+/* ============================================================
+   SUMMARY SECTION
+   ============================================================ */
 .summary-section {
     background: var(--form-hover);
 }
@@ -757,6 +836,9 @@ html.dark-mode .summary-item.total {
     color: #10B981;
 }
 
+/* ============================================================
+   FORM ACTIONS
+   ============================================================ */
 .form-actions {
     display: flex;
     gap: 12px;
@@ -817,6 +899,9 @@ html.dark-mode .summary-item.total {
     color: #991B1B;
 }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .providers-grid {
         grid-template-columns: repeat(2, 1fr);
@@ -824,6 +909,16 @@ html.dark-mode .summary-item.total {
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-name {
+        font-size: 14px;
+    }
+    
     .page-header {
         flex-direction: column;
         gap: 12px;
@@ -872,6 +967,12 @@ html.dark-mode .summary-item.total {
 }
 
 @media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
+    
     .providers-grid {
         grid-template-columns: 1fr;
     }
@@ -932,13 +1033,6 @@ function formatNumberDisplay(num) {
 }
 
 function validateForm() {
-    var branch = document.getElementById('branch_id');
-    if (!branch || branch.value === '') {
-        alert('Please select a branch.');
-        if (branch) branch.focus();
-        return false;
-    }
-    
     var hasProvider = false;
     var providerInputs = document.querySelectorAll('.provider-amount');
     providerInputs.forEach(function(input) {

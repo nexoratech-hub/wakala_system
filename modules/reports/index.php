@@ -39,65 +39,149 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 // ============================================================
-// GET REPORT STATISTICS
+// GET BRANCHES FOR FILTER
+// ============================================================
+$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+$stmt->execute();
+$branches = $stmt->fetchAll();
+
+// ============================================================
+// GET BRANCH FILTER
+// ============================================================
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
+// Get branch name for display
+$branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
+
+// ============================================================
+// GET REPORT STATISTICS WITH BRANCH FILTER
 // ============================================================
 
+// Helper function to add branch filter to SQL
+function addBranchFilter($sql, $selected_branch) {
+    if ($selected_branch > 0) {
+        return $sql . " WHERE branch_id = " . $selected_branch;
+    }
+    return $sql;
+}
+
 // 1. Total Daily Reports
-$daily_stmt = $db->query("SELECT COUNT(*) as count, SUM(total_commission) as total_comm, 
-                          SUM(total_deposits) as total_dep, SUM(total_withdrawals) as total_wth,
-                          SUM(net_profit) as total_profit 
-                          FROM daily_reports");
+$sql = "SELECT COUNT(*) as count, SUM(total_commission) as total_comm, 
+        SUM(total_deposits) as total_dep, SUM(total_withdrawals) as total_wth,
+        SUM(net_profit) as total_profit 
+        FROM daily_reports";
+$sql = addBranchFilter($sql, $selected_branch);
+$daily_stmt = $db->query($sql);
 $daily_stats = $daily_stmt->fetch();
 
 // 2. Total Morning Reports
-$morning_stmt = $db->query("SELECT COUNT(*) as count, SUM(cumm_total) as total_cumm 
-                            FROM morning_reports");
+$sql = "SELECT COUNT(*) as count, SUM(cumm_total) as total_cumm 
+        FROM morning_reports";
+$sql = addBranchFilter($sql, $selected_branch);
+$morning_stmt = $db->query($sql);
 $morning_stats = $morning_stmt->fetch();
 
 // 3. Total Evening Stocks
-$evening_stmt = $db->query("SELECT COUNT(*) as count, SUM(cumm_total) as total_cumm 
-                            FROM evening_stocks");
+$sql = "SELECT COUNT(*) as count, SUM(cumm_total) as total_cumm 
+        FROM evening_stocks";
+$sql = addBranchFilter($sql, $selected_branch);
+$evening_stmt = $db->query($sql);
 $evening_stats = $evening_stmt->fetch();
 
 // 4. Total Commissions
-$comm_stmt = $db->query("SELECT COUNT(*) as count, SUM(total_commission) as total_comm 
-                         FROM commissions");
+$sql = "SELECT COUNT(*) as count, SUM(total_commission) as total_comm 
+        FROM commissions";
+$sql = addBranchFilter($sql, $selected_branch);
+$comm_stmt = $db->query($sql);
 $comm_stats = $comm_stmt->fetch();
 
 // 5. Total Expenses
-$exp_stmt = $db->query("SELECT COUNT(*) as count, SUM(amount) as total_exp 
-                        FROM expenses WHERE is_business_expense = 1");
+$sql = "SELECT COUNT(*) as count, SUM(amount) as total_exp 
+        FROM expenses WHERE is_business_expense = 1";
+if ($selected_branch > 0) {
+    $sql .= " AND branch_id = " . $selected_branch;
+}
+$exp_stmt = $db->query($sql);
 $exp_stats = $exp_stmt->fetch();
 
 // 6. Total Salaries
-$salary_stmt = $db->query("SELECT COUNT(*) as count, SUM(net_pay) as total_salaries 
-                           FROM employee_salaries WHERE status = 'paid'");
+$sql = "SELECT COUNT(*) as count, SUM(net_pay) as total_salaries 
+        FROM employee_salaries WHERE status = 'paid'";
+if ($selected_branch > 0) {
+    $sql .= " AND branch_id = " . $selected_branch;
+}
+$salary_stmt = $db->query($sql);
 $salary_stats = $salary_stmt->fetch();
 
 // 7. Get recent reports (last 7 days)
-$recent_stmt = $db->prepare("SELECT 
+$sql = "SELECT 
     'Daily Report' as type,
     report_number as number,
     report_date as date,
     total_commission as amount,
-    'daily' as icon
+    'fa-file-alt' as icon
     FROM daily_reports 
-    WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-    ORDER BY report_date DESC LIMIT 5");
+    WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+if ($selected_branch > 0) {
+    $sql .= " AND branch_id = " . $selected_branch;
+}
+$sql .= " ORDER BY report_date DESC LIMIT 5";
+
+$recent_stmt = $db->prepare($sql);
 $recent_stmt->execute();
 $recent_reports = $recent_stmt->fetchAll();
 
+// If no daily reports, get from other sources
+if (empty($recent_reports)) {
+    $sql = "SELECT 
+        'Morning Report' as type,
+        report_number as number,
+        report_date as date,
+        cumm_total as amount,
+        'fa-sun' as icon
+        FROM morning_reports 
+        WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+    if ($selected_branch > 0) {
+        $sql .= " AND branch_id = " . $selected_branch;
+    }
+    $sql .= " ORDER BY report_date DESC LIMIT 5";
+    
+    $recent_stmt = $db->prepare($sql);
+    $recent_stmt->execute();
+    $recent_reports = $recent_stmt->fetchAll();
+}
+
 // 8. Get monthly trends (last 6 months)
-$monthly_stmt = $db->prepare("SELECT 
+$sql = "SELECT 
     DATE_FORMAT(report_date, '%Y-%m') as month,
     SUM(total_commission) as commission,
     SUM(total_deposits) as deposits,
     SUM(total_withdrawals) as withdrawals,
     SUM(net_profit) as profit
     FROM daily_reports 
-    WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-    GROUP BY DATE_FORMAT(report_date, '%Y-%m')
-    ORDER BY month ASC");
+    WHERE report_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)";
+if ($selected_branch > 0) {
+    $sql .= " AND branch_id = " . $selected_branch;
+}
+$sql .= " GROUP BY DATE_FORMAT(report_date, '%Y-%m')
+    ORDER BY month ASC";
+
+$monthly_stmt = $db->prepare($sql);
 $monthly_stmt->execute();
 $monthly_data = $monthly_stmt->fetchAll();
 
@@ -130,6 +214,23 @@ CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH FILTER CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Branch:</span>
+            <select id="branchFilter" class="branch-select" onchange="window.location.href='?branch='+this.value">
+                <option value="0">All Branches</option>
+                <?php foreach ($branches as $b): ?>
+                    <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($selected_branch > 0): ?>
+                <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
+            <?php endif; ?>
+        </div>
+
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
@@ -221,7 +322,7 @@ CONTENT
         <div class="quick-links-section">
             <h3><i class="fas fa-rocket"></i> Generate Reports</h3>
             <div class="quick-links-grid">
-                <a href="daily.php" class="quick-link">
+                <a href="daily.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#DBEAFE;color:#1D4ED8;">
                         <i class="fas fa-calendar-day"></i>
                     </div>
@@ -232,7 +333,7 @@ CONTENT
                     <i class="fas fa-chevron-right ql-arrow"></i>
                 </a>
 
-                <a href="monthly.php" class="quick-link">
+                <a href="monthly.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#D1FAE5;color:#065F46;">
                         <i class="fas fa-calendar-alt"></i>
                     </div>
@@ -243,7 +344,7 @@ CONTENT
                     <i class="fas fa-chevron-right ql-arrow"></i>
                 </a>
 
-                <a href="commission.php" class="quick-link">
+                <a href="commission.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#FEF3C7;color:#D97706;">
                         <i class="fas fa-hand-holding-usd"></i>
                     </div>
@@ -254,7 +355,7 @@ CONTENT
                     <i class="fas fa-chevron-right ql-arrow"></i>
                 </a>
 
-                <a href="expense.php" class="quick-link">
+                <a href="expense.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#FEE2E2;color:#DC2626;">
                         <i class="fas fa-receipt"></i>
                     </div>
@@ -265,7 +366,7 @@ CONTENT
                     <i class="fas fa-chevron-right ql-arrow"></i>
                 </a>
 
-                <a href="profit.php" class="quick-link">
+                <a href="profit.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#D1FAE5;color:#10B981;">
                         <i class="fas fa-chart-line"></i>
                     </div>
@@ -276,7 +377,7 @@ CONTENT
                     <i class="fas fa-chevron-right ql-arrow"></i>
                 </a>
 
-                <a href="export.php" class="quick-link">
+                <a href="export.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="quick-link">
                     <div class="ql-icon" style="background:#E0E7FF;color:#4F46E5;">
                         <i class="fas fa-file-export"></i>
                     </div>
@@ -295,7 +396,7 @@ CONTENT
         <div class="table-container">
             <div class="table-header">
                 <h3><i class="fas fa-clock"></i> Recent Reports (Last 7 Days)</h3>
-                <a href="daily.php" class="view-all-link">View All →</a>
+                <a href="daily.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="view-all-link">View All →</a>
             </div>
 
             <?php if (empty($recent_reports)): ?>
@@ -360,6 +461,81 @@ CONTENT
 STYLES
 ============================================================ -->
 <style>
+/* ============================================================
+   BRANCH CARD - RED
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    flex-wrap: wrap;
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-select {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    min-width: 150px;
+}
+
+.branch-card .branch-select:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.branch-card .branch-select:focus {
+    background: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.branch-card .branch-select option {
+    background: #1f2937;
+    color: #ffffff;
+}
+
+html.dark-mode .branch-card .branch-select option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+.branch-card .branch-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Dark mode support for branch card */
+html.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
@@ -790,6 +966,18 @@ html.dark-mode .card-profit .summary-icon { background: #065F46; color: #10B981;
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 120px;
+        width: 100%;
+        flex: 1;
+    }
+    
     .summaries-grid-six {
         grid-template-columns: repeat(2, 1fr);
     }
@@ -849,6 +1037,17 @@ html.dark-mode .card-profit .summary-icon { background: #065F46; color: #10B981;
 }
 
 @media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 6px;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 100%;
+        width: 100%;
+    }
+    
     .summaries-grid-six {
         grid-template-columns: 1fr 1fr;
         gap: 10px;

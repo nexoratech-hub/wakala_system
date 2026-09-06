@@ -49,6 +49,17 @@ $branches = $stmt->fetchAll();
 // ============================================================
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
 
+// Get selected branch name
+$selected_branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $selected_branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
+
 // ============================================================
 // DATE FILTER
 // ============================================================
@@ -126,12 +137,11 @@ PAGE CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-building"></i>
+            <span class="branch-label">Current Branch:</span>
+            <span class="branch-name"><?php echo htmlspecialchars($selected_branch_name); ?></span>
         </div>
 
         <!-- ===== PAGE HEADER ===== -->
@@ -383,38 +393,39 @@ body {
 }
 
 /* ============================================================
-   DARK MODE TOGGLE BUTTON
+   BRANCH CARD - RED CARD
    ============================================================ */
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
     border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
 }
 
-.dark-mode-btn:hover {
-    background: var(--bg-card-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
+.branch-card i {
+    font-size: 18px;
 }
 
-.dark-mode-btn i {
-    font-size: 16px;
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
 }
+
+.branch-card .branch-name {
+    font-weight: 700;
+    font-size: 15px;
+}
+
+/* ============================================================
+   DARK MODE TOGGLE - IN HEADER ONLY
+   ============================================================ */
+/* Dark mode toggle is now in the header (admin_topbar.php) */
 
 /* ============================================================
    PAGE HEADER
@@ -960,6 +971,16 @@ body {
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-name {
+        font-size: 14px;
+    }
+    
     .page-header {
         flex-direction: column;
         align-items: flex-start;
@@ -1037,6 +1058,12 @@ body {
         grid-template-columns: 1fr;
     }
     
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
+    
     .page-header .header-right .btn,
     .page-header .header-right .export-dropdown {
         flex: 1 1 100%;
@@ -1086,38 +1113,16 @@ JAVASCRIPT
 ============================================================ -->
 <script>
 // ============================================================
-// DARK MODE TOGGLE
+// DARK MODE TOGGLE - Now handled by header
 // ============================================================
-function toggleDarkMode() {
-    const body = document.body;
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    body.classList.toggle('dark-mode');
-    
-    if (body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
+// Dark mode toggle is now in admin_topbar.php
+// The localStorage check below will still work for saved preference
 
 // Check for saved dark mode preference
 document.addEventListener('DOMContentLoaded', function() {
     const darkMode = localStorage.getItem('darkMode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn?.querySelector('i');
-    const text = btn?.querySelector('span');
-    
     if (darkMode === 'enabled') {
         document.body.classList.add('dark-mode');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light Mode';
     }
 });
 

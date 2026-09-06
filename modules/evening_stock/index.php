@@ -169,6 +169,13 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Current Branch:</span>
+            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
+        </div>
+
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
@@ -223,28 +230,6 @@ DASHBOARD CONTENT
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
-
-        <!-- ===== BRANCH FILTER ===== -->
-        <div class="branch-filter-bar">
-            <div class="branch-filter-left">
-                <i class="fas fa-store-alt"></i>
-                <span>Branch:</span>
-                <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
-                    <option value="0">All Branches</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <?php if ($selected_branch > 0): ?>
-                    <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
-                <?php endif; ?>
-            </div>
-            <div class="branch-filter-right">
-                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
-            </div>
-        </div>
 
         <!-- ============================================================
         SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
@@ -454,6 +439,46 @@ body {
 .main-wrapper { background: var(--evening-bg) !important; }
 .main-content { background: var(--evening-bg) !important; }
 
+/* ============================================================
+   BRANCH CARD - RED CARD
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-name {
+    font-weight: 700;
+    font-size: 15px;
+}
+
+/* Dark mode support for branch card */
+html.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -619,72 +644,9 @@ body {
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
-.branch-filter-bar {
-    background: var(--evening-card-bg);
-    border-radius: 10px;
-    padding: 12px 20px;
-    margin-bottom: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 1px 3px var(--evening-shadow);
-    border: 1px solid var(--evening-border);
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    color: var(--evening-text);
-}
-
-.branch-filter-left i {
-    color: #DC2626;
-    font-size: 16px;
-}
-
-.branch-filter-left select {
-    padding: 5px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--evening-border);
-    background: var(--evening-input-bg);
-    font-size: 13px;
-    color: var(--evening-text);
-    outline: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-filter-left select option {
-    background: var(--evening-dropdown-bg);
-    color: var(--evening-text);
-}
-
-.branch-badge {
-    background: #DC2626;
-    color: white;
-    padding: 2px 12px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.branch-filter-right .date-display {
-    font-size: 13px;
-    color: var(--evening-text-secondary);
-}
-
-.branch-filter-right .date-display i {
-    color: #DC2626;
-}
-
+/* ============================================================
+   ALERT MESSAGES
+   ============================================================ */
 .alert {
     padding: 14px 18px;
     border-radius: 8px;
@@ -741,6 +703,9 @@ html.dark-mode .alert-danger {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* ============================================================
+   SUMMARIES CARDS
+   ============================================================ */
 .summaries-grid-three {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -820,6 +785,9 @@ html.dark-mode .alert-danger {
 .card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
 .card-cash { border-left: 4px solid #10B981; }
 
+/* ============================================================
+   TABLE CONTAINER
+   ============================================================ */
 .table-container {
     background: var(--evening-card-bg);
     border-radius: 10px;
@@ -1085,6 +1053,9 @@ html.dark-mode .alert-danger {
     margin: 0 0 24px 0;
 }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .summaries-grid-three {
         grid-template-columns: repeat(3, 1fr);
@@ -1092,6 +1063,16 @@ html.dark-mode .alert-danger {
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-name {
+        font-size: 14px;
+    }
+    
     .page-header {
         flex-direction: column;
         gap: 12px;
@@ -1126,12 +1107,6 @@ html.dark-mode .alert-danger {
     
     .summaries-grid-three .summary-card:last-child {
         grid-column: span 2;
-    }
-    
-    .branch-filter-bar {
-        flex-direction: column;
-        gap: 8px;
-        align-items: flex-start;
     }
     
     .table-header {
@@ -1171,6 +1146,12 @@ html.dark-mode .alert-danger {
 }
 
 @media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
+    
     .summaries-grid-three {
         grid-template-columns: 1fr 1fr;
         gap: 10px;

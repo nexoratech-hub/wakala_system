@@ -24,6 +24,33 @@ if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
     exit();
 }
 
+// Get user's branch
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
+
+// Get branch name
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
+    }
+}
+
 // Pagination
 $page = isset($_GET['page']) ? intval($_GET['page']) : 1;
 $per_page = 30;
@@ -33,7 +60,7 @@ $offset = ($page - 1) * $per_page;
 $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 $category_filter = isset($_GET['category']) ? $_GET['category'] : '';
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+$branch_filter = isset($_GET['branch']) ? intval($_GET['branch']) : $selected_branch;
 $is_business = isset($_GET['is_business']) ? intval($_GET['is_business']) : -1;
 
 $error = '';
@@ -63,9 +90,9 @@ try {
         $params[] = $category_filter;
     }
 
-    if ($selected_branch > 0 && ($role === 'admin' || $role === 'super_admin')) {
+    if ($branch_filter > 0 && ($role === 'admin' || $role === 'super_admin')) {
         $sql .= " AND e.branch_id = ?";
-        $params[] = $selected_branch;
+        $params[] = $branch_filter;
     }
 
     if ($is_business >= 0) {
@@ -114,9 +141,9 @@ try {
         $params_summary[] = $user_id;
     }
     
-    if ($selected_branch > 0 && ($role === 'admin' || $role === 'super_admin')) {
+    if ($branch_filter > 0 && ($role === 'admin' || $role === 'super_admin')) {
         $sql_summary .= " AND branch_id = ?";
-        $params_summary[] = $selected_branch;
+        $params_summary[] = $branch_filter;
     }
     
     $stmt = $db->prepare($sql_summary);
@@ -145,12 +172,22 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Dark Mode Toggle -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <i class="fas fa-store-alt"></i>
+                <span class="branch-indicator-label">Current Branch:</span>
+                <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                <?php if ($branch_code): ?>
+                    <span class="branch-indicator-code">(<?php echo htmlspecialchars($branch_code); ?>)</span>
+                <?php endif; ?>
+                <?php if ($branch_location): ?>
+                    <span class="branch-indicator-location"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_location); ?></span>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
+            </div>
         </div>
 
         <!-- Page Header -->
@@ -248,7 +285,7 @@ include_once '../../includes/admin_topbar.php';
                     <select name="branch" class="form-control">
                         <option value="0">All Branches</option>
                         <?php foreach ($branches as $b): ?>
-                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                            <option value="<?php echo $b['id']; ?>" <?php echo $branch_filter == $b['id'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($b['branch_name']); ?>
                             </option>
                         <?php endforeach; ?>
@@ -345,7 +382,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="pagination-links">
                         <?php if ($page > 1): ?>
-                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
+                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $branch_filter; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
                                 <i class="fas fa-chevron-left"></i>
                             </a>
                         <?php endif; ?>
@@ -355,14 +392,14 @@ include_once '../../includes/admin_topbar.php';
                         $end_page = min($total_pages, $page + 2);
                         for ($i = $start_page; $i <= $end_page; $i++):
                         ?>
-                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" 
+                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $branch_filter; ?>&is_business=<?php echo $is_business; ?>" 
                                class="page-link <?php echo $i == $page ? 'active' : ''; ?>">
                                 <?php echo $i; ?>
                             </a>
                         <?php endfor; ?>
                         
                         <?php if ($page < $total_pages): ?>
-                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
+                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $branch_filter; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
                                 <i class="fas fa-chevron-right"></i>
                             </a>
                         <?php endif; ?>
@@ -376,7 +413,77 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* Summary Cards */
+/* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 10px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    border: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-left i {
+    font-size: 18px;
+    color: rgba(255,255,255,0.9);
+}
+
+.branch-indicator-label {
+    font-weight: 500;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-code {
+    font-size: 12px;
+    opacity: 0.7;
+    color: #FFFFFF;
+}
+
+.branch-indicator-location {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.branch-indicator-location i {
+    font-size: 12px;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    color: rgba(255,255,255,0.8);
+}
+
+.branch-indicator-right .date-display i {
+    margin-right: 4px;
+}
+
+/* ============================================================
+   SUMMARY CARDS
+   ============================================================ */
 .summary-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -430,7 +537,9 @@ include_once '../../includes/admin_topbar.php';
     color: var(--text-primary);
 }
 
-/* Page Header */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -464,7 +573,9 @@ include_once '../../includes/admin_topbar.php';
     align-items: center;
 }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn {
     padding: 8px 18px;
     border: none;
@@ -497,7 +608,9 @@ include_once '../../includes/admin_topbar.php';
 
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 
-/* Export Dropdown */
+/* ============================================================
+   EXPORT DROPDOWN
+   ============================================================ */
 .dropdown { position: relative; display: inline-block; }
 .dropdown-menu {
     display: none;
@@ -528,7 +641,9 @@ include_once '../../includes/admin_topbar.php';
 .dropdown-menu a:hover { background: var(--bg-table-hover); }
 .dropdown-menu a i { width: 18px; font-size: 15px; }
 
-/* Filters */
+/* ============================================================
+   FILTERS
+   ============================================================ */
 .filters-bar {
     background: var(--bg-card);
     padding: 16px 20px;
@@ -575,7 +690,9 @@ include_once '../../includes/admin_topbar.php';
     box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
 }
 
-/* Table */
+/* ============================================================
+   TABLE
+   ============================================================ */
 .table-container {
     background: var(--bg-card);
     border-radius: 10px;
@@ -667,7 +784,9 @@ include_once '../../includes/admin_topbar.php';
 .text-danger { color: #DC2626; font-weight: 600; }
 .font-bold { font-weight: 700; }
 
-/* Action Buttons */
+/* ============================================================
+   ACTION BUTTONS
+   ============================================================ */
 .action-buttons { display: flex; gap: 4px; }
 .btn-action {
     width: 30px;
@@ -692,7 +811,9 @@ include_once '../../includes/admin_topbar.php';
 .btn-delete { background: #FEE2E2; color: #991B1B; }
 .btn-delete:hover { background: #991B1B; color: #ffffff; }
 
-/* Pagination */
+/* ============================================================
+   PAGINATION
+   ============================================================ */
 .pagination {
     display: flex;
     justify-content: space-between;
@@ -739,7 +860,9 @@ include_once '../../includes/admin_topbar.php';
     border-color: #bb0404;
 }
 
-/* Alert */
+/* ============================================================
+   ALERT
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -752,7 +875,9 @@ include_once '../../includes/admin_topbar.php';
 
 .no-data { padding: 40px 20px; text-align: center; }
 
-/* Dark Mode */
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -768,54 +893,15 @@ include_once '../../includes/admin_topbar.php';
     --shadow-hover: rgba(0,0,0,0.08);
 }
 
-body.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
-}
-
 body {
     background: var(--bg-body) !important;
     color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .summary-cards {
         grid-template-columns: repeat(2, 1fr);
@@ -838,38 +924,28 @@ body {
         flex-direction: column;
         align-items: center;
     }
+    .branch-indicator {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 12px 16px;
+    }
+    .branch-indicator-left {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 480px) {
+    .branch-indicator-name {
+        font-size: 13px;
+    }
+    .branch-indicator-location {
+        font-size: 11px;
+    }
 }
 </style>
 
 <script>
-// ============================================================
-// DARK MODE TOGGLE
-// ============================================================
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    if (document.body.classList.contains('dark-mode')) {
-        btn.querySelector('i').className = 'fas fa-sun';
-        btn.querySelector('span').textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        btn.querySelector('i').className = 'fas fa-moon';
-        btn.querySelector('span').textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
-});
-
 // ============================================================
 // EXPORT DROPDOWN
 // ============================================================

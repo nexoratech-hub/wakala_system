@@ -59,11 +59,36 @@ if ($current_branch > 0) {
 }
 
 // ============================================================
-// GET USER DATA
+// GET USER DATA - INCLUDING PROFILE PICTURE
 // ============================================================
 $full_name = $_SESSION['full_name'] ?? 'Admin';
 $role = $_SESSION['role'] ?? 'admin';
-$profile_image = '../../assets/images/logo.PNG';
+$user_id = $_SESSION['user_id'] ?? 0;
+
+// Get profile picture from database
+$profile_image = '../../assets/images/logo.PNG'; // Default
+
+if ($user_id > 0) {
+    try {
+        global $db;
+        if (isset($db)) {
+            $stmt = $db->prepare("SELECT profile_pic FROM employees WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user_data = $stmt->fetch();
+            
+            if ($user_data && !empty($user_data['profile_pic'])) {
+                // Check if file exists
+                $pic_path = '../../' . $user_data['profile_pic'];
+                if (file_exists($pic_path)) {
+                    $profile_image = $pic_path;
+                }
+            }
+        }
+    } catch (Exception $e) {
+        // Use default if there's an error
+        $profile_image = '../../assets/images/logo.PNG';
+    }
+}
 
 // ============================================================
 // GET CURRENT PAGE
@@ -147,7 +172,6 @@ ADMIN TOP BAR
             <i class="fas fa-bars"></i>
         </button>
         <div class="topbar-brand">
-            <!-- Company name removed - only icon and page title -->
             <i class="fas fa-store brand-icon"></i>
             <span class="brand-page">
                 <i class="fas <?php echo $page_icon; ?>"></i>
@@ -157,7 +181,7 @@ ADMIN TOP BAR
     </div>
     
     <div class="topbar-right">
-        <!-- Branch Selector - FIXED -->
+        <!-- Branch Selector -->
         <div class="branch-selector">
             <i class="fas fa-store branch-icon"></i>
             <select id="branchFilter" onchange="window.location.href='?<?php echo $branch_param; ?>='+this.value">
@@ -284,7 +308,7 @@ html.dark-mode {
     top: 0;
     left: 260px;
     right: 0;
-    height: 72px; /* Increased height */
+    height: 72px;
     background: var(--topbar-bg);
     padding: 0 20px;
     display: flex;
@@ -793,7 +817,7 @@ html.dark-mode {
    ============================================================ */
 .main-wrapper {
     margin-left: 260px;
-    padding-top: 72px; /* Match increased height */
+    padding-top: 72px;
     min-height: 100vh;
     display: flex;
     flex-direction: column;

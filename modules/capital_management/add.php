@@ -26,6 +26,15 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 $error = '';
 $success = '';
 
+// Get selected branch from session
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
 // Get branches
 try {
     $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
@@ -34,6 +43,17 @@ try {
 } catch (PDOException $e) {
     $branches = [];
     error_log("Error fetching branches: " . $e->getMessage());
+}
+
+// Get branch name for display
+$branch_name = 'Main Branch';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
 }
 
 // Get employees
@@ -70,13 +90,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $capital_number = generateNumber('CAP');
             
             // Get branch name
-            $branch_name = 'Main';
+            $branch_name_selected = 'Main';
             if ($branch_id > 0) {
                 $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
                 $stmt->execute([$branch_id]);
                 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($branch) {
-                    $branch_name = $branch['branch_name'];
+                    $branch_name_selected = $branch['branch_name'];
                 }
             }
             
@@ -91,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $capital_number,
                 $user_id,
                 $branch_id > 0 ? $branch_id : null,
-                $branch_name,
+                $branch_name_selected,
                 $transaction_date,
                 $transaction_type,
                 $amount,
@@ -141,11 +161,11 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Current Branch:</span>
+            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
         </div>
 
         <div class="page-header">
@@ -196,7 +216,9 @@ include_once '../../includes/admin_topbar.php';
                         <select name="branch_id" class="form-control">
                             <option value="0">Main Branch</option>
                             <?php foreach ($branches as $b): ?>
-                                <option value="<?php echo $b['id']; ?>"><?php echo htmlspecialchars($b['branch_name']); ?></option>
+                                <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($b['branch_name']); ?>
+                                </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -257,12 +279,82 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
+/* ============================================================
+   BRANCH CARD - RED
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-name {
+    font-weight: 700;
+    font-size: 15px;
+}
+
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1f2937;
+    margin: 0;
+}
+
+.page-header .header-left h2 i {
+    margin-right: 10px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 4px 0 0 0;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ============================================================
+   FORM CARD
+   ============================================================ */
 .form-card {
-    background: var(--bg-card);
+    background: #ffffff;
     border-radius: 10px;
     padding: 24px;
-    border: 1px solid var(--border-color);
+    border: 1px solid #e5e7eb;
     margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
 .form-row {
@@ -281,18 +373,20 @@ include_once '../../includes/admin_topbar.php';
 .form-group label {
     font-size: 13px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: #374151;
 }
 
-.form-group label .required { color: #DC2626; }
+.form-group label .required {
+    color: #DC2626;
+}
 
 .form-control {
     padding: 10px 14px;
-    border: 1px solid var(--border-color);
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
     font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-input);
+    color: #1f2937;
+    background: #f9fafb;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
 }
@@ -308,21 +402,54 @@ textarea.form-control {
     min-height: 60px;
 }
 
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-primary {
+    background: #bb0404;
+    color: white;
+}
+.btn-primary:hover {
+    background: #8a0303;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(187,4,4,0.3);
+}
+
+.btn-secondary {
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #e5e7eb;
+}
+.btn-secondary:hover {
+    background: #e5e7eb;
+}
+
 .form-actions {
     display: flex;
     gap: 12px;
     margin-top: 8px;
     padding-top: 16px;
-    border-top: 1px solid var(--border-color);
+    border-top: 1px solid #e5e7eb;
 }
 
-.btn-secondary {
-    background: var(--bg-table-even);
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-}
-.btn-secondary:hover { background: var(--bg-table-hover); }
-
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -331,20 +458,31 @@ textarea.form-control {
     align-items: center;
     gap: 12px;
 }
-.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
 
+/* ============================================================
+   TYPE INFO CARD
+   ============================================================ */
 .type-info-card {
-    background: var(--bg-card);
+    background: #ffffff;
     border-radius: 10px;
     padding: 16px 20px;
-    border: 1px solid var(--border-color);
+    border: 1px solid #e5e7eb;
 }
 
 .type-info-card h4 {
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: #1f2937;
     margin: 0 0 12px 0;
 }
 
@@ -356,7 +494,7 @@ textarea.form-control {
 
 .type-info-item {
     font-size: 13px;
-    color: var(--text-secondary);
+    color: #374151;
     padding: 6px 10px;
     border-radius: 6px;
     display: flex;
@@ -378,15 +516,46 @@ textarea.form-control {
 .type-red .dot { background: #DC2626; }
 .type-orange .dot { background: #F59E0B; }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
-    .form-row { grid-template-columns: 1fr; }
-    .type-info-grid { grid-template-columns: 1fr; }
-    .form-actions { flex-direction: column; }
-    .form-actions .btn { width: 100%; justify-content: center; }
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-name {
+        font-size: 14px;
+    }
+    
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+    .type-info-grid {
+        grid-template-columns: 1fr;
+    }
+    .form-actions {
+        flex-direction: column;
+    }
+    .form-actions .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }
 
-/* Dark mode support */
-body.dark-mode .type-info-item { color: var(--text-secondary); }
+@media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
+}
 </style>
 
 <script>
@@ -398,34 +567,6 @@ function toggleTypeFields(type) {
         refFields.style.display = 'none';
     }
 }
-
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    if (document.body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
-});
 </script>
 
 </body>

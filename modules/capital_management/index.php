@@ -30,6 +30,14 @@ $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 $type_filter = isset($_GET['type']) ? $_GET['type'] : '';
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
 
+// Store selected branch in session
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
 try {
     // Build query
     $sql = "SELECT cm.*, 
@@ -131,12 +139,11 @@ PAGE CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Current Branch:</span>
+            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
         </div>
 
         <!-- ===== PAGE HEADER ===== -->
@@ -199,17 +206,6 @@ PAGE CONTENT
                 <div class="filter-group">
                     <label>To</label>
                     <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
-                </div>
-                <div class="filter-group">
-                    <label>Branch</label>
-                    <select name="branch" class="form-control">
-                        <option value="0">All Branches</option>
-                        <?php foreach ($branches as $b): ?>
-                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($b['branch_name']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
                 </div>
                 <div class="filter-group">
                     <label>Type</label>
@@ -337,32 +333,41 @@ body {
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-/* Dark Mode Toggle */
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
+/* ============================================================
+   BRANCH CARD - RED CARD
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
     border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
 }
 
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-name {
+    font-weight: 700;
+    font-size: 15px;
+}
+
+/* Dark mode support for branch card */
+body.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
 }
 
 /* Page Header */
@@ -661,6 +666,16 @@ body {
 
 /* Responsive */
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-name {
+        font-size: 14px;
+    }
+    
     .capital-summary-content {
         grid-template-columns: repeat(2, 1fr);
         gap: 12px;
@@ -675,6 +690,14 @@ body {
     .header-right .btn { flex: 1; justify-content: center; }
     .dropdown { flex: 1; }
     .dropdown-toggle { width: 100%; justify-content: center; }
+}
+
+@media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
 }
 
 .no-data { padding: 40px 20px; text-align: center; }

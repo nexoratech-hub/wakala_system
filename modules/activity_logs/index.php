@@ -24,6 +24,35 @@ if ($role !== 'admin' && $role !== 'super_admin') {
     exit();
 }
 
+// Get branches for filter
+try {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+    $stmt->execute();
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $branches = [];
+}
+
+// Branch filter
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
+// Get branch name for display
+$branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
+
 // Pagination
 $page = isset($_GET['page']) ? intval($_GET['page']) : 1;
 $per_page = 50;
@@ -42,7 +71,7 @@ $total_records = 0;
 $total_pages = 0;
 
 try {
-    // Build query
+    // Build query with branch filter
     $sql = "SELECT al.*, 
             e.full_name as employee_name,
             e.username,
@@ -52,6 +81,11 @@ try {
             LEFT JOIN branches b ON al.branch_id = b.id
             WHERE DATE(al.created_at) BETWEEN ? AND ?";
     $params = [$from_date, $to_date];
+
+    if ($selected_branch > 0) {
+        $sql .= " AND al.branch_id = ?";
+        $params[] = $selected_branch;
+    }
 
     if (!empty($action_filter)) {
         $sql .= " AND al.action LIKE ?";
@@ -110,14 +144,22 @@ try {
 
 // Get summary statistics
 try {
-    $stmt = $db->prepare("SELECT 
+    $sql_summary = "SELECT 
             COUNT(*) as total_activities,
             COUNT(DISTINCT employee_id) as unique_users,
             COUNT(DISTINCT module) as unique_modules,
             MAX(created_at) as last_activity
             FROM activity_logs
-            WHERE DATE(created_at) BETWEEN ? AND ?");
-    $stmt->execute([$from_date, $to_date]);
+            WHERE DATE(created_at) BETWEEN ? AND ?";
+    $params_summary = [$from_date, $to_date];
+    
+    if ($selected_branch > 0) {
+        $sql_summary .= " AND branch_id = ?";
+        $params_summary[] = $selected_branch;
+    }
+    
+    $stmt = $db->prepare($sql_summary);
+    $stmt->execute($params_summary);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $summary = [
@@ -136,12 +178,21 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Dark Mode Toggle -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH FILTER CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Branch:</span>
+            <select id="branchFilter" class="branch-select" onchange="window.location.href='?branch='+this.value">
+                <option value="0">All Branches</option>
+                <?php foreach ($branches as $b): ?>
+                    <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($selected_branch > 0): ?>
+                <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
+            <?php endif; ?>
         </div>
 
         <!-- Page Header -->
@@ -356,7 +407,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="pagination-links">
                         <?php if ($page > 1): ?>
-                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" class="page-link">
+                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>&branch=<?php echo $selected_branch; ?>" class="page-link">
                                 <i class="fas fa-chevron-left"></i>
                             </a>
                         <?php endif; ?>
@@ -366,14 +417,14 @@ include_once '../../includes/admin_topbar.php';
                         $end_page = min($total_pages, $page + 2);
                         for ($i = $start_page; $i <= $end_page; $i++):
                         ?>
-                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" 
+                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>&branch=<?php echo $selected_branch; ?>" 
                                class="page-link <?php echo $i == $page ? 'active' : ''; ?>">
                                 <?php echo $i; ?>
                             </a>
                         <?php endfor; ?>
                         
                         <?php if ($page < $total_pages): ?>
-                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" class="page-link">
+                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>&branch=<?php echo $selected_branch; ?>" class="page-link">
                                 <i class="fas fa-chevron-right"></i>
                             </a>
                         <?php endif; ?>
@@ -413,7 +464,84 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* Summary Cards */
+/* ============================================================
+   BRANCH CARD - RED
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    flex-wrap: wrap;
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-select {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    min-width: 150px;
+}
+
+.branch-card .branch-select:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.branch-card .branch-select:focus {
+    background: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.branch-card .branch-select option {
+    background: #1f2937;
+    color: #ffffff;
+}
+
+body.dark-mode .branch-card .branch-select option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+.branch-card .branch-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Dark mode support for branch card */
+body.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
+/* ============================================================
+   SUMMARY CARDS
+   ============================================================ */
 .summary-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -467,7 +595,9 @@ include_once '../../includes/admin_topbar.php';
     color: var(--text-primary);
 }
 
-/* Page Header */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -501,7 +631,9 @@ include_once '../../includes/admin_topbar.php';
     align-items: center;
 }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn {
     padding: 8px 18px;
     border: none;
@@ -549,7 +681,9 @@ include_once '../../includes/admin_topbar.php';
 }
 .btn-detail:hover { background: #1D4ED8; color: white; }
 
-/* Filters */
+/* ============================================================
+   FILTERS BAR
+   ============================================================ */
 .filters-bar {
     background: var(--bg-card);
     padding: 16px 20px;
@@ -596,7 +730,9 @@ include_once '../../includes/admin_topbar.php';
     box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
 }
 
-/* Table */
+/* ============================================================
+   TABLE
+   ============================================================ */
 .table-container {
     background: var(--bg-card);
     border-radius: 10px;
@@ -697,7 +833,9 @@ include_once '../../includes/admin_topbar.php';
     font-family: monospace;
 }
 
-/* Action Buttons */
+/* ============================================================
+   ACTION BUTTONS
+   ============================================================ */
 .action-buttons { display: flex; gap: 4px; }
 .btn-action {
     width: 30px;
@@ -719,7 +857,9 @@ include_once '../../includes/admin_topbar.php';
 .btn-delete { background: #FEE2E2; color: #991B1B; }
 .btn-delete:hover { background: #991B1B; color: #ffffff; }
 
-/* Pagination */
+/* ============================================================
+   PAGINATION
+   ============================================================ */
 .pagination {
     display: flex;
     justify-content: space-between;
@@ -766,7 +906,9 @@ include_once '../../includes/admin_topbar.php';
     border-color: #bb0404;
 }
 
-/* Modal */
+/* ============================================================
+   MODAL
+   ============================================================ */
 .modal {
     position: fixed;
     top: 0;
@@ -822,7 +964,9 @@ include_once '../../includes/admin_topbar.php';
     padding: 20px;
 }
 
-/* Alert */
+/* ============================================================
+   ALERT
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -837,7 +981,9 @@ include_once '../../includes/admin_topbar.php';
 .no-data { padding: 40px 20px; text-align: center; }
 .text-muted { color: var(--text-muted); }
 
-/* Dark Mode */
+/* ============================================================
+   DARK MODE
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -901,6 +1047,9 @@ body {
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .summary-cards {
         grid-template-columns: repeat(2, 1fr);
@@ -908,6 +1057,18 @@ body {
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 120px;
+        width: 100%;
+        flex: 1;
+    }
+    
     .summary-cards {
         grid-template-columns: 1fr;
     }
@@ -922,6 +1083,19 @@ body {
     .pagination {
         flex-direction: column;
         align-items: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 6px;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 100%;
+        width: 100%;
     }
 }
 </style>

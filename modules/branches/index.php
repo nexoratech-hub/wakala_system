@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/branches/index.php
 // WAKALA FINANCIAL SYSTEM - BRANCHES LIST
-// WITH FULL DARK MODE SUPPORT
+// WITH BRANCH FILTER AND PROVIDER COUNTS
 // ================================================================
 
 // ============================================================
@@ -46,7 +46,47 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 // ============================================================
-// GET BRANCHES LIST
+// GET USER'S BRANCH (for filtering)
+// ============================================================
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+
+// If no filter, try to get from session or user
+if ($selected_branch == 0) {
+    $selected_branch = isset($_SESSION['selected_branch']) ? intval($_SESSION['selected_branch']) : 0;
+}
+
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['selected_branch'] = $selected_branch;
+    }
+}
+
+// Store in session
+if ($selected_branch > 0) {
+    $_SESSION['selected_branch'] = $selected_branch;
+}
+
+// Get branch name for display
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
+    }
+}
+
+// ============================================================
+// GET BRANCHES LIST WITH FILTER
 // ============================================================
 $sql = "SELECT 
             b.id,
@@ -59,28 +99,44 @@ $sql = "SELECT
             b.is_active,
             b.created_at,
             b.updated_at,
-            e.full_name as manager_name
+            e.full_name as manager_name,
+            COUNT(DISTINCT bp.id) as provider_count,
+            COUNT(DISTINCT CASE WHEN p.provider_type = 'bank' THEN p.id END) as bank_count,
+            COUNT(DISTINCT CASE WHEN p.provider_type = 'mobile_money' THEN p.id END) as mobile_count
         FROM branches b
         LEFT JOIN employees e ON b.manager_id = e.id
-        ORDER BY b.branch_name ASC";
+        LEFT JOIN branch_providers bp ON b.id = bp.branch_id
+        LEFT JOIN providers p ON bp.provider_id = p.id AND p.is_active = 1
+        WHERE b.is_active = 1";
+
+$params = [];
+
+// Filter by selected branch
+if ($selected_branch > 0) {
+    $sql .= " AND b.id = ?";
+    $params[] = $selected_branch;
+}
+
+$sql .= " GROUP BY b.id
+          ORDER BY b.branch_name ASC";
 
 $stmt = $db->prepare($sql);
-$stmt->execute();
+$stmt->execute($params);
 $branches = $stmt->fetchAll();
 
 // Count branches
 $branch_count = count($branches);
 
-// Count active branches
+// Count active and inactive branches
 $active_count = 0;
+$inactive_count = 0;
 foreach ($branches as $b) {
     if ($b['is_active'] == 1) {
         $active_count++;
+    } else {
+        $inactive_count++;
     }
 }
-
-// Count inactive branches
-$inactive_count = $branch_count - $active_count;
 
 // ============================================================
 // HANDLE SUCCESS/ERROR MESSAGES
@@ -110,6 +166,43 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Current Filter</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                    <?php if ($branch_code): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php if ($branch_location): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($branch_location); ?></span>
+                    </div>
+                <?php endif; ?>
+                <div class="branch-count-badge">
+                    <i class="fas fa-university"></i>
+                    <span><?php echo $branch_count; ?> Branches</span>
+                </div>
+                <?php if ($selected_branch > 0): ?>
+                    <a href="index.php?branch=0" class="branch-filter-clear">
+                        <i class="fas fa-times"></i> Clear Filter
+                    </a>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display">
+                    <i class="far fa-calendar-alt"></i> 
+                    <?php echo date('d M Y, H:i:s'); ?>
+                </span>
+            </div>
+        </div>
+
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
@@ -118,12 +211,25 @@ DASHBOARD CONTENT
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
-                    <!-- ADD Button - FIRST -->
+                    <div class="filter-branch-select">
+                        <label>Branch:</label>
+                        <select id="branchFilter" onchange="window.location.href='?branch='+this.value" class="branch-filter-select">
+                            <option value="0">All Branches</option>
+                            <?php
+                            $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+                            $stmt->execute();
+                            $all_branches = $stmt->fetchAll();
+                            foreach ($all_branches as $b):
+                            ?>
+                                <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($b['branch_name']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
                     <a href="add.php" class="btn btn-add">
                         <i class="fas fa-plus-circle"></i> Add Branch
                     </a>
-                    
-                    <!-- Export Dropdown - SECOND -->
                     <div class="dropdown">
                         <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
                             <i class="fas fa-download"></i> Export
@@ -171,7 +277,6 @@ DASHBOARD CONTENT
         SUMMARIES CARDS
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- Total Branches - Blue -->
             <div class="summary-card card-total">
                 <div class="summary-icon"><i class="fas fa-store-alt"></i></div>
                 <div class="summary-content">
@@ -181,7 +286,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- Active Branches - Green -->
             <div class="summary-card card-active">
                 <div class="summary-icon"><i class="fas fa-check-circle"></i></div>
                 <div class="summary-content">
@@ -191,7 +295,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- Inactive Branches - Red -->
             <div class="summary-card card-inactive">
                 <div class="summary-icon"><i class="fas fa-times-circle"></i></div>
                 <div class="summary-content">
@@ -207,7 +310,7 @@ DASHBOARD CONTENT
         ============================================================ -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Branches</h3>
+                <h3><i class="fas fa-list"></i> <?php echo htmlspecialchars($branch_name); ?> Branches</h3>
                 <div class="table-actions">
                     <select id="statusFilter" class="filter-select" onchange="filterByStatus(this.value)">
                         <option value="">All Status</option>
@@ -239,6 +342,7 @@ DASHBOARD CONTENT
                                 <th>Phone</th>
                                 <th>Email</th>
                                 <th>Manager</th>
+                                <th>Providers</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -251,31 +355,37 @@ DASHBOARD CONTENT
                                 $status = $is_active ? 'Active' : 'Inactive';
                                 $status_class = $is_active ? 'status-active' : 'status-inactive';
                                 $status_icon = $is_active ? 'fa-check-circle' : 'fa-times-circle';
+                                
+                                $provider_count = $branch['provider_count'] ?? 0;
+                                $bank_count = $branch['bank_count'] ?? 0;
+                                $mobile_count = $branch['mobile_count'] ?? 0;
                             ?>
-                                <tr data-status="<?php echo $is_active; ?>">
+                                <tr data-status="<?php echo $is_active; ?>" data-branch="<?php echo htmlspecialchars($branch['branch_name']); ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <span class="branch-code">
-                                            <?php echo htmlspecialchars($branch['branch_code']); ?>
-                                        </span>
+                                        <span class="branch-code"><?php echo htmlspecialchars($branch['branch_code']); ?></span>
                                     </td>
                                     <td>
-                                        <span class="branch-name-text">
+                                        <span class="branch-name">
+                                            <i class="fas fa-store" style="color:#3B82F6; margin-right:6px;"></i>
                                             <?php echo htmlspecialchars($branch['branch_name']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="branch-location">
+                                        <span class="branch-location-cell">
+                                            <i class="fas fa-map-marker-alt" style="color:#6B7280; font-size:12px;"></i>
                                             <?php echo htmlspecialchars($branch['location'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-phone">
+                                            <i class="fas fa-phone" style="color:#6B7280; font-size:12px;"></i>
                                             <?php echo htmlspecialchars($branch['phone'] ?? '—'); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="branch-email">
+                                            <i class="fas fa-envelope" style="color:#6B7280; font-size:12px;"></i>
                                             <?php echo htmlspecialchars($branch['email'] ?? '—'); ?>
                                         </span>
                                     </td>
@@ -283,6 +393,26 @@ DASHBOARD CONTENT
                                         <span class="manager-name">
                                             <?php echo htmlspecialchars($branch['manager_name'] ?? '—'); ?>
                                         </span>
+                                    </td>
+                                    <td>
+                                        <div class="provider-stats">
+                                            <span class="provider-total" title="Total Providers">
+                                                <i class="fas fa-university"></i> <?php echo $provider_count; ?>
+                                            </span>
+                                            <?php if ($bank_count > 0): ?>
+                                                <span class="provider-bank" title="Banks">
+                                                    <i class="fas fa-landmark"></i> <?php echo $bank_count; ?>
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($mobile_count > 0): ?>
+                                                <span class="provider-mobile" title="Mobile Money">
+                                                    <i class="fas fa-mobile-alt"></i> <?php echo $mobile_count; ?>
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($provider_count == 0): ?>
+                                                <span class="provider-none">—</span>
+                                            <?php endif; ?>
+                                        </div>
                                     </td>
                                     <td>
                                         <span class="status-badge <?php echo $status_class; ?>">
@@ -320,45 +450,49 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+DASHBOARD STYLES - WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
-   DARK MODE VARIABLES
+   CSS VARIABLES - LIGHT & DARK MODE
    ============================================================ */
 :root {
-    --branches-bg: #FFFFFF;
+    --branches-bg: #f3f4f6;
     --branches-text: #1F2937;
     --branches-text-secondary: #6B7280;
     --branches-text-light: #9CA3AF;
     --branches-border: #E5E7EB;
     --branches-card-bg: #FFFFFF;
-    --branches-card-header: #FAFBFC;
     --branches-input-bg: #F9FAFB;
     --branches-hover: #F3F4F6;
     --branches-shadow: rgba(0,0,0,0.06);
     --branches-shadow-lg: rgba(0,0,0,0.12);
     --branches-dropdown-bg: #FFFFFF;
     --branches-dropdown-border: #E5E7EB;
+    --branches-scrollbar: #DC2626;
+    --branches-scrollbar-track: #F3F4F6;
 }
 
 html.dark-mode {
-    --branches-bg: #1F2937;
-    --branches-text: #F9FAFB;
-    --branches-text-secondary: #9CA3AF;
-    --branches-text-light: #6B7280;
-    --branches-border: #374151;
-    --branches-card-bg: #1F2937;
-    --branches-card-header: #374151;
-    --branches-input-bg: #374151;
-    --branches-hover: #374151;
-    --branches-shadow: rgba(0,0,0,0.3);
-    --branches-shadow-lg: rgba(0,0,0,0.4);
-    --branches-dropdown-bg: #1F2937;
-    --branches-dropdown-border: #374151;
+    --branches-bg: #0f172a;
+    --branches-text: #F1F5F9;
+    --branches-text-secondary: #94A3B8;
+    --branches-text-light: #64748B;
+    --branches-border: #334155;
+    --branches-card-bg: #1E293B;
+    --branches-input-bg: #334155;
+    --branches-hover: #2D3A4F;
+    --branches-shadow: rgba(0,0,0,0.4);
+    --branches-shadow-lg: rgba(0,0,0,0.6);
+    --branches-dropdown-bg: #1E293B;
+    --branches-dropdown-border: #334155;
+    --branches-scrollbar: #DC2626;
+    --branches-scrollbar-track: #1E293B;
 }
 
-/* Apply Dark Mode to Full Page */
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
 body {
     background: var(--branches-bg) !important;
     color: var(--branches-text);
@@ -367,16 +501,209 @@ body {
 
 .main-wrapper {
     background: var(--branches-bg) !important;
-    transition: background 0.3s ease;
 }
 
 .main-content {
     background: var(--branches-bg) !important;
-    transition: background 0.3s ease;
+}
+
+/* Scrollbar */
+.main-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.main-content::-webkit-scrollbar-track {
+    background: var(--branches-scrollbar-track);
+}
+
+.main-content::-webkit-scrollbar-thumb {
+    background: var(--branches-scrollbar);
+    border-radius: 4px;
+}
+
+.main-content::-webkit-scrollbar-thumb:hover {
+    background: #8B0000;
 }
 
 /* ============================================================
-   PAGE HEADER - DARK MODE
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    padding: 14px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.35);
+    border: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.branch-indicator::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 200px;
+    height: 200px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator::after {
+    content: '';
+    position: absolute;
+    bottom: -60%;
+    left: 30%;
+    width: 150px;
+    height: 150px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: #FFFFFF;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+
+.branch-icon-wrapper {
+    width: 44px;
+    height: 44px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.branch-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.branch-indicator-label {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 16px;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+
+.branch-indicator-code {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+    color: #FFFFFF;
+    padding: 2px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location i {
+    font-size: 12px;
+}
+
+.branch-count-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    padding: 4px 14px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.branch-count-badge i {
+    font-size: 13px;
+}
+
+.branch-filter-clear {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #FFFFFF;
+    padding: 4px 14px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+.branch-filter-clear:hover {
+    background: rgba(255, 255, 255, 0.25);
+    color: #FFFFFF;
+}
+
+.branch-indicator-right {
+    position: relative;
+    z-index: 1;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.branch-indicator-right .date-display i {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* ============================================================
+   PAGE HEADER
    ============================================================ */
 .page-header {
     display: flex;
@@ -401,7 +728,7 @@ body {
 }
 
 .page-header-left h2 i {
-    color: #3B82F6;
+    color: #DC2626;
     margin-right: 8px;
 }
 
@@ -418,79 +745,52 @@ body {
     display: flex;
     gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
-.alert {
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 16px;
+.filter-branch-select {
     display: flex;
     align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    position: relative;
-    animation: slideDown 0.4s ease forwards;
+    gap: 8px;
+    background: var(--branches-card-bg);
+    padding: 4px 12px 4px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--branches-border);
     transition: all 0.3s ease;
 }
 
-.alert-success {
-    background: #D1FAE5;
-    color: #065F46;
-    border: 1px solid #A7F3D0;
+.filter-branch-select label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--branches-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-.alert-danger {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1px solid #FECACA;
-}
-
-html.dark-mode .alert-success {
-    background: #065F46;
-    color: #D1FAE5;
-    border: 1px solid #047857;
-}
-
-html.dark-mode .alert-danger {
-    background: #7F1D1D;
-    color: #FEE2E2;
-    border: 1px solid #991B1B;
-}
-
-.alert i {
-    font-size: 20px;
-    flex-shrink: 0;
-}
-
-.alert span {
-    flex: 1;
-}
-
-.alert-close {
-    background: transparent;
+.branch-filter-select {
+    padding: 6px 10px;
     border: none;
-    font-size: 22px;
-    color: inherit;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--branches-text);
+    background: transparent;
+    outline: none;
     cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-    transition: opacity 0.2s;
+    min-width: 120px;
 }
 
-.alert-close:hover {
-    opacity: 1;
+.branch-filter-select:focus {
+    outline: none;
 }
 
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
+.branch-filter-select option {
+    background: var(--branches-dropdown-bg);
+    color: var(--branches-text);
 }
 
 /* ============================================================
-   ADD BUTTON - RED
+   BUTTONS
    ============================================================ */
 .btn-add {
     background: #DC2626;
@@ -515,9 +815,6 @@ html.dark-mode .alert-danger {
     color: white;
 }
 
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
 .btn-add-empty {
     background: #DC2626;
     color: white;
@@ -530,8 +827,6 @@ html.dark-mode .alert-danger {
     align-items: center;
     gap: 8px;
     transition: all 0.3s ease;
-    border: none;
-    cursor: pointer;
 }
 
 .btn-add-empty:hover {
@@ -541,9 +836,6 @@ html.dark-mode .alert-danger {
     color: white;
 }
 
-/* ============================================================
-   EXPORT BUTTON - BLUE
-   ============================================================ */
 .btn-export {
     background: #1E40AF;
     color: white;
@@ -613,18 +905,81 @@ html.dark-mode .alert-danger {
     background: var(--branches-hover);
 }
 
-.dropdown-menu a i {
-    width: 18px;
-    font-size: 15px;
-}
-
 .dropdown-menu a i.fa-file-csv { color: #0B5ED7; }
 .dropdown-menu a i.fa-file-excel { color: #1D7D1D; }
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
 /* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
+   ALERTS
+   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.alert span {
+    flex: 1;
+}
+
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.alert-close:hover {
+    opacity: 1;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   SUMMARIES GRID - 3 CARDS
    ============================================================ */
 .summaries-grid-three {
     display: grid;
@@ -677,6 +1032,7 @@ html.dark-mode .alert-danger {
     letter-spacing: 0.5px;
     font-weight: 700;
     color: var(--branches-text-secondary);
+    transition: color 0.3s ease;
 }
 
 .summary-value {
@@ -694,6 +1050,7 @@ html.dark-mode .alert-danger {
     font-size: 11px;
     color: var(--branches-text-light);
     font-weight: 500;
+    transition: color 0.3s ease;
 }
 
 .card-total .summary-icon { background: #DBEAFE; color: #1D4ED8; }
@@ -705,8 +1062,12 @@ html.dark-mode .alert-danger {
 .card-inactive .summary-icon { background: #FEE2E2; color: #991B1B; }
 .card-inactive { border-left: 4px solid #DC2626; }
 
+html.dark-mode .card-total .summary-icon { background: #1E3A5F; color: #60A5FA; }
+html.dark-mode .card-active .summary-icon { background: #065F46; color: #34D399; }
+html.dark-mode .card-inactive .summary-icon { background: #7F1D1D; color: #FCA5A5; }
+
 /* ============================================================
-   TABLE CONTAINER - DARK MODE
+   TABLE CONTAINER
    ============================================================ */
 .table-container {
     background: var(--branches-card-bg);
@@ -733,10 +1094,11 @@ html.dark-mode .alert-danger {
     font-weight: 600;
     color: var(--branches-text);
     margin: 0;
+    transition: color 0.3s ease;
 }
 
 .table-header h3 i {
-    color: #3B82F6;
+    color: #DC2626;
     margin-right: 8px;
 }
 
@@ -800,9 +1162,6 @@ html.dark-mode .alert-danger {
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
-   ============================================================ */
 .data-table thead {
     background: #DC2626;
 }
@@ -817,11 +1176,6 @@ html.dark-mode .alert-danger {
     letter-spacing: 0.5px;
     border-bottom: 2px solid #B91C1C;
     white-space: nowrap;
-}
-
-.data-table thead th i {
-    color: #FFFFFF;
-    margin-right: 4px;
 }
 
 .data-table tbody tr {
@@ -841,39 +1195,90 @@ html.dark-mode .alert-danger {
 
 /* Branch Code */
 .branch-code {
-    font-weight: 600;
-    color: #3B82F6;
+    font-weight: 700;
     font-size: 12px;
+    color: #DC2626;
 }
 
 /* Branch Name */
-.branch-name-text {
+.branch-name {
     font-weight: 500;
+    display: flex;
+    align-items: center;
     color: var(--branches-text);
+    transition: color 0.3s ease;
 }
 
-/* Branch Location */
-.branch-location {
-    color: var(--branches-text-secondary);
-    font-size: 12px;
-}
-
-/* Branch Phone */
-.branch-phone {
-    color: var(--branches-text-secondary);
-    font-size: 12px;
-}
-
-/* Branch Email */
+.branch-location-cell,
+.branch-phone,
 .branch-email {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
     color: var(--branches-text-secondary);
+    transition: color 0.3s ease;
+}
+
+.manager-name {
+    font-size: 12px;
+    color: var(--branches-text-secondary);
+    transition: color 0.3s ease;
+}
+
+/* Provider Stats */
+.provider-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.provider-total,
+.provider-bank,
+.provider-mobile {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+}
+
+.provider-total {
+    background: #DBEAFE;
+    color: #1D4ED8;
+}
+
+.provider-bank {
+    background: #DBEAFE;
+    color: #1D4ED8;
+}
+
+.provider-mobile {
+    background: #FEF3C7;
+    color: #D97706;
+}
+
+.provider-none {
+    color: var(--branches-text-light);
     font-size: 12px;
 }
 
-/* Manager Name */
-.manager-name {
-    font-weight: 500;
-    color: var(--branches-text);
+html.dark-mode .provider-total {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+html.dark-mode .provider-bank {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+html.dark-mode .provider-mobile {
+    background: #5F3A1E;
+    color: #FBBF24;
 }
 
 /* Status Badge */
@@ -898,6 +1303,16 @@ html.dark-mode .alert-danger {
 .status-inactive {
     background: #FEE2E2;
     color: #991B1B;
+}
+
+html.dark-mode .status-active {
+    background: #065F46;
+    color: #D1FAE5;
+}
+
+html.dark-mode .status-inactive {
+    background: #7F1D1D;
+    color: #FEE2E2;
 }
 
 /* Action Buttons */
@@ -948,8 +1363,38 @@ html.dark-mode .alert-danger {
     color: #B91C1C;
 }
 
+html.dark-mode .btn-view {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+html.dark-mode .btn-view:hover {
+    background: #3B82F6;
+    color: #FFFFFF;
+}
+
+html.dark-mode .btn-edit {
+    background: #065F46;
+    color: #34D399;
+}
+
+html.dark-mode .btn-edit:hover {
+    background: #10B981;
+    color: #FFFFFF;
+}
+
+html.dark-mode .btn-delete {
+    background: #7F1D1D;
+    color: #FCA5A5;
+}
+
+html.dark-mode .btn-delete:hover {
+    background: #DC2626;
+    color: #FFFFFF;
+}
+
 /* ============================================================
-   EMPTY STATE - DARK MODE
+   EMPTY STATE
    ============================================================ */
 .empty-state {
     text-align: center;
@@ -958,7 +1403,7 @@ html.dark-mode .alert-danger {
 
 .empty-state i {
     font-size: 60px;
-    color: #3B82F6;
+    color: #DC2626;
     margin-bottom: 16px;
 }
 
@@ -966,12 +1411,14 @@ html.dark-mode .alert-danger {
     font-size: 20px;
     color: var(--branches-text);
     margin: 0 0 8px 0;
+    transition: color 0.3s ease;
 }
 
 .empty-state p {
     color: var(--branches-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
+    transition: color 0.3s ease;
 }
 
 /* ============================================================
@@ -994,6 +1441,15 @@ html.dark-mode .alert-danger {
         width: 100%;
         flex-direction: column;
         align-items: stretch;
+    }
+    
+    .filter-branch-select {
+        width: 100%;
+        justify-content: space-between;
+    }
+    
+    .filter-branch-select select {
+        flex: 1;
     }
     
     .header-actions .btn-add,
@@ -1054,22 +1510,46 @@ html.dark-mode .alert-danger {
     .summary-value {
         font-size: 19px;
     }
+    
+    .branch-indicator {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 16px 18px;
+    }
+    
+    .branch-indicator-left {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    
+    .branch-info {
+        flex-wrap: wrap;
+    }
+    
+    .branch-indicator-right {
+        width: 100%;
+    }
+    
+    .branch-indicator-right .date-display {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 @media (max-width: 480px) {
     .summaries-grid-three {
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
+        grid-template-columns: 1fr;
     }
     
     .summaries-grid-three .summary-card:last-child {
-        grid-column: span 2;
+        grid-column: span 1;
     }
     
     .summary-card {
         padding: 12px 14px;
-        min-height: 90px;
-        height: 90px;
+        min-height: 80px;
+        height: 80px;
     }
     
     .summary-icon {
@@ -1107,11 +1587,29 @@ html.dark-mode .alert-danger {
         font-size: 11px;
     }
     
-    .btn-add-empty {
-        padding: 10px 20px;
-        font-size: 13px;
-        width: 100%;
-        justify-content: center;
+    .branch-indicator-name {
+        font-size: 14px;
+    }
+    
+    .branch-location {
+        font-size: 11px;
+        padding: 3px 10px;
+    }
+    
+    .branch-indicator-code {
+        font-size: 10px;
+    }
+    
+    .branch-icon-wrapper {
+        width: 38px;
+        height: 38px;
+        font-size: 17px;
+    }
+    
+    .provider-stats {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
     }
 }
 
@@ -1135,6 +1633,10 @@ html.dark-mode .alert-danger {
     animation: fadeInUp 0.4s ease forwards;
     animation-delay: 0.20s;
 }
+
+.branch-indicator {
+    animation: fadeInUp 0.3s ease forwards;
+}
 </style>
 
 <script>
@@ -1146,7 +1648,6 @@ function toggleDropdown() {
     dropdown.classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(event) {
     var dropdown = document.getElementById('exportDropdown');
     var button = document.querySelector('.dropdown-toggle');
@@ -1172,12 +1673,10 @@ function exportData(format) {
     var headers = [];
     var headerCells = table.querySelectorAll('thead th');
     
-    // Get headers (skip Actions column)
     for (var i = 0; i < headerCells.length - 1; i++) {
         headers.push(headerCells[i].textContent.trim());
     }
     
-    // Get data
     var data = [];
     rows.forEach(function(row) {
         var rowData = [];
@@ -1204,9 +1703,6 @@ function exportData(format) {
     }
 }
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
 function exportCSV(headers, data) {
     var csv = headers.join(',') + '\n';
     data.forEach(function(row) {
@@ -1224,14 +1720,11 @@ function exportCSV(headers, data) {
     window.URL.revokeObjectURL(url);
 }
 
-// ============================================================
-// EXPORT EXCEL (HTML Table format)
-// ============================================================
 function exportExcel(headers, data) {
     var html = '<html><head><meta charset="UTF-8"><title>Branches Export</title>';
     html += '<style>';
     html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #3B82F6; }';
+    html += 'h1 { color: #DC2626; }';
     html += 'table { width: 100%; border-collapse: collapse; }';
     html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
@@ -1268,14 +1761,11 @@ function exportExcel(headers, data) {
     window.URL.revokeObjectURL(url);
 }
 
-// ============================================================
-// EXPORT PDF
-// ============================================================
 function exportPDF(headers, data) {
     var printContent = '<html><head><title>Branches Export</title>';
     printContent += '<style>';
     printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #3B82F6; }';
+    printContent += 'h1 { color: #DC2626; }';
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
@@ -1309,15 +1799,13 @@ function exportPDF(headers, data) {
 }
 
 // ============================================================
-// FILTER BY STATUS
+// FILTER FUNCTIONS
 // ============================================================
 function filterByStatus(status) {
     var rows = document.querySelectorAll('#branchesTable tbody tr');
-    var statusFilter = status;
-    
     rows.forEach(function(row) {
         var rowStatus = row.getAttribute('data-status');
-        if (statusFilter === '' || rowStatus === statusFilter) {
+        if (status === '' || rowStatus === status) {
             row.style.display = '';
         } else {
             row.style.display = 'none';
@@ -1325,15 +1813,16 @@ function filterByStatus(status) {
     });
 }
 
-// ============================================================
-// CONFIRM DELETE
-// ============================================================
+function filterByBranch(branchId) {
+    window.location.href = '?branch=' + branchId;
+}
+
 function confirmDelete(id, name) {
     return confirm('Are you sure you want to delete the branch "' + name + '"? This action cannot be undone.');
 }
 
 // ============================================================
-// SEARCH FUNCTIONALITY
+// SEARCH FUNCTIONALITY & DARK MODE SYNC
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     var searchInput = document.getElementById('searchInput');
@@ -1353,9 +1842,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
+    // Sync dark mode with header button
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1368,11 +1855,22 @@ document.addEventListener('DOMContentLoaded', function() {
     
     syncDarkMode();
     
+    // Listen for dark mode changes from header
     document.addEventListener('darkModeChanged', function(e) {
         syncDarkMode();
     });
+    
+    // Auto-hide alerts
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
+    }
+    
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    }
 });
 </script>
-
 </body>
 </html>

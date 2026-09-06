@@ -24,10 +24,36 @@ if ($role !== 'admin' && $role !== 'super_admin') {
     exit();
 }
 
+// Get user's branch
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch();
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
+
+// Get branch name
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['branch_name'];
+        $branch_code = $branch['branch_code'] ?? '';
+        $branch_location = $branch['location'] ?? '';
+    }
+}
+
 // Get filters
 $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
 
 try {
     // Build query
@@ -102,12 +128,22 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Dark Mode Toggle -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <i class="fas fa-store-alt"></i>
+                <span class="branch-indicator-label">Current Branch:</span>
+                <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                <?php if ($branch_code): ?>
+                    <span class="branch-indicator-code">(<?php echo htmlspecialchars($branch_code); ?>)</span>
+                <?php endif; ?>
+                <?php if ($branch_location): ?>
+                    <span class="branch-indicator-location"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_location); ?></span>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
+            </div>
         </div>
 
         <!-- Page Header -->
@@ -119,6 +155,12 @@ include_once '../../includes/admin_topbar.php';
             <div class="header-right">
                 <a href="add.php" class="btn btn-primary">
                     <i class="fas fa-plus"></i> New Report
+                </a>
+                <a href="../daily_report/transactions.php?type=deposit" class="btn btn-deposit">
+                    <i class="fas fa-arrow-down"></i> Deposits
+                </a>
+                <a href="../daily_report/transactions.php?type=withdrawal" class="btn btn-withdrawal">
+                    <i class="fas fa-arrow-up"></i> Withdrawals
                 </a>
                 <div class="dropdown export-dropdown">
                     <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
@@ -280,7 +322,151 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* Summary Cards */
+/* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 10px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    border: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-left i {
+    font-size: 18px;
+    color: rgba(255,255,255,0.9);
+}
+
+.branch-indicator-label {
+    font-weight: 500;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #FFFFFF;
+}
+
+.branch-indicator-code {
+    font-size: 12px;
+    opacity: 0.7;
+    color: #FFFFFF;
+}
+
+.branch-indicator-location {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.branch-indicator-location i {
+    font-size: 12px;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    color: rgba(255,255,255,0.8);
+}
+
+.branch-indicator-right .date-display i {
+    margin-right: 4px;
+}
+
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.page-header .header-left h2 i {
+    margin-right: 10px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-primary { background: #bb0404; color: white; }
+.btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); }
+
+.btn-deposit { background: #059669; color: white; }
+.btn-deposit:hover { background: #047857; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
+
+.btn-withdrawal { background: #DC2626; color: white; }
+.btn-withdrawal:hover { background: #B91C1C; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
+
+.btn-export { background: #10B981; color: white; }
+.btn-export:hover { background: #059669; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+
+.btn-filter { background: #bb0404; color: white; }
+.btn-filter:hover { background: #8a0303; }
+
+.btn-reset { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
+.btn-reset:hover { background: var(--bg-table-hover); }
+
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ============================================================
+   SUMMARY CARDS
+   ============================================================ */
 .summary-cards {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
@@ -334,71 +520,9 @@ include_once '../../includes/admin_topbar.php';
     color: var(--text-primary);
 }
 
-/* Page Header */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.page-header .header-left h2 {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.page-header .header-left h2 i {
-    margin-right: 10px;
-}
-
-.page-header .header-left .text-muted {
-    font-size: 13px;
-    color: var(--text-muted);
-    margin: 4px 0 0 0;
-}
-
-.header-right {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-}
-
-/* Buttons */
-.btn {
-    padding: 8px 18px;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-}
-
-.btn-primary { background: #bb0404; color: white; }
-.btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); }
-
-.btn-export { background: #10B981; color: white; }
-.btn-export:hover { background: #059669; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
-
-.btn-filter { background: #bb0404; color: white; }
-.btn-filter:hover { background: #8a0303; }
-
-.btn-reset { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
-.btn-reset:hover { background: var(--bg-table-hover); }
-
-.btn-sm { padding: 5px 12px; font-size: 12px; }
-
-/* Export Dropdown */
+/* ============================================================
+   EXPORT DROPDOWN
+   ============================================================ */
 .dropdown { position: relative; display: inline-block; }
 .dropdown-menu {
     display: none;
@@ -429,7 +553,9 @@ include_once '../../includes/admin_topbar.php';
 .dropdown-menu a:hover { background: var(--bg-table-hover); }
 .dropdown-menu a i { width: 18px; font-size: 15px; }
 
-/* Filters */
+/* ============================================================
+   FILTERS
+   ============================================================ */
 .filters-bar {
     background: var(--bg-card);
     padding: 16px 20px;
@@ -476,7 +602,9 @@ include_once '../../includes/admin_topbar.php';
     box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
 }
 
-/* Table */
+/* ============================================================
+   TABLE
+   ============================================================ */
 .table-container {
     background: var(--bg-card);
     border-radius: 10px;
@@ -543,7 +671,9 @@ include_once '../../includes/admin_topbar.php';
 .text-success { color: #10B981; font-weight: 600; }
 .text-danger { color: #DC2626; font-weight: 600; }
 
-/* Action Buttons */
+/* ============================================================
+   ACTION BUTTONS
+   ============================================================ */
 .action-buttons { display: flex; gap: 4px; }
 .btn-action {
     width: 30px;
@@ -570,7 +700,9 @@ include_once '../../includes/admin_topbar.php';
 
 .no-data { padding: 40px 20px; text-align: center; }
 
-/* Dark Mode */
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -586,54 +718,15 @@ include_once '../../includes/admin_topbar.php';
     --shadow-hover: rgba(0,0,0,0.08);
 }
 
-body.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
-}
-
 body {
     background: var(--bg-body) !important;
     color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .summary-cards {
         grid-template-columns: repeat(3, 1fr);
@@ -654,38 +747,43 @@ body {
     .header-right .btn { flex: 1; justify-content: center; }
     .dropdown { flex: 1; }
     .dropdown-toggle { width: 100%; justify-content: center; }
+    .branch-indicator {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 12px 16px;
+    }
+    .branch-indicator-left {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 480px) {
+    .summary-cards {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+    .summary-card {
+        padding: 12px 14px;
+    }
+    .summary-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+    }
+    .summary-value {
+        font-size: 15px;
+    }
+    .branch-indicator-name {
+        font-size: 13px;
+    }
+    .branch-indicator-location {
+        font-size: 11px;
+    }
 }
 </style>
 
 <script>
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    if (document.body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
-});
-
 function toggleDropdown() {
     document.getElementById('exportMenu').classList.toggle('show');
 }

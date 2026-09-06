@@ -23,6 +23,35 @@ if ($role !== 'admin' && $role !== 'super_admin') {
     exit();
 }
 
+// Get branches for branch filter
+try {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+    $stmt->execute();
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $branches = [];
+}
+
+// Branch filter
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
+// Get branch name for display
+$branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
+
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
@@ -31,11 +60,21 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH FILTER CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Branch:</span>
+            <select id="branchFilter" class="branch-select" onchange="window.location.href='?branch='+this.value">
+                <option value="0">All Branches</option>
+                <?php foreach ($branches as $b): ?>
+                    <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($selected_branch > 0): ?>
+                <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
+            <?php endif; ?>
         </div>
 
         <!-- Page Header -->
@@ -49,7 +88,7 @@ include_once '../../includes/admin_topbar.php';
         <!-- Settings Grid -->
         <div class="settings-grid">
             <!-- General Settings -->
-            <a href="general.php" class="settings-card">
+            <a href="general.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#DBEAFE;color:#1D4ED8;">
                     <i class="fas fa-globe"></i>
                 </div>
@@ -61,7 +100,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Financial Settings -->
-            <a href="financial.php" class="settings-card">
+            <a href="financial.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#D1FAE5;color:#065F46;">
                     <i class="fas fa-coins"></i>
                 </div>
@@ -73,7 +112,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Branch Settings -->
-            <a href="branches.php" class="settings-card">
+            <a href="branches.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#EDE9FE;color:#6D28D9;">
                     <i class="fas fa-building"></i>
                 </div>
@@ -85,7 +124,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Employee Settings -->
-            <a href="employees.php" class="settings-card">
+            <a href="employees.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#FEF3C7;color:#92400E;">
                     <i class="fas fa-users"></i>
                 </div>
@@ -97,7 +136,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Provider Settings -->
-            <a href="providers.php" class="settings-card">
+            <a href="providers.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#FEE2E2;color:#991B1B;">
                     <i class="fas fa-handshake"></i>
                 </div>
@@ -109,7 +148,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Expense Categories -->
-            <a href="expense_categories.php" class="settings-card">
+            <a href="expense_categories.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#E0E7FF;color:#3730A3;">
                     <i class="fas fa-tags"></i>
                 </div>
@@ -121,7 +160,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Permission Settings -->
-            <a href="permissions.php" class="settings-card">
+            <a href="permissions.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#FCE4EC;color:#C62828;">
                     <i class="fas fa-lock"></i>
                 </div>
@@ -133,7 +172,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Activity Logs -->
-            <a href="../activity_logs/index.php" class="settings-card">
+            <a href="../activity_logs/index.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#F3E5F5;color:#6A1B9A;">
                     <i class="fas fa-history"></i>
                 </div>
@@ -145,7 +184,7 @@ include_once '../../includes/admin_topbar.php';
             </a>
 
             <!-- Backup -->
-            <a href="backup.php" class="settings-card">
+            <a href="backup.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="settings-card">
                 <div class="settings-icon" style="background:#FFF3E0;color:#E65100;">
                     <i class="fas fa-database"></i>
                 </div>
@@ -193,7 +232,84 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* Settings Grid */
+/* ============================================================
+   BRANCH CARD - RED
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    flex-wrap: wrap;
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-select {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    min-width: 150px;
+}
+
+.branch-card .branch-select:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.branch-card .branch-select:focus {
+    background: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.branch-card .branch-select option {
+    background: #1f2937;
+    color: #ffffff;
+}
+
+body.dark-mode .branch-card .branch-select option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+.branch-card .branch-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Dark mode support for branch card */
+body.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
+/* ============================================================
+   SETTINGS GRID
+   ============================================================ */
 .settings-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -259,7 +375,9 @@ include_once '../../includes/admin_topbar.php';
     transition: all 0.3s ease;
 }
 
-/* System Info */
+/* ============================================================
+   SYSTEM INFO
+   ============================================================ */
 .system-info {
     background: var(--bg-card);
     border-radius: 12px;
@@ -296,7 +414,9 @@ include_once '../../includes/admin_topbar.php';
     color: var(--text-primary);
 }
 
-/* Page Header */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -321,7 +441,9 @@ include_once '../../includes/admin_topbar.php';
     margin: 4px 0 0 0;
 }
 
-/* Dark Mode */
+/* ============================================================
+   DARK MODE
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -358,33 +480,9 @@ body {
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .settings-grid {
         grid-template-columns: 1fr 1fr;
@@ -395,6 +493,18 @@ body {
 }
 
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 120px;
+        width: 100%;
+        flex: 1;
+    }
+    
     .settings-grid {
         grid-template-columns: 1fr;
     }
@@ -406,32 +516,38 @@ body {
         align-items: flex-start;
     }
 }
+
+@media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 6px;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 100%;
+        width: 100%;
+    }
+}
 </style>
 
 <script>
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    if (document.body.classList.contains('dark-mode')) {
-        btn.querySelector('i').className = 'fas fa-sun';
-        btn.querySelector('span').textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        btn.querySelector('i').className = 'fas fa-moon';
-        btn.querySelector('span').textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
 document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
+    // Sync dark mode with header
+    function syncDarkMode() {
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) {
+            document.body.classList.add('dark-mode');
+        } else {
+            document.body.classList.remove('dark-mode');
         }
     }
+    
+    syncDarkMode();
+    
+    document.addEventListener('darkModeChanged', function(e) {
+        syncDarkMode();
+    });
 });
 </script>
 
