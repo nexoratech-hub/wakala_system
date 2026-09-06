@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Aug 23, 2026 at 02:00 AM
+-- Generation Time: Sep 06, 2026 at 11:57 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -71,7 +71,8 @@ INSERT INTO `activity_logs` (`id`, `employee_id`, `action`, `module`, `record_id
 (23, 2, 'Add Morning Report', 'Morning Report', 8, '', 'New morning report added for branch: Dar es Salaam Branch', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-22 15:17:39'),
 (24, 2, 'Add Morning Report', 'Morning Report', 9, '', 'New morning report added for branch: Dar es Salaam Branch', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-22 15:36:19'),
 (25, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-23 02:24:08'),
-(27, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-23 02:56:11');
+(27, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-23 02:56:11'),
+(29, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-06 12:56:29');
 
 -- --------------------------------------------------------
 
@@ -97,10 +98,9 @@ CREATE TABLE `branches` (
 --
 
 INSERT INTO `branches` (`id`, `branch_code`, `branch_name`, `location`, `phone`, `email`, `manager_id`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 'MAIN', 'Main Branch', 'Dodoma', '+255 700 000 000', 'main@wakala.com', NULL, 1, '2026-08-20 00:21:10', '2026-08-20 10:07:25'),
-(3, 'DSM', 'Dar es Salaam Branch', 'Dar es Salaam, Tanzania', '+255 700 000 100', 'dsm@wakala.com', NULL, 1, '2026-08-21 00:02:38', '2026-08-21 00:02:38'),
-(4, 'KND', 'Kinondoni Branch', 'Kinondoni, Dar es Salaam', '+255 700 000 200', 'kinondoni@wakala.com', NULL, 1, '2026-08-21 00:02:38', '2026-08-21 00:02:38'),
-(5, 'TMK', 'Temeke Branch', 'Temeke, Dar es Salaam', '+255 700 000 300', 'temeke@wakala.com', NULL, 1, '2026-08-21 00:02:38', '2026-08-21 00:02:38');
+(1, 'KND', 'Kinondoni B', 'Kinondoni, Dar es Salaam', '+255 700 000 200', 'kinondoni@wakala.com', NULL, 1, '2026-09-06 12:53:13', '2026-09-06 12:53:13'),
+(2, 'KRK', 'Kariakoo', 'Kariakoo, Dar es Salaam', '+255 700 000 500', 'kariakoo@wakala.com', NULL, 1, '2026-09-06 12:53:13', '2026-09-06 12:53:13'),
+(3, 'MBZ', 'Mbezi Beach', 'Mbezi Beach, Dar es Salaam', '+255 700 000 400', 'mbezi@wakala.com', NULL, 1, '2026-09-06 12:53:13', '2026-09-06 12:53:13');
 
 -- --------------------------------------------------------
 
@@ -116,48 +116,6 @@ CREATE TABLE `branch_providers` (
   `created_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `branch_providers`
---
-
-INSERT INTO `branch_providers` (`id`, `branch_id`, `provider_id`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(2, 1, 2, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(3, 1, 3, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(4, 1, 4, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(5, 1, 5, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(6, 1, 6, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(7, 1, 7, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(8, 1, 8, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(9, 1, 9, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(16, 3, 1, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(17, 3, 2, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(18, 3, 3, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(19, 3, 4, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(20, 3, 5, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(21, 3, 6, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(22, 3, 7, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(23, 3, 8, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(24, 3, 9, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(31, 4, 1, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(32, 4, 2, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(33, 4, 3, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(34, 4, 4, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(35, 4, 5, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(36, 4, 6, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(37, 4, 7, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(38, 4, 8, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(39, 4, 9, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(46, 5, 1, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(47, 5, 2, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(48, 5, 3, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(49, 5, 4, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(50, 5, 5, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(51, 5, 6, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(52, 5, 7, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(53, 5, 8, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50'),
-(54, 5, 9, 1, '2026-08-22 15:07:50', '2026-08-22 15:07:50');
 
 -- --------------------------------------------------------
 
@@ -257,7 +215,7 @@ CREATE TABLE `daily_reports` (
 --
 
 INSERT INTO `daily_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `provider_id`, `provider_code`, `provider_float`, `provider_cash`, `provider_deposits`, `provider_withdrawals`, `report_date`, `morning_report_id`, `evening_stock_id`, `commission_id`, `morning_total`, `evening_total`, `float_difference`, `total_commission`, `total_deposits`, `total_withdrawals`, `current_float`, `current_cash`, `other_income`, `total_business_income`, `total_expenses`, `total_cash_out`, `total_salaries`, `net_profit`, `net_profit_after_salaries`, `opening_capital`, `additional_capital`, `profit_allocated`, `current_capital`, `created_at`, `updated_at`, `notes`) VALUES
-(3, 'DR-20260822-0001', 2, 'Dar es Salaam Branch', 3, 1, 'NMB', 5000000.00, 0.00, 0.00, 0.00, '2026-08-22', NULL, NULL, NULL, 54000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, '2026-08-22 15:46:10', '2026-08-22 15:46:10', NULL);
+(3, 'DR-20260822-0001', 2, 'Dar es Salaam Branch', NULL, 1, 'NMB', 5000000.00, 0.00, 0.00, 0.00, '2026-08-22', NULL, NULL, NULL, 54000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, '2026-08-22 15:46:10', '2026-08-22 15:46:10', NULL);
 
 -- --------------------------------------------------------
 
@@ -338,8 +296,8 @@ CREATE TABLE `employees` (
 --
 
 INSERT INTO `employees` (`id`, `employee_id`, `full_name`, `email`, `phone`, `username`, `password_hash`, `role`, `branch`, `branch_id`, `profile_pic`, `base_salary`, `salary_currency`, `hire_date`, `employment_status`, `emergency_contact`, `emergency_phone`, `address`, `is_active`, `last_login`, `created_at`, `updated_at`) VALUES
-(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', 'Main', 1, 'uploads/profiles/profile_2_1787442383.png', 0.00, 'TSh', NULL, 'active', '', '', '', 1, '2026-08-23 02:24:08', '2026-08-20 14:49:00', '2026-08-23 02:46:23'),
-(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'Main Branch', 1, NULL, 0.00, 'TSh', NULL, 'active', NULL, NULL, NULL, 1, '2026-08-23 02:56:11', '2026-08-23 02:43:37', '2026-08-23 02:56:11');
+(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', 'Main', NULL, 'uploads/profiles/profile_2_1787442383.png', 0.00, 'TSh', NULL, 'active', '', '', '', 1, '2026-09-06 12:56:29', '2026-08-20 14:49:00', '2026-09-06 12:56:29'),
+(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'Main Branch', NULL, NULL, 0.00, 'TSh', NULL, 'active', NULL, NULL, NULL, 1, '2026-08-23 02:56:11', '2026-08-23 02:43:37', '2026-08-23 02:56:11');
 
 -- --------------------------------------------------------
 
@@ -535,7 +493,7 @@ CREATE TABLE `morning_reports` (
 --
 
 INSERT INTO `morning_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `report_date`, `provider_data`, `cash_balance`, `cumm_total`, `submitted_at`, `updated_at`, `notes`) VALUES
-(9, 'MR-20260822-5033', 2, 'Dar es Salaam Branch', 3, '2026-08-22', '{\"NMB\":5000000,\"CRDB\":5000000,\"NBC\":5000000,\"TPB\":5000000,\"SELCOM\":5000000,\"MPESA\":5000000,\"YAS\":5000000,\"AIRTEL\":5000000,\"HALOPESA\":5000000}', 9000000.00, 54000000.00, '2026-08-22 15:36:19', '2026-08-22 15:36:19', '');
+(9, 'MR-20260822-5033', 2, 'Dar es Salaam Branch', NULL, '2026-08-22', '{\"NMB\":5000000,\"CRDB\":5000000,\"NBC\":5000000,\"TPB\":5000000,\"SELCOM\":5000000,\"MPESA\":5000000,\"YAS\":5000000,\"AIRTEL\":5000000,\"HALOPESA\":5000000}', 9000000.00, 54000000.00, '2026-08-22 15:36:19', '2026-08-22 15:36:19', '');
 
 -- --------------------------------------------------------
 
@@ -977,13 +935,13 @@ ALTER TABLE `user_permissions`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `branches`
 --
 ALTER TABLE `branches`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `branch_providers`

@@ -1,25 +1,46 @@
 <?php
 // ================================================================
-// FILE: C:\xampp\htdocs\wakala_system\logout.php
-// WAKALA FINANCIAL SYSTEM - LOGOUT HANDLER
-// DESTROYS SESSION AND REDIRECTS TO LOGIN
+// FILE: logout.php
+// WAKALA SYSTEM - LOGOUT
 // ================================================================
 
-session_start();
-
-// Include database and functions
-require_once 'config/database.php';
-require_once 'includes/functions.php';
-
-// Log the logout activity
-if (isset($_SESSION['user_id'])) {
-    logActivity($_SESSION['user_id'], 'Logout', 'Authentication');
+// ============================================================
+// START SESSION
+// ============================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Destroy session
-session_destroy();
+// ============================================================
+// LOG ACTIVITY BEFORE DESTROYING SESSION
+// ============================================================
+if (isset($_SESSION['user_id']) && !empty($_SESSION['user_id'])) {
+    // Include functions
+    require_once 'includes/functions.php';
+    
+    // Check if employee still exists before logging
+    try {
+        global $db;
+        if (isset($db)) {
+            $check_stmt = $db->prepare("SELECT id FROM employees WHERE id = ? AND is_active = 1");
+            $check_stmt->execute([$_SESSION['user_id']]);
+            $employee_exists = $check_stmt->fetch();
+            
+            if ($employee_exists) {
+                // Only log if employee exists
+                logActivity($_SESSION['user_id'], 'Logout', 'Authentication');
+            }
+        }
+    } catch (Exception $e) {
+        // If logging fails, just continue with logout
+    }
+}
 
-// Clear session cookie
+// ============================================================
+// DESTROY SESSION
+// ============================================================
+$_SESSION = array();
+
 if (ini_get("session.use_cookies")) {
     $params = session_get_cookie_params();
     setcookie(session_name(), '', time() - 42000,
@@ -28,7 +49,11 @@ if (ini_get("session.use_cookies")) {
     );
 }
 
-// Redirect to login page
+session_destroy();
+
+// ============================================================
+// REDIRECT TO LOGIN
+// ============================================================
 header('Location: login.php');
 exit();
 ?>

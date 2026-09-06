@@ -262,10 +262,14 @@ function isValidAmount($amount) {
  */
 function getEmployeeName($id) {
     global $db;
-    $stmt = $db->prepare("SELECT full_name FROM employees WHERE id = ?");
-    $stmt->execute([$id]);
-    $result = $stmt->fetch();
-    return $result ? $result['full_name'] : 'Unknown';
+    try {
+        $stmt = $db->prepare("SELECT full_name FROM employees WHERE id = ?");
+        $stmt->execute([$id]);
+        $result = $stmt->fetch();
+        return $result ? $result['full_name'] : 'Unknown';
+    } catch (Exception $e) {
+        return 'Unknown';
+    }
 }
 
 /**
@@ -276,9 +280,13 @@ function getEmployeeName($id) {
  */
 function getEmployee($id) {
     global $db;
-    $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-    $stmt->execute([$id]);
-    return $stmt->fetch();
+    try {
+        $stmt = $db->prepare("SELECT * FROM employees WHERE id = ? AND is_active = 1");
+        $stmt->execute([$id]);
+        return $stmt->fetch();
+    } catch (Exception $e) {
+        return false;
+    }
 }
 
 /**
@@ -379,7 +387,7 @@ function getOpeningCapital() {
 }
 
 // ============================================================
-// ACTIVITY LOG FUNCTIONS
+// ACTIVITY LOG FUNCTIONS - FIXED
 // ============================================================
 
 /**
@@ -391,17 +399,55 @@ function getOpeningCapital() {
  * @param int|null $record_id Record ID (optional)
  * @param string|null $old_value Old value (optional)
  * @param string|null $new_value New value (optional)
+ * @param int|null $branch_id Branch ID (optional)
  * @return bool True on success
  */
-function logActivity($employee_id, $action, $module, $record_id = null, $old_value = null, $new_value = null) {
+function logActivity($employee_id, $action, $module, $record_id = null, $old_value = null, $new_value = null, $branch_id = null) {
     global $db;
+    
+    // Skip if employee_id is not valid
+    if (empty($employee_id) || $employee_id <= 0) {
+        return false;
+    }
+    
+    // Check if employee exists and is active
+    try {
+        $check_stmt = $db->prepare("SELECT id FROM employees WHERE id = ? AND is_active = 1");
+        $check_stmt->execute([$employee_id]);
+        $employee_exists = $check_stmt->fetch();
+        
+        if (!$employee_exists) {
+            // Employee doesn't exist or is inactive, skip logging
+            return false;
+        }
+    } catch (Exception $e) {
+        // If we can't check, skip logging
+        return false;
+    }
+    
+    // Check if activity_logs table exists
+    try {
+        $check_table = $db->query("SHOW TABLES LIKE 'activity_logs'");
+        if ($check_table->rowCount() == 0) {
+            return false;
+        }
+    } catch (Exception $e) {
+        return false;
+    }
+    
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
     $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
     
-    $stmt = $db->prepare("INSERT INTO activity_logs 
-                         (employee_id, action, module, record_id, old_value, new_value, ip_address, user_agent) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-    return $stmt->execute([$employee_id, $action, $module, $record_id, $old_value, $new_value, $ip, $user_agent]);
+    try {
+        $stmt = $db->prepare("INSERT INTO activity_logs 
+                             (employee_id, action, module, record_id, old_value, new_value, ip_address, user_agent, branch_id) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        return $stmt->execute([$employee_id, $action, $module, $record_id, $old_value, $new_value, $ip, $user_agent, $branch_id]);
+    } catch (Exception $e) {
+        // Silently fail if logging fails
+        error_log("Activity log failed: " . $e->getMessage());
+        return false;
+    }
 }
 
 /**
@@ -486,16 +532,25 @@ function calculateFloatDifference($evening, $morning) {
 // ============================================================
 
 /**
- * Check if morning report exists for date
+ * Check if morning report exists for date and branch
  * 
  * @param int $employee_id Employee ID
  * @param string $date Date (Y-m-d)
+ * @param int $branch_id Branch ID
  * @return bool True if exists
  */
-function morningReportExists($employee_id, $date) {
+function morningReportExists($employee_id, $date, $branch_id = null) {
     global $db;
-    $stmt = $db->prepare("SELECT id FROM morning_reports WHERE employee_id = ? AND report_date = ?");
-    $stmt->execute([$employee_id, $date]);
+    $sql = "SELECT id FROM morning_reports WHERE employee_id = ? AND report_date = ?";
+    $params = [$employee_id, $date];
+    
+    if ($branch_id) {
+        $sql .= " AND branch_id = ?";
+        $params[] = $branch_id;
+    }
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
     return $stmt->rowCount() > 0;
 }
 
