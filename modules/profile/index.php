@@ -1,261 +1,74 @@
 <?php
 // ================================================================
 // FILE: modules/profile/index.php
-// WAKALA SYSTEM - USER PROFILE
-// WITH USERNAME, PROFILE PICTURE UPLOAD (25MB MAX) & DARK MODE SUPPORT
+// PROFILE - USER PROFILE DASHBOARD
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+session_start();
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
 $user_id = $_SESSION['user_id'];
+$role = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// GET USER DATA
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+try {
+    // Get user profile
+    $stmt = $db->prepare("SELECT e.*, 
+            b.branch_name as branch_name,
+            (SELECT COUNT(*) FROM activity_logs WHERE employee_id = e.id) as total_activities,
+            (SELECT MAX(created_at) FROM activity_logs WHERE employee_id = e.id) as last_activity
+            FROM employees e
+            LEFT JOIN branches b ON e.branch_id = b.id
+            WHERE e.id = ?");
+    $stmt->execute([$user_id]);
+    $profile = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$user) {
-    header('Location: ../../login.php');
-    exit();
+    // Get user permissions
+    $stmt = $db->prepare("SELECT * FROM user_permissions WHERE role = ?");
+    $stmt->execute([$role]);
+    $permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get recent activities
+    $stmt = $db->prepare("SELECT * FROM activity_logs WHERE employee_id = ? ORDER BY created_at DESC LIMIT 10");
+    $stmt->execute([$user_id]);
+    $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get statistics
+    $stmt = $db->prepare("SELECT 
+            COUNT(*) as total_actions,
+            COUNT(DISTINCT module) as modules_accessed,
+            DATE(created_at) as date
+            FROM activity_logs 
+            WHERE employee_id = ? 
+            GROUP BY DATE(created_at)
+            ORDER BY DATE(created_at) DESC 
+            LIMIT 7");
+    $stmt->execute([$user_id]);
+    $activity_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+    error_log("Error loading profile: " . $e->getMessage());
+    $profile = null;
+    $permissions = [];
+    $recent_activities = [];
+    $activity_stats = [];
 }
 
-// ============================================================
-// GET BRANCH NAME
-// ============================================================
-$branch_name = 'N/A';
-if ($user['branch_id'] > 0) {
-    $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
-    $stmt->execute([$user['branch_id']]);
-    $branch = $stmt->fetch();
-    if ($branch) {
-        $branch_name = $branch['branch_name'];
-    }
-}
-
-// ============================================================
-// SET PROFILE PICTURE PATH
-// ============================================================
-$profile_pic_path = '../../assets/images/logo.PNG'; // Default
-if (!empty($user['profile_pic']) && file_exists('../../' . $user['profile_pic'])) {
-    $profile_pic_path = '../../' . $user['profile_pic'];
-} elseif (!empty($user['profile_pic']) && file_exists($user['profile_pic'])) {
-    $profile_pic_path = $user['profile_pic'];
-}
-
-// ============================================================
-// HANDLE PROFILE PICTURE UPLOAD - 25MB MAX
-// ============================================================
-$upload_message = '';
-$upload_message_type = '';
-
-if (isset($_POST['upload_picture'])) {
-    if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] == 0) {
-        $file = $_FILES['profile_pic'];
-        $file_name = $file['name'];
-        $file_tmp = $file['tmp_name'];
-        $file_size = $file['size'];
-        $file_error = $file['error'];
-        
-        // Get file extension
-        $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
-        $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-        
-        if (in_array($file_ext, $allowed)) {
-            if ($file_size <= 25000000) { // 25MB max
-                // Create upload directory if not exists
-                $upload_dir = '../../uploads/profiles/';
-                if (!file_exists($upload_dir)) {
-                    mkdir($upload_dir, 0777, true);
-                }
-                
-                // Generate unique file name
-                $new_file_name = 'profile_' . $user_id . '_' . time() . '.' . $file_ext;
-                $upload_path = $upload_dir . $new_file_name;
-                $db_path = 'uploads/profiles/' . $new_file_name;
-                
-                // Delete old profile picture if exists
-                if (!empty($user['profile_pic']) && file_exists('../../' . $user['profile_pic'])) {
-                    unlink('../../' . $user['profile_pic']);
-                }
-                
-                // Move uploaded file
-                if (move_uploaded_file($file_tmp, $upload_path)) {
-                    // Update database
-                    $stmt = $db->prepare("UPDATE employees SET profile_pic = ? WHERE id = ?");
-                    $stmt->execute([$db_path, $user_id]);
-                    
-                    // Update session
-                    $_SESSION['profile_pic'] = $db_path;
-                    
-                    // Set a flag in localStorage to notify other tabs/windows
-                    echo '<script>localStorage.setItem("profile_pic_updated", "true");</script>';
-                    
-                    $upload_message = 'Profile picture updated successfully!';
-                    $upload_message_type = 'success';
-                    
-                    // Refresh user data
-                    $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-                    $stmt->execute([$user_id]);
-                    $user = $stmt->fetch();
-                    $profile_pic_path = '../../' . $db_path;
-                } else {
-                    $upload_message = 'Failed to upload image. Please try again.';
-                    $upload_message_type = 'danger';
-                }
-            } else {
-                $upload_message = 'File size must be less than 25MB.';
-                $upload_message_type = 'danger';
-            }
-        } else {
-            $upload_message = 'Only JPG, JPEG, PNG, GIF, and WEBP files are allowed.';
-            $upload_message_type = 'danger';
-        }
-    } else {
-        $upload_message = 'Please select a file to upload.';
-        $upload_message_type = 'danger';
-    }
-}
-
-// ============================================================
-// HANDLE PROFILE UPDATE
-// ============================================================
-$message = '';
-$message_type = '';
-
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && !isset($_POST['upload_picture'])) {
-    $username = trim($_POST['username'] ?? '');
-    $full_name = trim($_POST['full_name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $phone = trim($_POST['phone'] ?? '');
-    $address = trim($_POST['address'] ?? '');
-    $emergency_contact = trim($_POST['emergency_contact'] ?? '');
-    $emergency_phone = trim($_POST['emergency_phone'] ?? '');
-    
-    // Validate
-    $errors = [];
-    if (empty($username)) {
-        $errors[] = 'Username is required';
-    }
-    if (empty($full_name)) {
-        $errors[] = 'Full name is required';
-    }
-    if (empty($email)) {
-        $errors[] = 'Email is required';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $errors[] = 'Invalid email format';
-    }
-    
-    // Check if username already exists (except current user)
-    if (!empty($username)) {
-        $stmt = $db->prepare("SELECT id FROM employees WHERE username = ? AND id != ?");
-        $stmt->execute([$username, $user_id]);
-        if ($stmt->fetch()) {
-            $errors[] = 'Username already exists';
-        }
-    }
-    
-    // Check if email already exists (except current user)
-    if (!empty($email)) {
-        $stmt = $db->prepare("SELECT id FROM employees WHERE email = ? AND id != ?");
-        $stmt->execute([$email, $user_id]);
-        if ($stmt->fetch()) {
-            $errors[] = 'Email already exists';
-        }
-    }
-    
-    if (empty($errors)) {
-        $stmt = $db->prepare("UPDATE employees SET 
-            username = ?,
-            full_name = ?, 
-            email = ?, 
-            phone = ?, 
-            address = ?,
-            emergency_contact = ?,
-            emergency_phone = ?
-            WHERE id = ?");
-        
-        $stmt->execute([$username, $full_name, $email, $phone, $address, $emergency_contact, $emergency_phone, $user_id]);
-        
-        // Update session
-        $_SESSION['full_name'] = $full_name;
-        
-        $message = 'Profile updated successfully!';
-        $message_type = 'success';
-        
-        // Refresh user data
-        $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-        $stmt->execute([$user_id]);
-        $user = $stmt->fetch();
-    } else {
-        $message = implode('<br>', $errors);
-        $message_type = 'danger';
-    }
-}
-
-// ============================================================
-// GET STATISTICS
-// ============================================================
-// Total morning reports
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM morning_reports WHERE employee_id = ?");
-$stmt->execute([$user_id]);
-$morning_count = $stmt->fetch()['count'] ?? 0;
-
-// Total evening stocks
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM evening_stocks WHERE employee_id = ?");
-$stmt->execute([$user_id]);
-$evening_count = $stmt->fetch()['count'] ?? 0;
-
-// Total commissions
-$stmt = $db->prepare("SELECT COUNT(*) as count, SUM(total_commission) as total FROM commissions WHERE employee_id = ?");
-$stmt->execute([$user_id]);
-$commission_data = $stmt->fetch();
-$commission_count = $commission_data['count'] ?? 0;
-$commission_total = $commission_data['total'] ?? 0;
-
-// Total expenses
-$stmt = $db->prepare("SELECT COUNT(*) as count, SUM(amount) as total FROM expenses WHERE employee_id = ?");
-$stmt->execute([$user_id]);
-$expense_data = $stmt->fetch();
-$expense_count = $expense_data['count'] ?? 0;
-$expense_total = $expense_data['total'] ?? 0;
-
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-PAGE CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
         <div class="dark-mode-toggle">
             <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
                 <i class="fas fa-moon"></i>
@@ -263,219 +76,656 @@ PAGE CONTENT
             </button>
         </div>
 
-        <!-- ===== PAGE HEADER ===== -->
+        <!-- Page Header -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-user-circle" style="color:#bb0404;"></i> My Profile</h2>
-                <p class="text-muted">Manage your personal information</p>
+                <p class="text-muted">View and manage your profile information</p>
             </div>
             <div class="header-right">
+                <a href="edit.php" class="btn btn-primary">
+                    <i class="fas fa-edit"></i> Edit Profile
+                </a>
                 <a href="change_password.php" class="btn btn-warning">
                     <i class="fas fa-key"></i> Change Password
+                </a>
+                <a href="../../logout.php" class="btn btn-danger">
+                    <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
             </div>
         </div>
 
-        <!-- ===== MESSAGES ===== -->
-        <?php if (!empty($message)): ?>
-            <div class="alert alert-<?php echo $message_type; ?>">
-                <i class="fas <?php echo $message_type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
-                <?php echo $message; ?>
-                <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
-            </div>
-        <?php endif; ?>
+        <?php if ($profile): ?>
 
-        <?php if (!empty($upload_message)): ?>
-            <div class="alert alert-<?php echo $upload_message_type; ?>">
-                <i class="fas <?php echo $upload_message_type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
-                <?php echo $upload_message; ?>
-                <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
+        <!-- Profile Header -->
+        <div class="profile-header">
+            <div class="profile-avatar">
+                <?php if ($profile['profile_pic'] && file_exists('../../' . $profile['profile_pic'])): ?>
+                    <img src="../../<?php echo htmlspecialchars($profile['profile_pic']); ?>" alt="Profile Picture" class="avatar-img">
+                <?php else: ?>
+                    <div class="avatar-placeholder">
+                        <i class="fas fa-user fa-4x"></i>
+                    </div>
+                <?php endif; ?>
+                <a href="edit.php" class="avatar-edit-btn" title="Change Photo">
+                    <i class="fas fa-camera"></i>
+                </a>
             </div>
-        <?php endif; ?>
-
-        <!-- ===== PROFILE CONTENT ===== -->
-        <div class="profile-grid">
-            
-            <!-- ===== PROFILE CARD ===== -->
-            <div class="profile-card">
-                <div class="profile-avatar">
-                    <div class="avatar-container">
-                        <img src="<?php echo $profile_pic_path; ?>" alt="Profile Picture" class="avatar-image" id="profileImage">
-                        <form method="POST" enctype="multipart/form-data" id="uploadForm" style="display:inline;">
-                            <label for="profile_pic_input" class="avatar-badge" title="Change Profile Picture (Max 25MB)">
-                                <i class="fas fa-camera"></i>
-                            </label>
-                            <input type="file" id="profile_pic_input" name="profile_pic" accept="image/*" style="display:none;" onchange="document.getElementById('uploadForm').submit();">
-                            <input type="hidden" name="upload_picture" value="1">
-                        </form>
-                    </div>
-                    <div style="margin-top:6px;font-size:11px;color:var(--text-muted);">
-                        <i class="fas fa-info-circle"></i> Max file size: 25MB
-                    </div>
-                </div>
-                <div class="profile-name">
-                    <h3><?php echo htmlspecialchars($user['full_name'] ?? 'N/A'); ?></h3>
-                    <span class="role-badge"><?php echo ucfirst($user['role'] ?? 'Employee'); ?></span>
-                    <span class="status-badge <?php echo $user['is_active'] ? 'status-active' : 'status-inactive'; ?>">
-                        <?php echo $user['is_active'] ? 'Active' : 'Inactive'; ?>
+            <div class="profile-info">
+                <h3><?php echo htmlspecialchars($profile['full_name']); ?></h3>
+                <p class="username">@<?php echo htmlspecialchars($profile['username']); ?></p>
+                <div class="profile-meta">
+                    <span class="meta-item">
+                        <i class="fas fa-envelope"></i> <?php echo htmlspecialchars($profile['email']); ?>
+                    </span>
+                    <span class="meta-item">
+                        <i class="fas fa-phone"></i> <?php echo htmlspecialchars($profile['phone'] ?? 'N/A'); ?>
+                    </span>
+                    <span class="meta-item">
+                        <i class="fas fa-briefcase"></i> <?php echo ucfirst(htmlspecialchars($profile['role'])); ?>
+                    </span>
+                    <span class="meta-item">
+                        <i class="fas fa-building"></i> <?php echo htmlspecialchars($profile['branch_name'] ?? 'Main'); ?>
                     </span>
                 </div>
-                <div class="profile-info">
-                    <div class="info-item">
-                        <i class="fas fa-id-badge"></i>
-                        <span class="info-label">Employee ID</span>
-                        <span class="info-value"><?php echo htmlspecialchars($user['employee_id'] ?? 'N/A'); ?></span>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-user"></i>
-                        <span class="info-label">Username</span>
-                        <span class="info-value"><?php echo htmlspecialchars($user['username'] ?? 'N/A'); ?></span>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-store"></i>
-                        <span class="info-label">Branch</span>
-                        <span class="info-value"><?php echo htmlspecialchars($branch_name); ?></span>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-calendar-alt"></i>
-                        <span class="info-label">Joined</span>
-                        <span class="info-value"><?php echo $user['created_at'] ? date('d M Y', strtotime($user['created_at'])) : 'N/A'; ?></span>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-clock"></i>
-                        <span class="info-label">Last Login</span>
-                        <span class="info-value"><?php echo $user['last_login'] ? date('d M Y H:i', strtotime($user['last_login'])) : 'N/A'; ?></span>
-                    </div>
+                <div class="profile-status">
+                    <span class="status-badge <?php echo $profile['is_active'] ? 'active' : 'inactive'; ?>">
+                        <?php echo $profile['is_active'] ? 'Active' : 'Inactive'; ?>
+                    </span>
+                    <span class="status-badge <?php echo $profile['employment_status'] ?? 'active'; ?>">
+                        <?php echo ucfirst(str_replace('_', ' ', $profile['employment_status'] ?? 'Active')); ?>
+                    </span>
                 </div>
             </div>
-
-            <!-- ===== STATISTICS CARD ===== -->
-            <div class="stats-card">
-                <h4><i class="fas fa-chart-bar" style="color:#bb0404;"></i> My Statistics</h4>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-icon"><i class="fas fa-sun"></i></div>
-                        <div class="stat-info">
-                            <span class="stat-label">Morning Reports</span>
-                            <span class="stat-value"><?php echo number_format($morning_count); ?></span>
-                        </div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-icon"><i class="fas fa-moon"></i></div>
-                        <div class="stat-info">
-                            <span class="stat-label">Evening Stocks</span>
-                            <span class="stat-value"><?php echo number_format($evening_count); ?></span>
-                        </div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
-                        <div class="stat-info">
-                            <span class="stat-label">Commissions</span>
-                            <span class="stat-value"><?php echo number_format($commission_count); ?></span>
-                            <span class="stat-sub">Total: <?php echo formatCurrency($commission_total); ?></span>
-                        </div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-icon"><i class="fas fa-receipt"></i></div>
-                        <div class="stat-info">
-                            <span class="stat-label">Expenses</span>
-                            <span class="stat-value"><?php echo number_format($expense_count); ?></span>
-                            <span class="stat-sub">Total: <?php echo formatCurrency($expense_total); ?></span>
-                        </div>
-                    </div>
+            <div class="profile-stats">
+                <div class="stat-item">
+                    <span class="stat-value"><?php echo number_format($profile['total_activities'] ?? 0); ?></span>
+                    <span class="stat-label">Activities</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value"><?php echo date('d M Y', strtotime($profile['created_at'])); ?></span>
+                    <span class="stat-label">Joined</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value"><?php echo $profile['last_login'] ? date('d M Y', strtotime($profile['last_login'])) : 'Never'; ?></span>
+                    <span class="stat-label">Last Login</span>
                 </div>
             </div>
         </div>
 
-        <!-- ===== EDIT PROFILE FORM ===== -->
-        <div class="edit-profile-card">
-            <div class="edit-header">
-                <h4><i class="fas fa-edit" style="color:#bb0404;"></i> Edit Profile</h4>
-                <p class="text-muted">Update your personal information</p>
-            </div>
+        <!-- Profile Content -->
+        <div class="profile-content">
             
-            <form method="POST" action="" class="profile-form">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="username">Username <span class="required">*</span></label>
-                        <input type="text" id="username" name="username" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['username'] ?? ''); ?>" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="full_name">Full Name <span class="required">*</span></label>
-                        <input type="text" id="full_name" name="full_name" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['full_name'] ?? ''); ?>" required>
+            <!-- Left Column -->
+            <div class="profile-left">
+                <!-- Personal Information -->
+                <div class="info-card">
+                    <h4><i class="fas fa-user" style="color:#bb0404;"></i> Personal Information</h4>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="label">Employee ID</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['employee_id']); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Full Name</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['full_name']); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Username</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['username']); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Email</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['email']); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Phone</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['phone'] ?? 'N/A'); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Role</span>
+                            <span class="value"><?php echo ucfirst(htmlspecialchars($profile['role'])); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Branch</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['branch_name'] ?? 'Main'); ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Status</span>
+                            <span class="value">
+                                <span class="status-badge <?php echo $profile['is_active'] ? 'active' : 'inactive'; ?>">
+                                    <?php echo $profile['is_active'] ? 'Active' : 'Inactive'; ?>
+                                </span>
+                            </span>
+                        </div>
+                        <?php if ($profile['hire_date']): ?>
+                        <div class="info-item">
+                            <span class="label">Hire Date</span>
+                            <span class="value"><?php echo date('d M Y', strtotime($profile['hire_date'])); ?></span>
+                        </div>
+                        <?php endif; ?>
+                        <?php if ($profile['base_salary'] > 0): ?>
+                        <div class="info-item">
+                            <span class="label">Base Salary</span>
+                            <span class="value"><?php echo formatCurrency($profile['base_salary']); ?></span>
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="email">Email Address <span class="required">*</span></label>
-                        <input type="email" id="email" name="email" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['email'] ?? ''); ?>" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="phone">Phone Number</label>
-                        <input type="text" id="phone" name="phone" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['phone'] ?? ''); ?>">
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="address">Address</label>
-                        <input type="text" id="address" name="address" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['address'] ?? ''); ?>">
-                    </div>
-                    <div class="form-group">
-                        <label for="emergency_contact">Emergency Contact Name</label>
-                        <input type="text" id="emergency_contact" name="emergency_contact" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['emergency_contact'] ?? ''); ?>">
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="emergency_phone">Emergency Phone</label>
-                        <input type="text" id="emergency_phone" name="emergency_phone" class="form-control" 
-                               value="<?php echo htmlspecialchars($user['emergency_phone'] ?? ''); ?>">
-                    </div>
-                    <div class="form-group">
-                        <!-- Empty space for alignment -->
+
+                <!-- Address & Emergency Contact -->
+                <?php if ($profile['address'] || $profile['emergency_contact'] || $profile['emergency_phone']): ?>
+                <div class="info-card">
+                    <h4><i class="fas fa-address-card" style="color:#bb0404;"></i> Additional Information</h4>
+                    <div class="info-grid">
+                        <?php if ($profile['address']): ?>
+                        <div class="info-item full">
+                            <span class="label">Address</span>
+                            <span class="value"><?php echo nl2br(htmlspecialchars($profile['address'])); ?></span>
+                        </div>
+                        <?php endif; ?>
+                        <?php if ($profile['emergency_contact']): ?>
+                        <div class="info-item">
+                            <span class="label">Emergency Contact</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['emergency_contact']); ?></span>
+                        </div>
+                        <?php endif; ?>
+                        <?php if ($profile['emergency_phone']): ?>
+                        <div class="info-item">
+                            <span class="label">Emergency Phone</span>
+                            <span class="value"><?php echo htmlspecialchars($profile['emergency_phone']); ?></span>
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
-                
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Save Changes
-                    </button>
-                    <button type="reset" class="btn btn-reset-form">
-                        <i class="fas fa-undo"></i> Reset
-                    </button>
+                <?php endif; ?>
+            </div>
+
+            <!-- Right Column -->
+            <div class="profile-right">
+                <!-- Permissions -->
+                <div class="info-card">
+                    <h4><i class="fas fa-lock" style="color:#bb0404;"></i> Permissions</h4>
+                    <?php if (count($permissions) > 0): ?>
+                        <div class="permissions-grid">
+                            <?php foreach ($permissions as $perm): ?>
+                                <div class="permission-item">
+                                    <span class="perm-module"><?php echo ucfirst(htmlspecialchars($perm['module'])); ?></span>
+                                    <div class="perm-badges">
+                                        <?php if ($perm['can_view']): ?>
+                                            <span class="perm-badge view">View</span>
+                                        <?php endif; ?>
+                                        <?php if ($perm['can_add']): ?>
+                                            <span class="perm-badge add">Add</span>
+                                        <?php endif; ?>
+                                        <?php if ($perm['can_edit']): ?>
+                                            <span class="perm-badge edit">Edit</span>
+                                        <?php endif; ?>
+                                        <?php if ($perm['can_delete']): ?>
+                                            <span class="perm-badge delete">Delete</span>
+                                        <?php endif; ?>
+                                        <?php if ($perm['can_export']): ?>
+                                            <span class="perm-badge export">Export</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <p class="text-muted">No permissions defined for this role.</p>
+                    <?php endif; ?>
                 </div>
-            </form>
+
+                <!-- Recent Activities -->
+                <div class="info-card">
+                    <h4><i class="fas fa-history" style="color:#bb0404;"></i> Recent Activities</h4>
+                    <?php if (count($recent_activities) > 0): ?>
+                        <div class="activity-list">
+                            <?php foreach ($recent_activities as $activity): ?>
+                                <div class="activity-item">
+                                    <div class="activity-icon">
+                                        <i class="fas <?php echo getActivityIcon($activity['action']); ?>"></i>
+                                    </div>
+                                    <div class="activity-info">
+                                        <span class="activity-action"><?php echo htmlspecialchars($activity['action']); ?></span>
+                                        <span class="activity-module"><?php echo htmlspecialchars($activity['module']); ?></span>
+                                        <span class="activity-time"><?php echo timeAgo($activity['created_at']); ?></span>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="view-all">
+                            <a href="../activity_logs/index.php?employee=<?php echo $user_id; ?>" class="btn btn-link">
+                                View All Activities <i class="fas fa-arrow-right"></i>
+                            </a>
+                        </div>
+                    <?php else: ?>
+                        <p class="text-muted">No recent activities.</p>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Activity Stats Chart -->
+                <?php if (count($activity_stats) > 0): ?>
+                <div class="info-card">
+                    <h4><i class="fas fa-chart-bar" style="color:#bb0404;"></i> Activity Summary (Last 7 Days)</h4>
+                    <div class="chart-container">
+                        <?php foreach (array_reverse($activity_stats) as $stat): ?>
+                            <div class="chart-bar">
+                                <div class="bar-label"><?php echo date('d M', strtotime($stat['date'])); ?></div>
+                                <div class="bar-track">
+                                    <div class="bar-fill" style="width: <?php echo min(100, ($stat['total_actions'] / max(array_column($activity_stats, 'total_actions'))) * 100); ?>%;">
+                                        <?php echo $stat['total_actions']; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
+            </div>
         </div>
+
+        <?php else: ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> Profile not found. Please contact administrator.
+            </div>
+        <?php endif; ?>
 
     </div>
-    
-    <!-- ============================================================
-    FOOTER
-    ============================================================ -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-STYLES WITH DARK MODE SUPPORT
-============================================================ -->
 <style>
-/* ============================================================
-   DARK MODE VARIABLES
-   ============================================================ */
+/* Profile Header */
+.profile-header {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 24px 30px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.profile-avatar {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.avatar-img {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid #bb0404;
+}
+
+.avatar-placeholder {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: var(--bg-table-even);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 4px solid #bb0404;
+    color: var(--text-muted);
+}
+
+.avatar-edit-btn {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    background: #bb0404;
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    border: 2px solid var(--bg-card);
+}
+
+.avatar-edit-btn:hover {
+    background: #8a0303;
+    transform: scale(1.1);
+}
+
+.profile-info {
+    flex: 1;
+}
+
+.profile-info h3 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.profile-info .username {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 2px 0 10px 0;
+}
+
+.profile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 10px;
+}
+
+.meta-item {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.meta-item i {
+    color: #bb0404;
+    width: 18px;
+}
+
+.profile-status {
+    display: flex;
+    gap: 8px;
+}
+
+.profile-stats {
+    display: flex;
+    gap: 30px;
+    flex-shrink: 0;
+}
+
+.stat-item {
+    text-align: center;
+}
+
+.stat-value {
+    display: block;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Profile Content */
+.profile-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+
+.profile-left, .profile-right {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+/* Info Cards */
+.info-card {
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 20px 24px;
+    border: 1px solid var(--border-color);
+}
+
+.info-card h4 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 16px 0;
+}
+
+.info-card h4 i {
+    margin-right: 8px;
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 24px;
+}
+
+.info-item.full {
+    grid-column: span 2;
+}
+
+.info-item .label {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: block;
+}
+
+.info-item .value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Status Badges */
+.status-badge {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.status-badge.active { background: #D1FAE5; color: #065F46; }
+.status-badge.inactive { background: #FEE2E2; color: #991B1B; }
+
+/* Permissions */
+.permissions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.permission-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--bg-table-even);
+    border-radius: 6px;
+}
+
+.perm-module {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.perm-badges {
+    display: flex;
+    gap: 4px;
+}
+
+.perm-badge {
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.perm-badge.view { background: #DBEAFE; color: #1D4ED8; }
+.perm-badge.add { background: #D1FAE5; color: #065F46; }
+.perm-badge.edit { background: #FEF3C7; color: #92400E; }
+.perm-badge.delete { background: #FEE2E2; color: #991B1B; }
+.perm-badge.export { background: #EDE9FE; color: #6D28D9; }
+
+/* Activities */
+.activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.activity-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--bg-table-even);
+    transition: background 0.2s ease;
+}
+
+.activity-item:hover {
+    background: var(--bg-table-hover);
+}
+
+.activity-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #bb040410;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #bb0404;
+    flex-shrink: 0;
+}
+
+.activity-info {
+    flex: 1;
+}
+
+.activity-action {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.activity-module {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 8px;
+}
+
+.activity-time {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: block;
+}
+
+.view-all {
+    margin-top: 12px;
+    text-align: center;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: #bb0404;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.btn-link:hover {
+    color: #8a0303;
+    text-decoration: underline;
+}
+
+/* Chart */
+.chart-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.chart-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bar-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 50px;
+    flex-shrink: 0;
+    text-align: right;
+}
+
+.bar-track {
+    flex: 1;
+    height: 24px;
+    background: var(--bg-table-even);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+}
+
+.bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #bb0404, #e64040);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 8px;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    transition: width 1s ease;
+    min-width: 30px;
+}
+
+/* Buttons */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-primary { background: #bb0404; color: white; }
+.btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); }
+
+.btn-warning { background: #F59E0B; color: #1F2937; }
+.btn-warning:hover { background: #D97706; transform: translateY(-1px); }
+
+.btn-danger { background: #DC2626; color: white; }
+.btn-danger:hover { background: #991B1B; transform: translateY(-1px); }
+
+.alert {
+    padding: 12px 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+
+.text-muted { color: var(--text-muted); }
+
+/* Dark Mode */
 :root {
-    --bg-primary: #f3f4f6;
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
-    --bg-card-hover: #f9fafb;
     --bg-table-even: #fafafa;
     --bg-table-hover: #f3f4f6;
     --bg-input: #f9fafb;
@@ -486,18 +736,11 @@ STYLES WITH DARK MODE SUPPORT
     --border-color: #e5e7eb;
     --shadow-color: rgba(0,0,0,0.06);
     --shadow-hover: rgba(0,0,0,0.08);
-    --alert-success-bg: #D1FAE5;
-    --alert-success-text: #065F46;
-    --alert-danger-bg: #FEE2E2;
-    --alert-danger-text: #991B1B;
 }
 
-/* Dark Mode - Full Page */
 body.dark-mode {
-    --bg-primary: #0f172a;
     --bg-body: #0f172a;
     --bg-card: #1e293b;
-    --bg-card-hover: #334155;
     --bg-table-even: #1a2332;
     --bg-table-hover: #2d3a4f;
     --bg-input: #334155;
@@ -508,32 +751,14 @@ body.dark-mode {
     --border-color: #334155;
     --shadow-color: rgba(0,0,0,0.4);
     --shadow-hover: rgba(0,0,0,0.6);
-    --alert-success-bg: #064E3B;
-    --alert-success-text: #6EE7B7;
-    --alert-danger-bg: #7F1D1D;
-    --alert-danger-text: #FCA5A5;
 }
 
-/* Apply Dark Mode to Full Page */
 body {
     background: var(--bg-body) !important;
     color: var(--text-primary);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.main-wrapper {
-    background: var(--bg-body) !important;
-    transition: background 0.3s ease;
-}
-
-.main-content {
-    background: var(--bg-body) !important;
-    transition: background 0.3s ease;
-}
-
-/* ============================================================
-   DARK MODE TOGGLE BUTTON
-   ============================================================ */
 .dark-mode-toggle {
     display: flex;
     justify-content: flex-end;
@@ -556,660 +781,117 @@ body {
 }
 
 .dark-mode-btn:hover {
-    background: var(--bg-card-hover);
+    background: var(--bg-table-hover);
     transform: translateY(-1px);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 
-.dark-mode-btn i {
-    font-size: 16px;
-}
-
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.page-header .header-left h2 {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.page-header .header-left h2 i {
-    margin-right: 10px;
-}
-
-.page-header .header-left .text-muted {
-    font-size: 13px;
-    color: var(--text-muted);
-    margin: 4px 0 0 0;
-}
-
-.header-right {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.btn-warning {
-    background: #F59E0B;
-    color: #1F2937;
-    border: none;
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-}
-
-.btn-warning:hover {
-    background: #D97706;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(245,158,11,0.3);
-    color: #ffffff;
-}
-
-/* ============================================================
-   ALERT
-   ============================================================ */
-.alert {
-    padding: 12px 18px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 14px;
-    border: 1px solid transparent;
-    position: relative;
-}
-
-.alert-success {
-    background: var(--alert-success-bg);
-    color: var(--alert-success-text);
-    border-color: var(--alert-success-bg);
-}
-
-.alert-danger {
-    background: var(--alert-danger-bg);
-    color: var(--alert-danger-text);
-    border-color: var(--alert-danger-bg);
-}
-
-.alert-close {
-    margin-left: auto;
-    background: none;
-    border: none;
-    font-size: 20px;
-    cursor: pointer;
-    color: inherit;
-    opacity: 0.6;
-    padding: 0 4px;
-}
-
-.alert-close:hover {
-    opacity: 1;
-}
-
-/* ============================================================
-   PROFILE AVATAR
-   ============================================================ */
-.profile-avatar {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.avatar-container {
-    position: relative;
-    display: inline-block;
-}
-
-.avatar-image {
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 4px solid #bb0404;
-    box-shadow: 0 4px 16px rgba(187,4,4,0.25);
-    transition: all 0.3s ease;
-    background: var(--bg-card);
-}
-
-.avatar-image:hover {
-    transform: scale(1.02);
-    box-shadow: 0 6px 24px rgba(187,4,4,0.35);
-}
-
-.avatar-badge {
-    position: absolute;
-    bottom: 4px;
-    right: 4px;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #bb0404;
-    color: #ffffff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    cursor: pointer;
-    border: 3px solid var(--bg-card);
-    transition: all 0.3s ease;
-    z-index: 10;
-}
-
-.avatar-badge:hover {
-    transform: scale(1.1);
-    background: #8a0303;
-    box-shadow: 0 0 20px rgba(187,4,4,0.4);
-}
-
-/* ============================================================
-   PROFILE GRID
-   ============================================================ */
-.profile-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-/* Profile Card */
-.profile-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 24px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
-    text-align: center;
-}
-
-.profile-name {
-    margin-top: 12px;
-}
-
-.profile-name h3 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.role-badge {
-    display: inline-block;
-    background: #DBEAFE;
-    color: #1D4ED8;
-    padding: 2px 14px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    margin: 6px 4px 0 0;
-}
-
-.status-badge {
-    display: inline-block;
-    padding: 2px 14px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    margin: 6px 0 0 0;
-}
-
-.status-active {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.status-inactive {
-    background: #FEE2E2;
-    color: #991B1B;
-}
-
-.profile-info {
-    margin-top: 16px;
-    text-align: left;
-    border-top: 1px solid var(--border-color);
-    padding-top: 16px;
-}
-
-.info-item {
-    display: flex;
-    align-items: center;
-    padding: 6px 0;
-    gap: 12px;
-}
-
-.info-item i {
-    width: 20px;
-    color: #bb0404;
-    font-size: 16px;
-}
-
-.info-label {
-    font-size: 12px;
-    color: var(--text-muted);
-    width: 120px;
-    flex-shrink: 0;
-}
-
-.info-value {
-    font-size: 13px;
-    color: var(--text-primary);
-    font-weight: 500;
-}
-
-/* Stats Card */
-.stats-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 24px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
-}
-
-.stats-card h4 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0 0 16px 0;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-.stat-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    background: var(--bg-table-even);
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-}
-
-.stat-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: #DBEAFE;
-    color: #1D4ED8;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    flex-shrink: 0;
-}
-
-.stat-info {
-    flex: 1;
-}
-
-.stat-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    display: block;
-}
-
-.stat-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text-primary);
-    display: block;
-}
-
-.stat-sub {
-    font-size: 11px;
-    color: var(--text-light);
-    display: block;
-}
-
-/* ============================================================
-   EDIT PROFILE CARD
-   ============================================================ */
-.edit-profile-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 24px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
-}
-
-.edit-header {
-    margin-bottom: 20px;
-}
-
-.edit-header h4 {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.edit-header .text-muted {
-    font-size: 13px;
-    color: var(--text-muted);
-    margin: 4px 0 0 0;
-}
-
-.profile-form .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
-}
-
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.form-group label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.form-group label .required {
-    color: #DC2626;
-}
-
-.form-control {
-    padding: 10px 14px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-input);
-    transition: all 0.3s ease;
-}
-
-.form-control:focus {
-    outline: none;
-    border-color: #bb0404;
-    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
-}
-
-.form-control::placeholder {
-    color: var(--text-light);
-}
-
-.form-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 8px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
-
-.btn-primary {
-    background: #bb0404;
-    color: #ffffff;
-    border: none;
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.btn-primary:hover {
-    background: #8a0303;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(187,4,4,0.3);
-    color: #ffffff;
-}
-
-.btn-reset-form {
-    background: var(--bg-table-even);
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 500;
-    font-size: 13px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.btn-reset-form:hover {
-    background: var(--bg-table-hover);
-}
-
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+/* Responsive */
 @media (max-width: 1024px) {
-    .profile-grid {
+    .profile-content {
         grid-template-columns: 1fr;
+    }
+    .profile-stats {
+        gap: 20px;
     }
 }
 
 @media (max-width: 768px) {
+    .profile-header {
+        flex-direction: column;
+        text-align: center;
+    }
+    .profile-meta {
+        justify-content: center;
+    }
+    .profile-status {
+        justify-content: center;
+    }
+    .profile-stats {
+        justify-content: center;
+        width: 100%;
+    }
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+    .info-item.full {
+        grid-column: span 1;
+    }
+    .permissions-grid {
+        grid-template-columns: 1fr;
+    }
     .page-header {
         flex-direction: column;
         align-items: flex-start;
     }
-    
     .header-right {
         width: 100%;
-    }
-    
-    .header-right .btn {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .profile-form .form-row {
-        grid-template-columns: 1fr;
-    }
-    
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .info-item {
         flex-wrap: wrap;
-        gap: 4px;
     }
-    
-    .info-label {
-        width: 100%;
-        font-size: 11px;
-    }
-    
-    .info-value {
-        font-size: 13px;
-    }
-    
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        width: 100%;
+    .header-right .btn {
+        flex: 1;
         justify-content: center;
     }
-    
-    .avatar-image {
-        width: 100px;
-        height: 100px;
-    }
-    
-    .avatar-badge {
-        width: 32px;
-        height: 32px;
-        font-size: 14px;
-    }
-}
-
-@media (max-width: 480px) {
-    .profile-card, .stats-card, .edit-profile-card {
-        padding: 16px;
-    }
-    
-    .profile-name h3 {
-        font-size: 18px;
-    }
-    
-    .stat-value {
-        font-size: 16px;
-    }
-    
-    .dark-mode-btn {
-        padding: 6px 12px;
-        font-size: 12px;
-    }
-    
-    .avatar-image {
-        width: 80px;
-        height: 80px;
-    }
-    
-    .avatar-badge {
-        width: 28px;
-        height: 28px;
-        font-size: 12px;
-        bottom: 2px;
-        right: 2px;
-    }
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.profile-card {
-    animation: fadeInUp 0.3s ease forwards;
-}
-
-.stats-card {
-    animation: fadeInUp 0.3s ease forwards;
-    animation-delay: 0.10s;
-}
-
-.edit-profile-card {
-    animation: fadeInUp 0.3s ease forwards;
-    animation-delay: 0.20s;
 }
 </style>
 
-<!-- ============================================================
-JAVASCRIPT
-============================================================ -->
 <script>
-// ============================================================
-// DARK MODE TOGGLE
-// ============================================================
 function toggleDarkMode() {
-    const body = document.body;
+    document.body.classList.toggle('dark-mode');
     const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    body.classList.toggle('dark-mode');
-    
-    if (body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
+    if (document.body.classList.contains('dark-mode')) {
+        btn.querySelector('i').className = 'fas fa-sun';
+        btn.querySelector('span').textContent = 'Light Mode';
         localStorage.setItem('darkMode', 'enabled');
     } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
+        btn.querySelector('i').className = 'fas fa-moon';
+        btn.querySelector('span').textContent = 'Dark Mode';
         localStorage.setItem('darkMode', 'disabled');
     }
 }
 
-// Check for saved dark mode preference
 document.addEventListener('DOMContentLoaded', function() {
-    const darkMode = localStorage.getItem('darkMode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn?.querySelector('i');
-    const text = btn?.querySelector('span');
-    
-    if (darkMode === 'enabled') {
+    if (localStorage.getItem('darkMode') === 'enabled') {
         document.body.classList.add('dark-mode');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light Mode';
+        const btn = document.getElementById('darkModeToggle');
+        if (btn) {
+            btn.querySelector('i').className = 'fas fa-sun';
+            btn.querySelector('span').textContent = 'Light Mode';
+        }
     }
-    
-    // Auto-dismiss alert after 5 seconds
-    const alerts = document.querySelectorAll('.alert');
-    alerts.forEach(alert => {
-        setTimeout(() => {
-            alert.style.display = 'none';
-        }, 5000);
-    });
 });
 
-// ============================================================
-// PROFILE PICTURE PREVIEW
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    const fileInput = document.getElementById('profile_pic_input');
-    const profileImage = document.getElementById('profileImage');
+function getActivityIcon(action) {
+    const icons = {
+        'Add': 'fa-plus-circle',
+        'Edit': 'fa-edit',
+        'Update': 'fa-pen',
+        'Delete': 'fa-trash',
+        'Remove': 'fa-trash-alt',
+        'View': 'fa-eye',
+        'Login': 'fa-sign-in-alt',
+        'Logout': 'fa-sign-out-alt',
+        'Generate': 'fa-file-alt',
+        'Create': 'fa-plus-circle',
+        'Save': 'fa-save'
+    };
     
-    if (fileInput) {
-        fileInput.addEventListener('change', function(e) {
-            const file = this.files[0];
-            if (file) {
-                // Check file size (25MB = 26214400 bytes)
-                if (file.size > 26214400) {
-                    alert('File size exceeds 25MB. Please choose a smaller file.');
-                    this.value = '';
-                    return;
-                }
-                
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    profileImage.src = e.target.result;
-                };
-                reader.readAsDataURL(file);
-            }
-        });
-    }
-    
-    // Listen for profile picture updates from other tabs/windows
-    window.addEventListener('storage', function(e) {
-        if (e.key === 'profile_pic_updated' && e.newValue === 'true') {
-            // Reload the page to refresh profile picture
-            localStorage.removeItem('profile_pic_updated');
-            window.location.reload();
+    for (let [key, value] of Object.entries(icons)) {
+        if (action.toLowerCase().includes(key.toLowerCase())) {
+            return value;
         }
-    });
-});
+    }
+    return 'fa-circle';
+}
+
+function timeAgo(date) {
+    const diff = Math.floor((new Date() - new Date(date)) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 2592000) return Math.floor(diff / 86400) + 'd ago';
+    return new Date(date).toLocaleDateString();
+}
 </script>
 
 </body>

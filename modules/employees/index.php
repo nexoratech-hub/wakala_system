@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/employees/index.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEES LIST
-// WITH PROFILE PICTURE SUPPORT & DARK MODE
+// WITH FULL DARK MODE SUPPORT
 // ================================================================
 
 // ============================================================
@@ -166,6 +166,20 @@ $employees = $stmt->fetchAll();
 $employee_count = count($employees);
 
 // ============================================================
+// HANDLE SUCCESS/ERROR MESSAGES
+// ============================================================
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
+// ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
 // ============================================================
 include_once '../../includes/admin_header.php';
@@ -179,14 +193,6 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
-        </div>
-
         <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
         <div class="page-header">
             <div class="page-header-left">
@@ -224,6 +230,25 @@ DASHBOARD CONTENT
                 </div>
             </div>
         </div>
+
+        <!-- ============================================================
+        SUCCESS/ERROR MESSAGES
+        ============================================================ -->
+        <?php if (!empty($success_message)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> 
+                <span><?php echo $error_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
 
         <!-- ===== BRANCH FILTER ===== -->
         <div class="branch-filter-bar">
@@ -348,32 +373,8 @@ DASHBOARD CONTENT
                                     $role_class = 'role-employee';
                                 }
                                 
-                                // ============================================================
-                                // GET PROFILE PICTURE PATH
-                                // ============================================================
-                                $profile_pic_path = '';
-                                $profile_pic_url = '';
-                                
-                                if (!empty($employee['profile_pic'])) {
-                                    // Check if file exists in different paths
-                                    $paths_to_check = [
-                                        '../../' . $employee['profile_pic'],
-                                        $employee['profile_pic'],
-                                        '../../uploads/profiles/' . basename($employee['profile_pic'])
-                                    ];
-                                    
-                                    foreach ($paths_to_check as $path) {
-                                        if (file_exists($path)) {
-                                            $profile_pic_url = '../../' . $employee['profile_pic'];
-                                            break;
-                                        }
-                                    }
-                                    
-                                    // If still not found, try direct path
-                                    if (empty($profile_pic_url) && file_exists($employee['profile_pic'])) {
-                                        $profile_pic_url = $employee['profile_pic'];
-                                    }
-                                }
+                                // Profile image
+                                $profile_pic = !empty($employee['profile_pic']) ? $employee['profile_pic'] : '';
                             ?>
                                 <tr data-role="<?php echo strtolower($employee['role']); ?>" data-status="<?php echo $is_active; ?>">
                                     <td><?php echo $counter++; ?></td>
@@ -384,14 +385,10 @@ DASHBOARD CONTENT
                                     </td>
                                     <td>
                                         <div class="employee-name-cell">
-                                            <?php if (!empty($profile_pic_url)): ?>
-                                                <img src="<?php echo htmlspecialchars($profile_pic_url); ?>" alt="Profile" class="profile-thumb" 
-                                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                                <div class="profile-avatar" style="display:none;">
-                                                    <?php echo strtoupper(substr($employee['full_name'], 0, 1)); ?>
-                                                </div>
+                                            <?php if (!empty($profile_pic)): ?>
+                                                <img src="<?php echo htmlspecialchars($profile_pic); ?>" alt="Profile" class="profile-thumb">
                                             <?php else: ?>
-                                                <div class="profile-avatar">
+                                                <div class="profile-avatar" style="background: #3B82F6;">
                                                     <?php echo strtoupper(substr($employee['full_name'], 0, 1)); ?>
                                                 </div>
                                             <?php endif; ?>
@@ -433,7 +430,7 @@ DASHBOARD CONTENT
                                             <a href="edit.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this employee?')">
+                                            <a href="delete.php?id=<?php echo $employee['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirmDelete(<?php echo $employee['id']; ?>, '<?php echo addslashes($employee['full_name']); ?>')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -455,102 +452,57 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES WITH DARK MODE SUPPORT
+DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --bg-primary: #f3f4f6;
-    --bg-body: #f3f4f6;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f9fafb;
-    --bg-table-even: #fafafa;
-    --bg-table-hover: #f3f4f6;
-    --bg-input: #f9fafb;
-    --bg-empty: #f9fafb;
-    --text-primary: #1f2937;
-    --text-secondary: #374151;
-    --text-muted: #6b7280;
-    --text-light: #9ca3af;
-    --border-color: #e5e7eb;
-    --shadow-color: rgba(0,0,0,0.06);
-    --shadow-hover: rgba(0,0,0,0.08);
-    --dropdown-bg: #ffffff;
-    --dropdown-hover: #f3f4f6;
+    --emp-bg: #FFFFFF;
+    --emp-text: #1F2937;
+    --emp-text-secondary: #6B7280;
+    --emp-text-light: #9CA3AF;
+    --emp-border: #E5E7EB;
+    --emp-card-bg: #FFFFFF;
+    --emp-input-bg: #F9FAFB;
+    --emp-hover: #F3F4F6;
+    --emp-shadow: rgba(0,0,0,0.06);
+    --emp-shadow-lg: rgba(0,0,0,0.12);
+    --emp-dropdown-bg: #FFFFFF;
+    --emp-dropdown-border: #E5E7EB;
 }
 
-/* Dark Mode - Full Page */
-body.dark-mode {
-    --bg-primary: #0f172a;
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-card-hover: #334155;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
-    --bg-input: #334155;
-    --bg-empty: #1a2332;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-    --shadow-color: rgba(0,0,0,0.4);
-    --shadow-hover: rgba(0,0,0,0.6);
-    --dropdown-bg: #1e293b;
-    --dropdown-hover: #334155;
+html.dark-mode {
+    --emp-bg: #1F2937;
+    --emp-text: #F9FAFB;
+    --emp-text-secondary: #9CA3AF;
+    --emp-text-light: #6B7280;
+    --emp-border: #374151;
+    --emp-card-bg: #1F2937;
+    --emp-input-bg: #374151;
+    --emp-hover: #374151;
+    --emp-shadow: rgba(0,0,0,0.3);
+    --emp-shadow-lg: rgba(0,0,0,0.4);
+    --emp-dropdown-bg: #1F2937;
+    --emp-dropdown-border: #374151;
 }
 
 /* Apply Dark Mode to Full Page */
 body {
-    background: var(--bg-body) !important;
-    color: var(--text-primary);
+    background: var(--emp-bg) !important;
+    color: var(--emp-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
 .main-wrapper {
-    background: var(--bg-body) !important;
+    background: var(--emp-bg) !important;
     transition: background 0.3s ease;
 }
 
 .main-content {
-    background: var(--bg-body) !important;
+    background: var(--emp-bg) !important;
     transition: background 0.3s ease;
-}
-
-/* ============================================================
-   DARK MODE TOGGLE BUTTON
-   ============================================================ */
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-card-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-.dark-mode-btn i {
-    font-size: 16px;
 }
 
 /* ============================================================
@@ -573,8 +525,9 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--emp-text);
     margin: 0;
+    transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
@@ -584,10 +537,11 @@ body {
 
 .record-count {
     font-size: 13px;
-    color: var(--text-muted);
-    background: var(--bg-table-even);
+    color: var(--emp-text-secondary);
+    background: var(--emp-hover);
     padding: 2px 12px;
     border-radius: 12px;
+    transition: all 0.3s ease;
 }
 
 .header-actions {
@@ -689,14 +643,15 @@ body {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--dropdown-bg);
+    background: var(--emp-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--shadow-hover);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 20px var(--emp-shadow-lg);
+    border: 1px solid var(--emp-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
+    transition: all 0.3s ease;
 }
 
 .dropdown-menu.show {
@@ -709,14 +664,14 @@ body {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--text-primary);
+    color: var(--emp-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--dropdown-hover);
+    background: var(--emp-hover);
 }
 
 .dropdown-menu a i {
@@ -733,15 +688,16 @@ body {
    BRANCH FILTER BAR
    ============================================================ */
 .branch-filter-bar {
-    background: var(--bg-card);
+    background: var(--emp-card-bg);
     border-radius: 10px;
     padding: 12px 20px;
     margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--emp-shadow);
+    border: 1px solid var(--emp-border);
+    transition: all 0.3s ease;
 }
 
 .branch-filter-left {
@@ -749,7 +705,7 @@ body {
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--text-primary);
+    color: var(--emp-text);
 }
 
 .branch-filter-left i {
@@ -760,17 +716,23 @@ body {
 .branch-filter-left select {
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-input);
+    border: 1px solid var(--emp-border);
+    background: var(--emp-input-bg);
     font-size: 13px;
-    color: var(--text-primary);
+    color: var(--emp-text);
     outline: none;
     cursor: pointer;
+    transition: all 0.3s ease;
 }
 
 .branch-filter-left select:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
+}
+
+.branch-filter-left select option {
+    background: var(--emp-dropdown-bg);
+    color: var(--emp-text);
 }
 
 .branch-badge {
@@ -784,11 +746,80 @@ body {
 
 .branch-filter-right .date-display {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--emp-text-secondary);
 }
 
 .branch-filter-right .date-display i {
     color: #DC2626;
+}
+
+/* ============================================================
+   ALERTS
+   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+    transition: all 0.3s ease;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.alert span {
+    flex: 1;
+}
+
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.alert-close:hover {
+    opacity: 1;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* ============================================================
@@ -802,14 +833,14 @@ body {
 }
 
 .summary-card {
-    background: var(--bg-card);
+    background: var(--emp-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--emp-shadow);
+    border: 1px solid var(--emp-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -817,7 +848,7 @@ body {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--shadow-hover);
+    box-shadow: 0 4px 12px var(--emp-shadow-lg);
 }
 
 .summary-icon {
@@ -844,22 +875,23 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--text-muted);
+    color: var(--emp-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--text-primary);
+    color: var(--emp-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: color 0.3s ease;
 }
 
 .summary-sub {
     font-size: 11px;
-    color: var(--text-light);
+    color: var(--emp-text-light);
     font-weight: 500;
 }
 
@@ -877,11 +909,12 @@ body {
    TABLE CONTAINER
    ============================================================ */
 .table-container {
-    background: var(--bg-card);
+    background: var(--emp-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px var(--emp-shadow);
+    border: 1px solid var(--emp-border);
     overflow: hidden;
+    transition: all 0.3s ease;
 }
 
 .table-header {
@@ -889,15 +922,16 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--emp-border);
     flex-wrap: wrap;
     gap: 10px;
+    transition: all 0.3s ease;
 }
 
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--emp-text);
     margin: 0;
 }
 
@@ -916,13 +950,17 @@ body {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--emp-border);
     font-size: 13px;
     outline: none;
     width: 200px;
-    background: var(--bg-input);
-    color: var(--text-primary);
     transition: all 0.3s ease;
+    background: var(--emp-input-bg);
+    color: var(--emp-text);
+}
+
+.search-input::placeholder {
+    color: var(--emp-text-light);
 }
 
 .search-input:focus {
@@ -930,18 +968,14 @@ body {
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
 }
 
-.search-input::placeholder {
-    color: var(--text-light);
-}
-
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--emp-border);
     font-size: 13px;
     outline: none;
-    background: var(--bg-input);
-    color: var(--text-primary);
+    background: var(--emp-input-bg);
+    color: var(--emp-text);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -949,6 +983,11 @@ body {
 .filter-select:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
+}
+
+.filter-select option {
+    background: var(--emp-dropdown-bg);
+    color: var(--emp-text);
 }
 
 .table-responsive {
@@ -986,25 +1025,18 @@ body {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--emp-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--bg-table-hover);
-}
-
-.data-table tbody tr:nth-child(even) {
-    background: var(--bg-table-even);
-}
-
-.data-table tbody tr:nth-child(even):hover {
-    background: var(--bg-table-hover);
+    background: var(--emp-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--text-secondary);
+    color: var(--emp-text);
+    transition: color 0.3s ease;
 }
 
 /* Employee ID */
@@ -1026,15 +1058,12 @@ body {
     height: 32px;
     border-radius: 50%;
     object-fit: cover;
-    border: 2px solid #DC2626;
-    background: #ffffff;
 }
 
 .profile-avatar {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: #3B82F6;
     color: white;
     display: flex;
     align-items: center;
@@ -1044,41 +1073,31 @@ body {
     flex-shrink: 0;
 }
 
-/* Dark mode profile avatar */
-body.dark-mode .profile-avatar {
-    background: #3B82F6;
-    color: #ffffff;
-}
-
-body.dark-mode .profile-thumb {
-    border-color: #DC2626;
-    background: #1e293b;
-}
-
 .employee-name {
     font-weight: 500;
-    color: var(--text-primary);
+    color: var(--emp-text);
 }
 
 /* Employee Email */
 .employee-email {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--emp-text-secondary);
 }
 
 /* Employee Phone */
 .employee-phone {
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--emp-text-secondary);
 }
 
 /* Branch Name */
 .branch-name {
-    background: var(--bg-table-even);
+    background: var(--emp-hover);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--emp-text-secondary);
+    transition: all 0.3s ease;
 }
 
 /* Role Badge */
@@ -1178,7 +1197,6 @@ body.dark-mode .profile-thumb {
 .empty-state {
     text-align: center;
     padding: 60px 20px;
-    background: var(--bg-empty);
 }
 
 .empty-state i {
@@ -1189,12 +1207,12 @@ body.dark-mode .profile-thumb {
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--text-primary);
+    color: var(--emp-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--text-muted);
+    color: var(--emp-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
@@ -1375,42 +1393,6 @@ body.dark-mode .profile-thumb {
 
 <script>
 // ============================================================
-// DARK MODE TOGGLE
-// ============================================================
-function toggleDarkMode() {
-    const body = document.body;
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    body.classList.toggle('dark-mode');
-    
-    if (body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-// Check for saved dark mode preference
-document.addEventListener('DOMContentLoaded', function() {
-    const darkMode = localStorage.getItem('darkMode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn?.querySelector('i');
-    const text = btn?.querySelector('span');
-    
-    if (darkMode === 'enabled') {
-        document.body.classList.add('dark-mode');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light Mode';
-    }
-});
-
-// ============================================================
 // DROPDOWN TOGGLE
 // ============================================================
 function toggleDropdown() {
@@ -1476,9 +1458,6 @@ function exportData(format) {
     }
 }
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
 function exportCSV(headers, data) {
     var csv = headers.join(',') + '\n';
     data.forEach(function(row) {
@@ -1496,9 +1475,6 @@ function exportCSV(headers, data) {
     window.URL.revokeObjectURL(url);
 }
 
-// ============================================================
-// EXPORT EXCEL (HTML Table format)
-// ============================================================
 function exportExcel(headers, data) {
     var html = '<html><head><meta charset="UTF-8"><title>Employees Export</title>';
     html += '<style>';
@@ -1540,9 +1516,6 @@ function exportExcel(headers, data) {
     window.URL.revokeObjectURL(url);
 }
 
-// ============================================================
-// EXPORT PDF
-// ============================================================
 function exportPDF(headers, data) {
     var printContent = '<html><head><title>Employees Export</title>';
     printContent += '<style>';
@@ -1551,15 +1524,10 @@ function exportPDF(headers, data) {
     printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
     printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
     printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
     printContent += '</style>';
     printContent += '</head><body>';
     printContent += '<h1>Employees Report</h1>';
     printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    var totalActive = 0;
-    var totalInactive = 0;
-    
     printContent += '<table>';
     printContent += '<thead><tr>';
     headers.forEach(function(h) {
@@ -1569,24 +1537,13 @@ function exportPDF(headers, data) {
     
     data.forEach(function(row) {
         printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Status column (index 7)
-            if (index === 7) {
-                if (cell.trim() === 'Active') {
-                    totalActive++;
-                } else if (cell.trim() === 'Inactive') {
-                    totalInactive++;
-                }
-            }
+        row.forEach(function(cell) {
             printContent += '<td>' + cell + '</td>';
         });
         printContent += '</tr>';
     });
     
     printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Active Employees: ' + totalActive + '</div>';
-    printContent += '<div class="total">Total Inactive Employees: ' + totalInactive + '</div>';
-    printContent += '<div class="total">Total Employees: ' + (totalActive + totalInactive) + '</div>';
     printContent += '</body></html>';
     
     var printWindow = window.open('', '_blank');
@@ -1597,7 +1554,7 @@ function exportPDF(headers, data) {
 }
 
 // ============================================================
-// FILTER BY ROLE
+// FILTER FUNCTIONS
 // ============================================================
 function filterByRole(role) {
     var rows = document.querySelectorAll('#employeesTable tbody tr');
@@ -1613,9 +1570,6 @@ function filterByRole(role) {
     });
 }
 
-// ============================================================
-// FILTER BY STATUS
-// ============================================================
 function filterByStatus(status) {
     var rows = document.querySelectorAll('#employeesTable tbody tr');
     
@@ -1627,6 +1581,10 @@ function filterByStatus(status) {
             row.style.display = 'none';
         }
     });
+}
+
+function confirmDelete(id, name) {
+    return confirm('Are you sure you want to delete the employee "' + name + '"? This action cannot be undone.');
 }
 
 // ============================================================
@@ -1649,8 +1607,33 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
+    
+    function syncDarkMode() {
+        var html = document.documentElement;
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) {
+            html.classList.add('dark-mode');
+        } else {
+            html.classList.remove('dark-mode');
+        }
+    }
+    
+    syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) {
+        syncDarkMode();
+    });
+    
+    // Auto-hide messages
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
+    }
+    
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    }
 });
 </script>
-
 </body>
 </html>

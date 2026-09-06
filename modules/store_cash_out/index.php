@@ -158,6 +158,20 @@ $cashouts = $stmt->fetchAll();
 $cashout_count = count($cashouts);
 
 // ============================================================
+// HANDLE SUCCESS/ERROR MESSAGES
+// ============================================================
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
+// ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
 // ============================================================
 include_once '../../includes/admin_header.php';
@@ -179,12 +193,10 @@ DASHBOARD CONTENT
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
-                    <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
                         <i class="fas fa-plus-circle"></i> Add Cash Out
                     </a>
                     
-                    <!-- Export Dropdown - SECOND -->
                     <div class="dropdown">
                         <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
                             <i class="fas fa-download"></i> Export
@@ -208,6 +220,25 @@ DASHBOARD CONTENT
                 </div>
             </div>
         </div>
+
+        <!-- ============================================================
+        SUCCESS/ERROR MESSAGES
+        ============================================================ -->
+        <?php if (!empty($success_message)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> 
+                <span><?php echo $error_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
 
         <!-- ===== BRANCH FILTER ===== -->
         <div class="branch-filter-bar">
@@ -235,7 +266,6 @@ DASHBOARD CONTENT
         SUMMARIES CARDS - TODAY, THIS MONTH, TOTAL
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY CASH OUT - Red -->
             <div class="summary-card card-today">
                 <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
                 <div class="summary-content">
@@ -245,7 +275,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- THIS MONTH CASH OUT - Orange -->
             <div class="summary-card card-month">
                 <div class="summary-icon"><i class="fas fa-calendar-alt"></i></div>
                 <div class="summary-content">
@@ -255,7 +284,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- TOTAL CASH OUT - Maroon -->
             <div class="summary-card card-total">
                 <div class="summary-icon"><i class="fas fa-chart-pie"></i></div>
                 <div class="summary-content">
@@ -313,7 +341,6 @@ DASHBOARD CONTENT
                             <?php 
                             $counter = 1;
                             foreach ($cashouts as $cashout): 
-                                // Status colors
                                 $status = ucfirst($cashout['status'] ?? 'pending');
                                 $status_colors = [
                                     'pending' => 'status-pending',
@@ -323,7 +350,6 @@ DASHBOARD CONTENT
                                 ];
                                 $status_class = $status_colors[strtolower($status)] ?? 'status-pending';
                                 
-                                // Amount color based on status
                                 $amount_class = 'amount';
                                 if (strtolower($status) == 'approved') {
                                     $amount_class .= ' approved';
@@ -333,7 +359,7 @@ DASHBOARD CONTENT
                                     $amount_class .= ' pending';
                                 }
                             ?>
-                                <tr data-status="<?php echo strtolower(htmlspecialchars($cashout['status'] ?? 'pending')); ?>">
+                                <tr data-status="<?php echo strtolower($cashout['status'] ?? 'pending'); ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
                                         <span class="cashout-number">
@@ -376,7 +402,7 @@ DASHBOARD CONTENT
                                                     <i class="fas fa-edit"></i>
                                                 </a>
                                             <?php endif; ?>
-                                            <a href="delete.php?id=<?php echo $cashout['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this cash out record?')">
+                                            <a href="delete.php?id=<?php echo $cashout['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirmDelete(<?php echo $cashout['id']; ?>)">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -398,7 +424,7 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES WITH FULL DARK MODE
+DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
@@ -411,7 +437,6 @@ DASHBOARD STYLES WITH FULL DARK MODE
     --cashout-text-light: #9CA3AF;
     --cashout-border: #E5E7EB;
     --cashout-card-bg: #FFFFFF;
-    --cashout-card-header: #FAFBFC;
     --cashout-input-bg: #F9FAFB;
     --cashout-hover: #F3F4F6;
     --cashout-shadow: rgba(0,0,0,0.06);
@@ -427,7 +452,6 @@ html.dark-mode {
     --cashout-text-light: #6B7280;
     --cashout-border: #374151;
     --cashout-card-bg: #1F2937;
-    --cashout-card-header: #374151;
     --cashout-input-bg: #374151;
     --cashout-hover: #374151;
     --cashout-shadow: rgba(0,0,0,0.3);
@@ -436,26 +460,15 @@ html.dark-mode {
     --cashout-dropdown-border: #374151;
 }
 
-/* Apply Dark Mode to Full Page */
 body {
     background: var(--cashout-bg) !important;
     color: var(--cashout-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.main-wrapper {
-    background: var(--cashout-bg) !important;
-    transition: background 0.3s ease;
-}
+.main-wrapper { background: var(--cashout-bg) !important; }
+.main-content { background: var(--cashout-bg) !important; }
 
-.main-content {
-    background: var(--cashout-bg) !important;
-    transition: background 0.3s ease;
-}
-
-/* ============================================================
-   PAGE HEADER - DARK MODE
-   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -498,9 +511,6 @@ body {
     align-items: center;
 }
 
-/* ============================================================
-   ADD BUTTON - RED
-   ============================================================ */
 .btn-add {
     background: #DC2626;
     color: white;
@@ -524,9 +534,6 @@ body {
     color: white;
 }
 
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
 .btn-add-empty {
     background: #DC2626;
     color: white;
@@ -550,9 +557,6 @@ body {
     color: white;
 }
 
-/* ============================================================
-   EXPORT BUTTON - BLUE
-   ============================================================ */
 .btn-export {
     background: #1E40AF;
     color: white;
@@ -602,9 +606,7 @@ body {
     transition: all 0.3s ease;
 }
 
-.dropdown-menu.show {
-    display: block;
-}
+.dropdown-menu.show { display: block; }
 
 .dropdown-menu a {
     display: flex;
@@ -632,9 +634,6 @@ body {
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
-/* ============================================================
-   BRANCH FILTER BAR - DARK MODE
-   ============================================================ */
 .branch-filter-bar {
     background: var(--cashout-card-bg);
     border-radius: 10px;
@@ -701,9 +700,62 @@ body {
     color: #DC2626;
 }
 
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
-   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+    transition: all 0.3s ease;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; }
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+.alert-close:hover { opacity: 1; }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .summaries-grid-three {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -774,7 +826,6 @@ body {
     font-weight: 500;
 }
 
-/* Card Colors */
 .card-today .summary-icon { background: #FEE2E2; color: #DC2626; }
 .card-today { border-left: 4px solid #DC2626; }
 
@@ -784,9 +835,6 @@ body {
 .card-total .summary-icon { background: #FECACA; color: #7F1D1D; }
 .card-total { border-left: 4px solid #7F1D1D; }
 
-/* ============================================================
-   TABLE CONTAINER - DARK MODE
-   ============================================================ */
 .table-container {
     background: var(--cashout-card-bg);
     border-radius: 10px;
@@ -879,9 +927,6 @@ body {
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
-   ============================================================ */
 .data-table thead {
     background: #DC2626;
 }
@@ -918,20 +963,17 @@ body {
     transition: color 0.3s ease;
 }
 
-/* Cash Out Number */
 .cashout-number {
     font-weight: 600;
     color: #7F1D1D;
     font-size: 12px;
 }
 
-/* Employee Name */
 .employee-name {
     font-weight: 500;
     color: var(--cashout-text);
 }
 
-/* Branch Name */
 .branch-name {
     background: var(--cashout-hover);
     padding: 2px 10px;
@@ -941,7 +983,6 @@ body {
     transition: all 0.3s ease;
 }
 
-/* Amount */
 .amount {
     font-weight: 600;
 }
@@ -959,13 +1000,11 @@ body {
     text-decoration: line-through;
 }
 
-/* Reason Text */
 .reason-text {
     font-size: 12px;
     color: var(--cashout-text-secondary);
 }
 
-/* Status Badge */
 .status-badge {
     display: inline-block;
     padding: 3px 12px;
@@ -994,7 +1033,6 @@ body {
     color: #6B7280;
 }
 
-/* Action Buttons */
 .action-buttons {
     display: flex;
     gap: 6px;
@@ -1042,9 +1080,6 @@ body {
     color: #B91C1C;
 }
 
-/* ============================================================
-   EMPTY STATE - DARK MODE
-   ============================================================ */
 .empty-state {
     text-align: center;
     padding: 60px 20px;
@@ -1068,9 +1103,6 @@ body {
     margin: 0 0 24px 0;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 1024px) {
     .summaries-grid-three {
         grid-template-columns: repeat(3, 1fr);
@@ -1215,9 +1247,6 @@ body {
     }
 }
 
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1238,15 +1267,11 @@ body {
 </style>
 
 <script>
-// ============================================================
-// DROPDOWN TOGGLE
-// ============================================================
 function toggleDropdown() {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(event) {
     var dropdown = document.getElementById('exportDropdown');
     var button = document.querySelector('.dropdown-toggle');
@@ -1255,9 +1280,6 @@ document.addEventListener('click', function(event) {
     }
 });
 
-// ============================================================
-// EXPORT FUNCTIONS
-// ============================================================
 function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
@@ -1272,12 +1294,10 @@ function exportData(format) {
     var headers = [];
     var headerCells = table.querySelectorAll('thead th');
     
-    // Get headers (skip Actions column)
     for (var i = 0; i < headerCells.length - 1; i++) {
         headers.push(headerCells[i].textContent.trim());
     }
     
-    // Get data
     var data = [];
     rows.forEach(function(row) {
         var rowData = [];
@@ -1294,123 +1314,92 @@ function exportData(format) {
     }
     
     if (format === 'csv') {
-        exportCSV(headers, data);
+        var csv = headers.join(',') + '\n';
+        data.forEach(function(row) {
+            csv += row.join(',') + '\n';
+        });
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'cashout_export_' + new Date().toISOString().slice(0,10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'excel') {
-        exportExcel(headers, data);
+        var html = '<html><head><meta charset="UTF-8"><title>Cash Out Export</title>';
+        html += '<style>';
+        html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        html += 'h1 { color: #7F1D1D; }';
+        html += 'table { width: 100%; border-collapse: collapse; }';
+        html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
+        html += '</style>';
+        html += '</head><body>';
+        html += '<h1>Store Cash Out Report</h1>';
+        html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        html += '<table>';
+        html += '<thead><tr>';
+        headers.forEach(function(h) {
+            html += '<th>' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            html += '<tr>';
+            row.forEach(function(cell) {
+                html += '<td>' + cell + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '</body></html>';
+        var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'cashout_export_' + new Date().toISOString().slice(0,10) + '.xls';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
-        exportPDF(headers, data);
+        var printContent = '<html><head><title>Cash Out Export</title>';
+        printContent += '<style>';
+        printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        printContent += 'h1 { color: #7F1D1D; }';
+        printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
+        printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
+        printContent += '</style>';
+        printContent += '</head><body>';
+        printContent += '<h1>Store Cash Out Report</h1>';
+        printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        printContent += '<table>';
+        printContent += '<thead><tr>';
+        headers.forEach(function(h) {
+            printContent += '<th>' + h + '</th>';
+        });
+        printContent += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            printContent += '<tr>';
+            row.forEach(function(cell) {
+                printContent += '<td>' + cell + '</td>';
+            });
+            printContent += '</tr>';
+        });
+        printContent += '</tbody></table>';
+        printContent += '</body></html>';
+        var printWindow = window.open('', '_blank');
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
     } else if (format === 'print') {
         window.print();
     }
 }
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) {
-        csv += row.join(',') + '\n';
-    });
-    
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'cashout_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT EXCEL
-// ============================================================
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Cash Out Export</title>';
-    html += '<style>';
-    html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #7F1D1D; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
-    html += '</style>';
-    html += '</head><body>';
-    html += '<h1>Store Cash Out Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table>';
-    html += '<thead><tr>';
-    headers.forEach(function(h) {
-        html += '<th>' + h + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) {
-            html += '<td>' + cell + '</td>';
-        });
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    html += '</body></html>';
-    
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'cashout_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT PDF
-// ============================================================
-function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Cash Out Export</title>';
-    printContent += '<style>';
-    printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #7F1D1D; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '</style>';
-    printContent += '</head><body>';
-    printContent += '<h1>Store Cash Out Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    printContent += '<table>';
-    printContent += '<thead><tr>';
-    headers.forEach(function(h) {
-        printContent += '<th>' + h + '</th>';
-    });
-    printContent += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell) {
-            printContent += '<td>' + cell + '</td>';
-        });
-        printContent += '</tr>';
-    });
-    
-    printContent += '</tbody></table>';
-    printContent += '</body></html>';
-    
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
-// ============================================================
-// FILTER BY STATUS
-// ============================================================
 function filterByStatus(status) {
     var rows = document.querySelectorAll('#cashoutTable tbody tr');
     var statusFilter = status.toLowerCase();
@@ -1425,9 +1414,10 @@ function filterByStatus(status) {
     });
 }
 
-// ============================================================
-// SEARCH FUNCTIONALITY
-// ============================================================
+function confirmDelete(id) {
+    return confirm('Are you sure you want to delete this cash out record? This action cannot be undone.');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
@@ -1446,9 +1436,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1460,12 +1447,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     syncDarkMode();
-    
     document.addEventListener('darkModeChanged', function(e) {
         syncDarkMode();
     });
+    
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
+    }
+    
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    }
 });
 </script>
-
 </body>
 </html>

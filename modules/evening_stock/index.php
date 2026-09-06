@@ -125,7 +125,8 @@ $sql = "SELECT
             es.notes,
             e.full_name as employee_name,
             b.branch_name as branch_name,
-            b.id as branch_id
+            b.id as branch_id,
+            es.provider_data
         FROM evening_stocks es
         LEFT JOIN employees e ON es.employee_id = e.id
         LEFT JOIN branches b ON es.branch_id = b.id
@@ -139,6 +140,20 @@ $stocks = $stmt->fetchAll();
 
 // Count stocks
 $stock_count = count($stocks);
+
+// ============================================================
+// HANDLE SUCCESS/ERROR MESSAGES
+// ============================================================
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
 
 // ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
@@ -162,12 +177,10 @@ DASHBOARD CONTENT
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
-                    <!-- ADD Button - FIRST -->
                     <a href="add.php" class="btn btn-add">
                         <i class="fas fa-plus-circle"></i> Add Evening Stock
                     </a>
                     
-                    <!-- Export Dropdown - SECOND -->
                     <div class="dropdown">
                         <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
                             <i class="fas fa-download"></i> Export
@@ -191,6 +204,25 @@ DASHBOARD CONTENT
                 </div>
             </div>
         </div>
+
+        <!-- ============================================================
+        SUCCESS/ERROR MESSAGES
+        ============================================================ -->
+        <?php if (!empty($success_message)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> 
+                <span><?php echo $error_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
 
         <!-- ===== BRANCH FILTER ===== -->
         <div class="branch-filter-bar">
@@ -218,7 +250,6 @@ DASHBOARD CONTENT
         SUMMARIES CARDS - TODAY STOCK, TODAY FLOAT, TODAY CASH
         ============================================================ -->
         <div class="summaries-grid-three">
-            <!-- TODAY STOCK - Blue -->
             <div class="summary-card card-stock">
                 <div class="summary-icon"><i class="fas fa-boxes"></i></div>
                 <div class="summary-content">
@@ -228,7 +259,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- TODAY FLOAT - Light Blue -->
             <div class="summary-card card-float">
                 <div class="summary-icon"><i class="fas fa-coins"></i></div>
                 <div class="summary-content">
@@ -238,7 +268,6 @@ DASHBOARD CONTENT
                 </div>
             </div>
 
-            <!-- TODAY CASH - Light Green -->
             <div class="summary-card card-cash">
                 <div class="summary-icon"><i class="fas fa-money-bill-wave"></i></div>
                 <div class="summary-content">
@@ -298,11 +327,9 @@ DASHBOARD CONTENT
                             <?php 
                             $counter = 1;
                             foreach ($stocks as $stock): 
-                                // Get providers count
                                 $provider_data = json_decode($stock['provider_data'] ?? '{}', true);
                                 $provider_count = count($provider_data);
                                 
-                                // Determine status
                                 $status = ucfirst($stock['status'] ?? 'pending');
                                 $status_colors = [
                                     'waiting' => 'status-waiting',
@@ -360,7 +387,7 @@ DASHBOARD CONTENT
                                             <a href="edit.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this evening stock?')">
+                                            <a href="delete.php?id=<?php echo $stock['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirmDelete(<?php echo $stock['id']; ?>)">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -395,7 +422,6 @@ DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
     --evening-text-light: #9CA3AF;
     --evening-border: #E5E7EB;
     --evening-card-bg: #FFFFFF;
-    --evening-card-header: #FAFBFC;
     --evening-input-bg: #F9FAFB;
     --evening-hover: #F3F4F6;
     --evening-shadow: rgba(0,0,0,0.06);
@@ -411,7 +437,6 @@ html.dark-mode {
     --evening-text-light: #6B7280;
     --evening-border: #374151;
     --evening-card-bg: #1F2937;
-    --evening-card-header: #374151;
     --evening-input-bg: #374151;
     --evening-hover: #374151;
     --evening-shadow: rgba(0,0,0,0.3);
@@ -420,26 +445,15 @@ html.dark-mode {
     --evening-dropdown-border: #374151;
 }
 
-/* Apply Dark Mode to Full Page */
 body {
     background: var(--evening-bg) !important;
     color: var(--evening-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.main-wrapper {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
-}
+.main-wrapper { background: var(--evening-bg) !important; }
+.main-content { background: var(--evening-bg) !important; }
 
-.main-content {
-    background: var(--evening-bg) !important;
-    transition: background 0.3s ease;
-}
-
-/* ============================================================
-   PAGE HEADER - DARK MODE
-   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -482,9 +496,6 @@ body {
     align-items: center;
 }
 
-/* ============================================================
-   ADD BUTTON - RED
-   ============================================================ */
 .btn-add {
     background: #DC2626;
     color: white;
@@ -508,9 +519,6 @@ body {
     color: white;
 }
 
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
 .btn-add-empty {
     background: #DC2626;
     color: white;
@@ -534,9 +542,6 @@ body {
     color: white;
 }
 
-/* ============================================================
-   EXPORT BUTTON - BLUE
-   ============================================================ */
 .btn-export {
     background: #1E40AF;
     color: white;
@@ -586,9 +591,7 @@ body {
     transition: all 0.3s ease;
 }
 
-.dropdown-menu.show {
-    display: block;
-}
+.dropdown-menu.show { display: block; }
 
 .dropdown-menu a {
     display: flex;
@@ -616,9 +619,6 @@ body {
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
-/* ============================================================
-   BRANCH FILTER BAR - DARK MODE
-   ============================================================ */
 .branch-filter-bar {
     background: var(--evening-card-bg);
     border-radius: 10px;
@@ -685,9 +685,62 @@ body {
     color: #DC2626;
 }
 
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
-   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+    transition: all 0.3s ease;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; }
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+.alert-close:hover { opacity: 1; }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .summaries-grid-three {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -758,7 +811,6 @@ body {
     font-weight: 500;
 }
 
-/* Card Colors */
 .card-stock .summary-icon { background: #DBEAFE; color: #1E40AF; }
 .card-stock { border-left: 4px solid #1E40AF; }
 
@@ -768,9 +820,6 @@ body {
 .card-cash .summary-icon { background: #D1FAE5; color: #065F46; }
 .card-cash { border-left: 4px solid #10B981; }
 
-/* ============================================================
-   TABLE CONTAINER - DARK MODE
-   ============================================================ */
 .table-container {
     background: var(--evening-card-bg);
     border-radius: 10px;
@@ -863,9 +912,6 @@ body {
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
-   ============================================================ */
 .data-table thead {
     background: #DC2626;
 }
@@ -902,20 +948,17 @@ body {
     transition: color 0.3s ease;
 }
 
-/* Stock Number */
 .stock-number {
     font-weight: 600;
     color: #3B82F6;
     font-size: 12px;
 }
 
-/* Employee Name */
 .employee-name {
     font-weight: 500;
     color: var(--evening-text);
 }
 
-/* Branch Name */
 .branch-name {
     background: var(--evening-hover);
     padding: 2px 10px;
@@ -925,7 +968,6 @@ body {
     transition: all 0.3s ease;
 }
 
-/* Provider Count */
 .provider-count {
     font-size: 12px;
     color: var(--evening-text-secondary);
@@ -936,20 +978,10 @@ body {
     margin-right: 4px;
 }
 
-/* Amounts */
-.amount {
-    font-weight: 600;
-}
+.amount { font-weight: 600; }
+.amount.cash { color: #059669; }
+.amount.float { color: #1D4ED8; }
 
-.amount.cash {
-    color: #059669;
-}
-
-.amount.float {
-    color: #1D4ED8;
-}
-
-/* Status Badge */
 .status-badge {
     display: inline-block;
     padding: 3px 12px;
@@ -983,7 +1015,6 @@ body {
     color: #991B1B;
 }
 
-/* Action Buttons */
 .action-buttons {
     display: flex;
     gap: 6px;
@@ -1031,9 +1062,6 @@ body {
     color: #B91C1C;
 }
 
-/* ============================================================
-   EMPTY STATE - DARK MODE
-   ============================================================ */
 .empty-state {
     text-align: center;
     padding: 60px 20px;
@@ -1057,9 +1085,6 @@ body {
     margin: 0 0 24px 0;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 1024px) {
     .summaries-grid-three {
         grid-template-columns: repeat(3, 1fr);
@@ -1204,9 +1229,6 @@ body {
     }
 }
 
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1227,15 +1249,11 @@ body {
 </style>
 
 <script>
-// ============================================================
-// DROPDOWN TOGGLE
-// ============================================================
 function toggleDropdown() {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(event) {
     var dropdown = document.getElementById('exportDropdown');
     var button = document.querySelector('.dropdown-toggle');
@@ -1244,9 +1262,6 @@ document.addEventListener('click', function(event) {
     }
 });
 
-// ============================================================
-// EXPORT FUNCTIONS
-// ============================================================
 function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
@@ -1261,12 +1276,10 @@ function exportData(format) {
     var headers = [];
     var headerCells = table.querySelectorAll('thead th');
     
-    // Get headers (skip Actions column)
     for (var i = 0; i < headerCells.length - 1; i++) {
         headers.push(headerCells[i].textContent.trim());
     }
     
-    // Get data
     var data = [];
     rows.forEach(function(row) {
         var rowData = [];
@@ -1283,154 +1296,92 @@ function exportData(format) {
     }
     
     if (format === 'csv') {
-        exportCSV(headers, data);
+        var csv = headers.join(',') + '\n';
+        data.forEach(function(row) {
+            csv += row.join(',') + '\n';
+        });
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'excel') {
-        exportExcel(headers, data);
+        var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
+        html += '<style>';
+        html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        html += 'h1 { color: #3B82F6; }';
+        html += 'table { width: 100%; border-collapse: collapse; }';
+        html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
+        html += '</style>';
+        html += '</head><body>';
+        html += '<h1>Evening Stocks Report</h1>';
+        html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        html += '<table>';
+        html += '<thead><tr>';
+        headers.forEach(function(h) {
+            html += '<th>' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            html += '<tr>';
+            row.forEach(function(cell) {
+                html += '<td>' + cell + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '</body></html>';
+        var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
-        exportPDF(headers, data);
+        var printContent = '<html><head><title>Evening Stocks Export</title>';
+        printContent += '<style>';
+        printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        printContent += 'h1 { color: #3B82F6; }';
+        printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
+        printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
+        printContent += '</style>';
+        printContent += '</head><body>';
+        printContent += '<h1>Evening Stocks Report</h1>';
+        printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        printContent += '<table>';
+        printContent += '<thead><tr>';
+        headers.forEach(function(h) {
+            printContent += '<th>' + h + '</th>';
+        });
+        printContent += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            printContent += '<tr>';
+            row.forEach(function(cell) {
+                printContent += '<td>' + cell + '</td>';
+            });
+            printContent += '</tr>';
+        });
+        printContent += '</tbody></table>';
+        printContent += '</body></html>';
+        var printWindow = window.open('', '_blank');
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
     } else if (format === 'print') {
         window.print();
     }
 }
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) {
-        csv += row.join(',') + '\n';
-    });
-    
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT EXCEL (HTML Table format)
-// ============================================================
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Evening Stocks Export</title>';
-    html += '<style>';
-    html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #3B82F6; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
-    html += '</style>';
-    html += '</head><body>';
-    html += '<h1>Evening Stocks Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table>';
-    html += '<thead><tr>';
-    headers.forEach(function(h) {
-        html += '<th>' + h + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) {
-            html += '<td>' + cell + '</td>';
-        });
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    html += '</body></html>';
-    
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'evening_stocks_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT PDF
-// ============================================================
-function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Evening Stocks Export</title>';
-    printContent += '<style>';
-    printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #3B82F6; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
-    printContent += '</style>';
-    printContent += '</head><body>';
-    printContent += '<h1>Evening Stocks Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    var totalFloat = 0;
-    var totalCash = 0;
-    
-    printContent += '<table>';
-    printContent += '<thead><tr>';
-    headers.forEach(function(h) {
-        printContent += '<th>' + h + '</th>';
-    });
-    printContent += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Float column (index 7)
-            if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalFloat += numAmount;
-                }
-            }
-            // Cash column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalCash += numAmount;
-                }
-            }
-            printContent += '<td>' + cell + '</td>';
-        });
-        printContent += '</tr>';
-    });
-    
-    printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Float: ' + formatNumber(totalFloat) + '</div>';
-    printContent += '<div class="total">Total Cash: ' + formatNumber(totalCash) + '</div>';
-    printContent += '<div class="total">Total Stock: ' + formatNumber(totalFloat + totalCash) + '</div>';
-    printContent += '</body></html>';
-    
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
-// ============================================================
-// FORMAT NUMBER
-// ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-// ============================================================
-// FILTER BY STATUS
-// ============================================================
 function filterByStatus(status) {
     var rows = document.querySelectorAll('#stocksTable tbody tr');
     var statusFilter = status.toLowerCase();
@@ -1445,9 +1396,10 @@ function filterByStatus(status) {
     });
 }
 
-// ============================================================
-// SEARCH FUNCTIONALITY
-// ============================================================
+function confirmDelete(id) {
+    return confirm('Are you sure you want to delete this evening stock record? This action cannot be undone.');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
@@ -1466,9 +1418,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1480,12 +1429,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     syncDarkMode();
-    
     document.addEventListener('darkModeChanged', function(e) {
         syncDarkMode();
     });
+    
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
+    }
+    
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    }
 });
 </script>
-
 </body>
 </html>

@@ -1,734 +1,409 @@
 <?php
 // ================================================================
 // FILE: modules/expenses/index.php
-// WAKALA FINANCIAL SYSTEM - EXPENSES LIST
-// WITH DARK MODE SUPPORT (SYSTEM-WIDE)
+// EXPENSES - LIST ALL EXPENSES
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+session_start();
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// GET USER DATA
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+// Check permission
+if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
 
-// ============================================================
-// GET BRANCHES FOR FILTER
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-$stmt->execute();
-$branches = $stmt->fetchAll();
+// Pagination
+$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
+$per_page = 30;
+$offset = ($page - 1) * $per_page;
 
-// ============================================================
-// GET EXPENSE CATEGORIES FOR FILTER
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
-$stmt->execute();
-$categories = $stmt->fetchAll();
-
-// ============================================================
-// BRANCH FILTER HANDLING
-// ============================================================
+// Filters
+$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
+$to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
+$category_filter = isset($_GET['category']) ? $_GET['category'] : '';
 $selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+$is_business = isset($_GET['is_business']) ? intval($_GET['is_business']) : -1;
 
-if (isset($_GET['branch'])) {
-    $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
-    $selected_branch = $_SESSION['selected_branch'];
-}
+$error = '';
+$expenses = [];
+$total_records = 0;
+$total_pages = 0;
 
-$selected_branch = $selected_branch ?? 0;
-
-// Build branch filter for SQL
-$branch_filter = '';
-$branch_params = [];
-
-if ($selected_branch > 0) {
-    $branch_filter = " AND e.branch_id = ? ";
-    $branch_params[] = $selected_branch;
-}
-
-// Get branch name for display
-$branch_name = 'All Branches';
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
-            break;
-        }
-    }
-}
-
-// ============================================================
-// GET EXPENSES SUMMARIES
-// ============================================================
-$today = date('Y-m-d');
-$month_start = date('Y-m-01');
-$month = date('m');
-$year = date('Y');
-
-// TODAY EXPENSES
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE DATE(expense_date) = ? AND branch_id = ? AND is_business_expense = 1";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE DATE(expense_date) = ? AND is_business_expense = 1";
-    $params = [$today];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$today_expenses = $result['total'] ?? 0;
-
-// THIS MONTH EXPENSES
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ? AND branch_id = ? AND is_business_expense = 1";
-    $params = [$month, $year, $selected_branch];
-} else {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ? AND is_business_expense = 1";
-    $params = [$month, $year];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$this_month_expenses = $result['total'] ?? 0;
-
-// TOTAL EXPENSES (All time)
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE branch_id = ? AND is_business_expense = 1";
-    $params = [$selected_branch];
-} else {
-    $sql = "SELECT SUM(amount) as total FROM expenses WHERE is_business_expense = 1";
-    $params = [];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$total_expenses_all = $result['total'] ?? 0;
-
-// ============================================================
-// GET EXPENSES LIST
-// ============================================================
-$sql = "SELECT 
-            e.id,
-            e.expense_number,
-            e.expense_date,
-            e.expense_name,
-            e.category,
-            e.amount,
-            e.description,
-            e.receipt_path,
-            e.is_business_expense,
-            e.is_salary_related,
-            e.created_at,
-            e.notes,
+try {
+    // Build query - employees can only see their own expenses
+    $sql = "SELECT e.*, 
             emp.full_name as employee_name,
-            b.branch_name as branch_name,
-            b.id as branch_id
-        FROM expenses e
-        LEFT JOIN employees emp ON e.employee_id = emp.id
-        LEFT JOIN branches b ON e.branch_id = b.id
-        WHERE 1=1 " . $branch_filter . "
-        ORDER BY e.expense_date DESC, e.id DESC";
+            b.branch_name
+            FROM expenses e
+            LEFT JOIN employees emp ON e.employee_id = emp.id
+            LEFT JOIN branches b ON e.branch_id = b.id
+            WHERE DATE(e.expense_date) BETWEEN ? AND ?";
+    $params = [$from_date, $to_date];
+    
+    // Restrict to user's own expenses if employee
+    if ($role === 'employee') {
+        $sql .= " AND e.employee_id = ?";
+        $params[] = $user_id;
+    }
 
-$params = $branch_params;
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$expenses = $stmt->fetchAll();
+    if (!empty($category_filter)) {
+        $sql .= " AND e.category = ?";
+        $params[] = $category_filter;
+    }
 
-// Count expenses
-$expense_count = count($expenses);
+    if ($selected_branch > 0 && ($role === 'admin' || $role === 'super_admin')) {
+        $sql .= " AND e.branch_id = ?";
+        $params[] = $selected_branch;
+    }
 
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
+    if ($is_business >= 0) {
+        $sql .= " AND e.is_business_expense = ?";
+        $params[] = $is_business;
+    }
+
+    // Count total records
+    $count_sql = str_replace("e.*, emp.full_name as employee_name, b.branch_name", "COUNT(*) as total", $sql);
+    $stmt = $db->prepare($count_sql);
+    $stmt->execute($params);
+    $total_records = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $total_pages = ceil($total_records / $per_page);
+
+    // Get expenses with pagination
+    $sql .= " ORDER BY e.expense_date DESC, e.id DESC LIMIT ? OFFSET ?";
+    $params[] = $per_page;
+    $params[] = $offset;
+
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get categories for filter
+    $stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
+    $stmt->execute();
+    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get branches for filter
+    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+    $stmt->execute();
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get summary
+    $sql_summary = "SELECT 
+            COUNT(*) as total_expenses,
+            SUM(amount) as total_amount,
+            SUM(CASE WHEN is_business_expense = 1 THEN amount ELSE 0 END) as business_amount,
+            SUM(CASE WHEN is_business_expense = 0 THEN amount ELSE 0 END) as personal_amount
+            FROM expenses
+            WHERE DATE(expense_date) BETWEEN ? AND ?";
+    $params_summary = [$from_date, $to_date];
+    
+    if ($role === 'employee') {
+        $sql_summary .= " AND employee_id = ?";
+        $params_summary[] = $user_id;
+    }
+    
+    if ($selected_branch > 0 && ($role === 'admin' || $role === 'super_admin')) {
+        $sql_summary .= " AND branch_id = ?";
+        $params_summary[] = $selected_branch;
+    }
+    
+    $stmt = $db->prepare($sql_summary);
+    $stmt->execute($params_summary);
+    $summary = $stmt->fetch(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+    $error = 'Database error: ' . $e->getMessage();
+    error_log("Error loading expenses: " . $e->getMessage());
+    $expenses = [];
+    $categories = [];
+    $branches = [];
+    $summary = [
+        'total_expenses' => 0,
+        'total_amount' => 0,
+        'business_amount' => 0,
+        'personal_amount' => 0
+    ];
+}
+
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-DASHBOARD CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== PAGE HEADER WITH ADD BUTTON ===== -->
+        <!-- Dark Mode Toggle -->
+        <div class="dark-mode-toggle">
+            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
+                <i class="fas fa-moon"></i>
+                <span>Dark Mode</span>
+            </button>
+        </div>
+
+        <!-- Page Header -->
         <div class="page-header">
-            <div class="page-header-left">
-                <h2><i class="fas fa-receipt"></i> Expenses</h2>
-                <span class="record-count"><?php echo $expense_count; ?> records</span>
+            <div class="header-left">
+                <h2><i class="fas fa-money-bill-wave" style="color:#bb0404;"></i> Expenses</h2>
+                <p class="text-muted">Manage and track all business expenses</p>
             </div>
-            <div class="page-header-right">
-                <div class="header-actions">
-                    <!-- ADD Button - FIRST -->
-                    <a href="add.php" class="btn btn-add">
-                        <i class="fas fa-plus-circle"></i> Add Expense
-                    </a>
-                    
-                    <!-- Export Dropdown - SECOND -->
-                    <div class="dropdown">
-                        <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
-                            <i class="fas fa-download"></i> Export
-                            <i class="fas fa-chevron-down"></i>
-                        </button>
-                        <div class="dropdown-menu" id="exportDropdown">
-                            <a href="#" onclick="exportData('csv')">
-                                <i class="fas fa-file-csv"></i> Export as CSV
-                            </a>
-                            <a href="#" onclick="exportData('excel')">
-                                <i class="fas fa-file-excel"></i> Export as Excel
-                            </a>
-                            <a href="#" onclick="exportData('pdf')">
-                                <i class="fas fa-file-pdf"></i> Export as PDF
-                            </a>
-                            <a href="#" onclick="exportData('print')">
-                                <i class="fas fa-print"></i> Print
-                            </a>
-                        </div>
+            <div class="header-right">
+                <a href="add.php" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> New Expense
+                </a>
+                <a href="categories.php" class="btn btn-info">
+                    <i class="fas fa-tags"></i> Categories
+                </a>
+                <div class="dropdown export-dropdown">
+                    <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="fas fa-file-export"></i> Export
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div class="dropdown-menu" id="exportMenu">
+                        <a href="#" onclick="exportData('csv')"><i class="fas fa-file-csv"></i> CSV</a>
+                        <a href="#" onclick="exportData('excel')"><i class="fas fa-file-excel"></i> Excel</a>
+                        <a href="#" onclick="window.print()"><i class="fas fa-print"></i> Print</a>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ===== BRANCH FILTER ===== -->
-        <div class="branch-filter-bar">
-            <div class="branch-filter-left">
-                <i class="fas fa-store-alt"></i>
-                <span>Branch:</span>
-                <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
-                    <option value="0">All Branches</option>
-                    <?php foreach ($branches as $b): ?>
-                        <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <?php if ($selected_branch > 0): ?>
-                    <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
-                <?php endif; ?>
-            </div>
-            <div class="branch-filter-right">
-                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
-            </div>
-        </div>
-
-        <!-- ============================================================
-        SUMMARIES CARDS - TODAY, THIS MONTH, TOTAL
-        ============================================================ -->
-        <div class="summaries-grid-three">
-            <!-- TODAY EXPENSES - Red -->
-            <div class="summary-card card-today">
-                <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">TODAY EXPENSES</div>
-                    <div class="summary-value"><?php echo formatCurrency($today_expenses); ?></div>
-                    <div class="summary-sub"><?php echo date('d M Y'); ?></div>
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#DBEAFE;color:#1D4ED8;">
+                    <i class="fas fa-receipt"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Expenses</span>
+                    <span class="summary-value"><?php echo number_format($summary['total_expenses'] ?? 0); ?></span>
                 </div>
             </div>
-
-            <!-- THIS MONTH EXPENSES - Orange -->
-            <div class="summary-card card-month">
-                <div class="summary-icon"><i class="fas fa-calendar-alt"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">THIS MONTH</div>
-                    <div class="summary-value"><?php echo formatCurrency($this_month_expenses); ?></div>
-                    <div class="summary-sub"><?php echo date('F Y'); ?></div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#FEE2E2;color:#991B1B;">
+                    <i class="fas fa-coins"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Amount</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_amount'] ?? 0); ?></span>
                 </div>
             </div>
-
-            <!-- TOTAL EXPENSES - Maroon -->
-            <div class="summary-card card-total">
-                <div class="summary-icon"><i class="fas fa-chart-pie"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">TOTAL EXPENSES</div>
-                    <div class="summary-value"><?php echo formatCurrency($total_expenses_all); ?></div>
-                    <div class="summary-sub">All Time</div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#D1FAE5;color:#065F46;">
+                    <i class="fas fa-briefcase"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Business Expenses</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['business_amount'] ?? 0); ?></span>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#FEF3C7;color:#92400E;">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Personal Expenses</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['personal_amount'] ?? 0); ?></span>
                 </div>
             </div>
         </div>
 
-        <!-- ============================================================
-        TABLE - EXPENSES LIST
-        ============================================================ -->
-        <div class="table-container">
-            <div class="table-header">
-                <h3><i class="fas fa-list"></i> All Expenses</h3>
-                <div class="table-actions">
-                    <select id="categoryFilter" class="filter-select" onchange="filterByCategory(this.value)">
+        <!-- Filters -->
+        <div class="filters-bar">
+            <form method="GET" action="" class="filters-form">
+                <div class="filter-group">
+                    <label>From Date</label>
+                    <input type="date" name="from_date" value="<?php echo htmlspecialchars($from_date); ?>" class="form-control">
+                </div>
+                <div class="filter-group">
+                    <label>To Date</label>
+                    <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
+                </div>
+                <div class="filter-group">
+                    <label>Category</label>
+                    <select name="category" class="form-control">
                         <option value="">All Categories</option>
-                        <?php foreach ($categories as $cat): ?>
-                            <option value="<?php echo htmlspecialchars($cat['category_name']); ?>">
-                                <?php echo htmlspecialchars($cat['category_name']); ?>
+                        <?php foreach ($categories as $c): ?>
+                            <option value="<?php echo htmlspecialchars($c['category_name']); ?>" <?php echo $category_filter == $c['category_name'] ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($c['category_name']); ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search expenses..." class="search-input">
                 </div>
-            </div>
+                <?php if ($role === 'admin' || $role === 'super_admin'): ?>
+                <div class="filter-group">
+                    <label>Branch</label>
+                    <select name="branch" class="form-control">
+                        <option value="0">All Branches</option>
+                        <?php foreach ($branches as $b): ?>
+                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($b['branch_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Type</label>
+                    <select name="is_business" class="form-control">
+                        <option value="-1">All Types</option>
+                        <option value="1" <?php echo $is_business == 1 ? 'selected' : ''; ?>>Business</option>
+                        <option value="0" <?php echo $is_business == 0 ? 'selected' : ''; ?>>Personal</option>
+                    </select>
+                </div>
+                <?php endif; ?>
+                <div class="filter-group">
+                    <button type="submit" class="btn btn-filter"><i class="fas fa-search"></i> Filter</button>
+                    <a href="index.php" class="btn btn-reset"><i class="fas fa-undo"></i> Reset</a>
+                </div>
+            </form>
+        </div>
 
-            <?php if (empty($expenses)): ?>
-                <div class="empty-state">
-                    <i class="fas fa-receipt"></i>
-                    <h3>No Expenses Found</h3>
-                    <p>Start by adding your first expense record.</p>
-                    <a href="add.php" class="btn btn-add-empty">
-                        <i class="fas fa-plus-circle"></i> Add Expense
-                    </a>
-                </div>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="data-table" id="expensesTable">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Expense No.</th>
-                                <th>Date</th>
-                                <th>Employee</th>
-                                <th>Branch</th>
-                                <th>Category</th>
-                                <th>Amount</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            $counter = 1;
-                            foreach ($expenses as $expense): 
-                                // Determine status
-                                $status = 'Active';
-                                $status_class = 'status-active';
-                                
-                                if ($expense['is_salary_related'] == 1) {
-                                    $status = 'Salary';
-                                    $status_class = 'status-salary';
-                                }
-                            ?>
-                                <tr data-category="<?php echo strtolower(htmlspecialchars($expense['category'])); ?>">
+        <?php if ($error): ?>
+            <div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error); ?></div>
+        <?php endif; ?>
+
+        <!-- Expenses Table -->
+        <div class="table-container">
+            <div class="table-header">
+                <h4><i class="fas fa-list"></i> Expenses List</h4>
+                <span class="record-count"><?php echo number_format($total_records); ?> records</span>
+            </div>
+            
+            <div class="table-responsive">
+                <table class="data-table" id="expensesTable">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Expense No.</th>
+                            <th>Date</th>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th>Amount</th>
+                            <th>Type</th>
+                            <th>Branch</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (count($expenses) > 0): ?>
+                            <?php $counter = $offset + 1; ?>
+                            <?php foreach ($expenses as $expense): ?>
+                                <tr>
                                     <td><?php echo $counter++; ?></td>
-                                    <td>
-                                        <span class="expense-number">
-                                            <?php echo htmlspecialchars($expense['expense_number']); ?>
-                                        </span>
-                                    </td>
+                                    <td><span class="expense-number"><?php echo htmlspecialchars($expense['expense_number']); ?></span></td>
                                     <td><?php echo date('d M Y', strtotime($expense['expense_date'])); ?></td>
                                     <td>
-                                        <span class="employee-name">
-                                            <?php echo htmlspecialchars($expense['employee_name'] ?? 'N/A'); ?>
-                                        </span>
+                                        <span class="category-badge"><?php echo htmlspecialchars($expense['category']); ?></span>
                                     </td>
+                                    <td><?php echo htmlspecialchars(substr($expense['expense_name'] ?? '', 0, 30)) . (strlen($expense['expense_name'] ?? '') > 30 ? '...' : ''); ?></td>
+                                    <td class="font-bold text-danger"><?php echo formatCurrency($expense['amount']); ?></td>
                                     <td>
-                                        <span class="branch-name">
-                                            <?php echo htmlspecialchars($expense['branch_name'] ?? 'Main'); ?>
+                                        <span class="type-badge <?php echo $expense['is_business_expense'] ? 'business' : 'personal'; ?>">
+                                            <?php echo $expense['is_business_expense'] ? 'Business' : 'Personal'; ?>
                                         </span>
                                     </td>
-                                    <td>
-                                        <span class="category-badge">
-                                            <?php echo htmlspecialchars($expense['category']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="amount expense">
-                                            <?php echo formatCurrency($expense['amount']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="status-badge <?php echo $status_class; ?>">
-                                            <?php echo $status; ?>
-                                        </span>
-                                    </td>
+                                    <td><span class="branch-badge"><?php echo htmlspecialchars($expense['branch_name'] ?? 'Main'); ?></span></td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-view" title="View">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <a href="edit.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <a href="delete.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this expense?')">
-                                                <i class="fas fa-trash"></i>
-                                            </a>
+                                            <a href="view.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-view" title="View"><i class="fas fa-eye"></i></a>
+                                            <a href="edit.php?id=<?php echo $expense['id']; ?>" class="btn-action btn-edit" title="Edit"><i class="fas fa-edit"></i></a>
+                                            <button onclick="deleteExpense(<?php echo $expense['id']; ?>)" class="btn-action btn-delete" title="Delete"><i class="fas fa-trash"></i></button>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="9" class="text-center no-data">
+                                    <i class="fas fa-inbox" style="font-size:48px;color:var(--text-light);display:block;margin:20px 0;"></i>
+                                    <p style="color:var(--text-muted);">No expenses found</p>
+                                    <a href="add.php" class="btn btn-primary btn-sm"><i class="fas fa-plus"></i> Add First Expense</a>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <?php if ($total_pages > 1): ?>
+                <div class="pagination">
+                    <div class="pagination-info">
+                        Showing <?php echo $offset + 1; ?> - <?php echo min($offset + $per_page, $total_records); ?> of <?php echo number_format($total_records); ?>
+                    </div>
+                    <div class="pagination-links">
+                        <?php if ($page > 1): ?>
+                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
+                                <i class="fas fa-chevron-left"></i>
+                            </a>
+                        <?php endif; ?>
+                        
+                        <?php
+                        $start_page = max(1, $page - 2);
+                        $end_page = min($total_pages, $page + 2);
+                        for ($i = $start_page; $i <= $end_page; $i++):
+                        ?>
+                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" 
+                               class="page-link <?php echo $i == $page ? 'active' : ''; ?>">
+                                <?php echo $i; ?>
+                            </a>
+                        <?php endfor; ?>
+                        
+                        <?php if ($page < $total_pages): ?>
+                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&category=<?php echo $category_filter; ?>&branch=<?php echo $selected_branch; ?>&is_business=<?php echo $is_business; ?>" class="page-link">
+                                <i class="fas fa-chevron-right"></i>
+                            </a>
+                        <?php endif; ?>
+                    </div>
                 </div>
             <?php endif; ?>
         </div>
 
     </div>
-    
-    <!-- ============================================================
-    FOOTER
-    ============================================================ -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-DASHBOARD STYLES WITH DARK MODE SUPPORT
-============================================================ -->
 <style>
-/* ============================================================
-   DARK MODE VARIABLES
-   ============================================================ */
-:root {
-    --expenses-bg: #FFFFFF;
-    --expenses-text: #1F2937;
-    --expenses-text-secondary: #6B7280;
-    --expenses-text-light: #9CA3AF;
-    --expenses-border: #E5E7EB;
-    --expenses-card-bg: #FFFFFF;
-    --expenses-card-header: #FAFBFC;
-    --expenses-input-bg: #F9FAFB;
-    --expenses-hover: #F3F4F6;
-    --expenses-shadow: rgba(0,0,0,0.06);
-    --expenses-shadow-lg: rgba(0,0,0,0.12);
-    --expenses-dropdown-bg: #FFFFFF;
-    --expenses-dropdown-border: #E5E7EB;
-}
-
-html.dark-mode {
-    --expenses-bg: #1F2937;
-    --expenses-text: #F9FAFB;
-    --expenses-text-secondary: #9CA3AF;
-    --expenses-text-light: #6B7280;
-    --expenses-border: #374151;
-    --expenses-card-bg: #1F2937;
-    --expenses-card-header: #374151;
-    --expenses-input-bg: #374151;
-    --expenses-hover: #374151;
-    --expenses-shadow: rgba(0,0,0,0.3);
-    --expenses-shadow-lg: rgba(0,0,0,0.4);
-    --expenses-dropdown-bg: #1F2937;
-    --expenses-dropdown-border: #374151;
-}
-
-/* Apply Dark Mode to Full Page */
-body {
-    background: var(--expenses-bg) !important;
-    color: var(--expenses-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper {
-    background: var(--expenses-bg) !important;
-    transition: background 0.3s ease;
-}
-
-.main-content {
-    background: var(--expenses-bg) !important;
-    transition: background 0.3s ease;
-}
-
-/* ============================================================
-   PAGE HEADER - DARK MODE
-   ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
-}
-
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--expenses-text);
-    margin: 0;
-    transition: color 0.3s ease;
-}
-
-.page-header-left h2 i {
-    color: #DC2626;
-    margin-right: 8px;
-}
-
-.record-count {
-    font-size: 13px;
-    color: var(--expenses-text-secondary);
-    background: var(--expenses-hover);
-    padding: 2px 12px;
-    border-radius: 12px;
-    transition: all 0.3s ease;
-}
-
-.header-actions {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-/* ============================================================
-   ADD BUTTON - RED
-   ============================================================ */
-.btn-add {
-    background: #DC2626;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    border: none;
-    cursor: pointer;
-}
-
-.btn-add:hover {
-    background: #B91C1C;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
-    color: white;
-}
-
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
-.btn-add-empty {
-    background: #DC2626;
-    color: white;
-    padding: 12px 28px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    border: none;
-    cursor: pointer;
-}
-
-.btn-add-empty:hover {
-    background: #B91C1C;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(220,38,38,0.4);
-    color: white;
-}
-
-/* ============================================================
-   EXPORT BUTTON - BLUE
-   ============================================================ */
-.btn-export {
-    background: #1E40AF;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    border: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-}
-
-.btn-export:hover {
-    background: #1D4ED8;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3);
-}
-
-.dropdown {
-    position: relative;
-    display: inline-block;
-}
-
-.dropdown-toggle i.fa-chevron-down {
-    font-size: 11px;
-    margin-left: 2px;
-}
-
-.dropdown-menu {
-    display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 4px;
-    background: var(--expenses-dropdown-bg);
-    min-width: 200px;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px var(--expenses-shadow-lg);
-    border: 1px solid var(--expenses-dropdown-border);
-    z-index: 1000;
-    overflow: hidden;
-    padding: 4px 0;
-    transition: all 0.3s ease;
-}
-
-.dropdown-menu.show {
-    display: block;
-}
-
-.dropdown-menu a {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    text-decoration: none;
-    color: var(--expenses-text);
-    font-size: 13px;
-    font-weight: 500;
-    transition: background 0.2s ease;
-}
-
-.dropdown-menu a:hover {
-    background: var(--expenses-hover);
-}
-
-.dropdown-menu a i {
-    width: 18px;
-    font-size: 15px;
-}
-
-.dropdown-menu a i.fa-file-csv { color: #0B5ED7; }
-.dropdown-menu a i.fa-file-excel { color: #1D7D1D; }
-.dropdown-menu a i.fa-file-pdf { color: #DC2626; }
-.dropdown-menu a i.fa-print { color: #6B7280; }
-
-/* ============================================================
-   BRANCH FILTER BAR - DARK MODE
-   ============================================================ */
-.branch-filter-bar {
-    background: var(--expenses-card-bg);
-    border-radius: 10px;
-    padding: 12px 20px;
-    margin-bottom: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 1px 3px var(--expenses-shadow);
-    border: 1px solid var(--expenses-border);
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    color: var(--expenses-text);
-}
-
-.branch-filter-left i {
-    color: #DC2626;
-    font-size: 16px;
-}
-
-.branch-filter-left select {
-    padding: 5px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--expenses-border);
-    background: var(--expenses-input-bg);
-    font-size: 13px;
-    color: var(--expenses-text);
-    outline: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.branch-filter-left select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.branch-filter-left select option {
-    background: var(--expenses-dropdown-bg);
-    color: var(--expenses-text);
-}
-
-.branch-badge {
-    background: #DC2626;
-    color: white;
-    padding: 2px 12px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.branch-filter-right .date-display {
-    font-size: 13px;
-    color: var(--expenses-text-secondary);
-}
-
-.branch-filter-right .date-display i {
-    color: #DC2626;
-}
-
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE
-   ============================================================ */
-.summaries-grid-three {
+/* Summary Cards */
+.summary-cards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-bottom: 18px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
 }
 
 .summary-card {
-    background: var(--expenses-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
-    padding: 18px 20px;
+    padding: 16px 20px;
+    border: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--expenses-shadow);
-    border: 1px solid var(--expenses-border);
     transition: all 0.3s ease;
-    min-height: 110px;
-    height: 110px;
 }
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--expenses-shadow-lg);
+    box-shadow: 0 4px 12px var(--shadow-hover);
 }
 
 .summary-icon {
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -736,737 +411,492 @@ body {
     flex-shrink: 0;
 }
 
-.summary-content {
-    flex: 1;
-    min-width: 0;
+.summary-info {
     display: flex;
     flex-direction: column;
-    justify-content: center;
 }
 
 .summary-label {
-    font-size: 11px;
+    font-size: 12px;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    font-weight: 700;
-    color: var(--expenses-text-secondary);
+    font-weight: 600;
 }
 
 .summary-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* Page Header */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
     font-size: 22px;
-    font-weight: 800;
-    color: var(--expenses-text);
-    margin: 4px 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: color 0.3s ease;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
 }
 
-.summary-sub {
-    font-size: 11px;
-    color: var(--expenses-text-light);
-    font-weight: 500;
+.page-header .header-left h2 i {
+    margin-right: 10px;
 }
 
-/* Card Colors */
-.card-today .summary-icon { background: #FEE2E2; color: #DC2626; }
-.card-today { border-left: 4px solid #DC2626; }
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+}
 
-.card-month .summary-icon { background: #FEF3C7; color: #D97706; }
-.card-month { border-left: 4px solid #D97706; }
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
 
-.card-total .summary-icon { background: #FECACA; color: #7F1D1D; }
-.card-total { border-left: 4px solid #7F1D1D; }
-
-/* ============================================================
-   TABLE CONTAINER - DARK MODE
-   ============================================================ */
-.table-container {
-    background: var(--expenses-card-bg);
-    border-radius: 10px;
-    box-shadow: 0 1px 3px var(--expenses-shadow);
-    border: 1px solid var(--expenses-border);
-    overflow: hidden;
+/* Buttons */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-primary { background: #bb0404; color: white; }
+.btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); }
+
+.btn-info { background: #3B82F6; color: white; }
+.btn-info:hover { background: #2563EB; transform: translateY(-1px); }
+
+.btn-export { background: #10B981; color: white; }
+.btn-export:hover { background: #059669; transform: translateY(-1px); }
+
+.btn-filter { background: #bb0404; color: white; }
+.btn-filter:hover { background: #8a0303; }
+
+.btn-reset { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
+.btn-reset:hover { background: var(--bg-table-hover); }
+
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* Export Dropdown */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 4px;
+    background: var(--bg-card);
+    min-width: 180px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px var(--shadow-hover);
+    border: 1px solid var(--border-color);
+    z-index: 1000;
+    overflow: hidden;
+    padding: 4px 0;
+}
+.dropdown-menu.show { display: block; }
+.dropdown-menu a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    text-decoration: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    transition: background 0.2s ease;
+}
+.dropdown-menu a:hover { background: var(--bg-table-hover); }
+.dropdown-menu a i { width: 18px; font-size: 15px; }
+
+/* Filters */
+.filters-bar {
+    background: var(--bg-card);
+    padding: 16px 20px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.filters-form {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.filter-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.form-control {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    transition: all 0.3s ease;
+    min-width: 150px;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #bb0404;
+    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
+}
+
+/* Table */
+.table-container {
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 16px 20px;
+    border: 1px solid var(--border-color);
 }
 
 .table-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--expenses-border);
-    flex-wrap: wrap;
-    gap: 10px;
-    transition: all 0.3s ease;
+    margin-bottom: 16px;
 }
 
-.table-header h3 {
-    font-size: 15px;
+.table-header h4 {
+    font-size: 14px;
     font-weight: 600;
-    color: var(--expenses-text);
+    color: var(--text-primary);
     margin: 0;
 }
 
-.table-header h3 i {
-    color: #DC2626;
-    margin-right: 8px;
-}
+.table-header h4 i { color: #bb0404; margin-right: 8px; }
+.record-count { font-size: 12px; color: var(--text-muted); }
 
-.table-actions {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.search-input {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--expenses-border);
-    font-size: 13px;
-    outline: none;
-    width: 200px;
-    transition: all 0.3s ease;
-    background: var(--expenses-input-bg);
-    color: var(--expenses-text);
-}
-
-.search-input::placeholder {
-    color: var(--expenses-text-light);
-}
-
-.search-input:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-select {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--expenses-border);
-    font-size: 13px;
-    outline: none;
-    background: var(--expenses-input-bg);
-    color: var(--expenses-text);
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.filter-select:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-select option {
-    background: var(--expenses-dropdown-bg);
-    color: var(--expenses-text);
-}
-
-.table-responsive {
-    overflow-x: auto;
-}
-
+.table-responsive { overflow-x: auto; }
 .data-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red)
-   ============================================================ */
 .data-table thead {
-    background: #DC2626;
+    background: #bb0404;
 }
-
 .data-table thead th {
-    padding: 12px 16px;
+    padding: 10px 12px;
     text-align: left;
     font-weight: 600;
     color: #FFFFFF;
     text-transform: uppercase;
     font-size: 11px;
     letter-spacing: 0.5px;
-    border-bottom: 2px solid #B91C1C;
+    border-bottom: 2px solid #8a0303;
     white-space: nowrap;
 }
 
-.data-table thead th i {
-    color: #FFFFFF;
-    margin-right: 4px;
-}
-
 .data-table tbody tr {
-    border-bottom: 1px solid var(--expenses-border);
+    border-bottom: 1px solid var(--border-color);
     transition: background 0.2s ease;
 }
+.data-table tbody tr:hover { background: var(--bg-table-hover); }
+.data-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
+.data-table tbody td { padding: 10px 12px; color: var(--text-secondary); }
 
-.data-table tbody tr:hover {
-    background: var(--expenses-hover);
-}
-
-.data-table tbody td {
-    padding: 12px 16px;
-    color: var(--expenses-text);
-    transition: color 0.3s ease;
-}
-
-/* Expense Number */
 .expense-number {
     font-weight: 600;
-    color: #DC2626;
+    color: #bb0404;
     font-size: 12px;
 }
 
-/* Employee Name */
-.employee-name {
-    font-weight: 500;
-    color: var(--expenses-text);
-}
-
-/* Branch Name */
-.branch-name {
-    background: var(--expenses-hover);
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    color: var(--expenses-text-secondary);
-    transition: all 0.3s ease;
-}
-
-/* Category Badge */
 .category-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
     background: #EDE9FE;
-    color: #5B21B6;
+    color: #6D28D9;
+}
+
+.branch-badge {
+    background: var(--bg-table-even);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    font-weight: 500;
+    color: var(--text-muted);
 }
 
-/* Amount */
-.amount {
-    font-weight: 600;
-}
-
-.amount.expense {
-    color: #DC2626;
-}
-
-/* Status Badge */
-.status-badge {
+.type-badge {
     display: inline-block;
-    padding: 3px 12px;
+    padding: 2px 10px;
     border-radius: 12px;
     font-size: 11px;
     font-weight: 600;
 }
+.type-badge.business { background: #D1FAE5; color: #065F46; }
+.type-badge.personal { background: #FEF3C7; color: #92400E; }
 
-.status-active {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.status-salary {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
+.text-danger { color: #DC2626; font-weight: 600; }
+.font-bold { font-weight: 700; }
 
 /* Action Buttons */
-.action-buttons {
-    display: flex;
-    gap: 6px;
-}
-
+.action-buttons { display: flex; gap: 4px; }
 .btn-action {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
+    border: none;
     border-radius: 6px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    text-decoration: none;
+    cursor: pointer;
     transition: all 0.2s ease;
+    text-decoration: none;
     font-size: 13px;
 }
 
-.btn-view {
-    background: #DBEAFE;
-    color: #1D4ED8;
+.btn-view { background: #DBEAFE; color: #1D4ED8; }
+.btn-view:hover { background: #1D4ED8; color: #ffffff; }
+
+.btn-edit { background: #D1FAE5; color: #065F46; }
+.btn-edit:hover { background: #065F46; color: #ffffff; }
+
+.btn-delete { background: #FEE2E2; color: #991B1B; }
+.btn-delete:hover { background: #991B1B; color: #ffffff; }
+
+/* Pagination */
+.pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+    margin-top: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
 }
 
-.btn-view:hover {
-    background: #BFDBFE;
-    color: #1E40AF;
+.pagination-info {
+    font-size: 13px;
+    color: var(--text-muted);
 }
 
-.btn-edit {
-    background: #D1FAE5;
-    color: #059669;
+.pagination-links {
+    display: flex;
+    gap: 4px;
 }
 
-.btn-edit:hover {
-    background: #A7F3D0;
-    color: #047857;
+.page-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.2s ease;
+    min-width: 36px;
 }
 
-.btn-delete {
-    background: #FEE2E2;
-    color: #DC2626;
+.page-link:hover {
+    background: var(--bg-table-hover);
+    border-color: #bb0404;
 }
 
-.btn-delete:hover {
-    background: #FECACA;
-    color: #B91C1C;
+.page-link.active {
+    background: #bb0404;
+    color: white;
+    border-color: #bb0404;
 }
 
-/* ============================================================
-   EMPTY STATE - DARK MODE
-   ============================================================ */
-.empty-state {
-    text-align: center;
-    padding: 60px 20px;
+/* Alert */
+.alert {
+    padding: 12px 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+
+.no-data { padding: 40px 20px; text-align: center; }
+
+/* Dark Mode */
+:root {
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-table-even: #fafafa;
+    --bg-table-hover: #f3f4f6;
+    --bg-input: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --shadow-hover: rgba(0,0,0,0.08);
 }
 
-.empty-state i {
-    font-size: 60px;
-    color: #DC2626;
-    margin-bottom: 16px;
+body.dark-mode {
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-table-even: #1a2332;
+    --bg-table-hover: #2d3a4f;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+    --shadow-color: rgba(0,0,0,0.4);
+    --shadow-hover: rgba(0,0,0,0.6);
 }
 
-.empty-state h3 {
-    font-size: 20px;
-    color: var(--expenses-text);
-    margin: 0 0 8px 0;
+body {
+    background: var(--bg-body) !important;
+    color: var(--text-primary);
+    transition: background 0.3s ease, color 0.3s ease;
 }
 
-.empty-state p {
-    color: var(--expenses-text-secondary);
-    font-size: 14px;
-    margin: 0 0 24px 0;
+.dark-mode-toggle {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+.dark-mode-btn {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+}
+
+.dark-mode-btn:hover {
+    background: var(--bg-table-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
 @media (max-width: 1024px) {
-    .summaries-grid-three {
-        grid-template-columns: repeat(3, 1fr);
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
 @media (max-width: 768px) {
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
+    .summary-cards {
+        grid-template-columns: 1fr;
     }
-    
-    .header-actions {
-        width: 100%;
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .header-actions .btn-add,
-    .header-actions .btn-export {
-        justify-content: center;
-        width: 100%;
-    }
-    
-    .dropdown {
-        width: 100%;
-    }
-    
-    .dropdown-menu {
-        width: 100%;
-        right: auto;
-        left: 0;
-    }
-    
-    .summaries-grid-three {
-        grid-template-columns: 1fr 1fr;
-    }
-    
-    .summaries-grid-three .summary-card:last-child {
-        grid-column: span 2;
-    }
-    
-    .branch-filter-bar {
-        flex-direction: column;
-        gap: 8px;
-        align-items: flex-start;
-    }
-    
-    .table-header {
-        flex-direction: column;
-        gap: 10px;
-        align-items: flex-start;
-    }
-    
-    .table-actions {
-        width: 100%;
+    .filters-form {
         flex-direction: column;
     }
-    
-    .search-input {
-        width: 100%;
-    }
-    
-    .filter-select {
-        width: 100%;
-    }
-    
-    .summary-card {
-        min-height: 100px;
-        height: 100px;
-        padding: 14px 16px;
-    }
-    
-    .summary-icon {
-        width: 44px;
-        height: 44px;
-        font-size: 18px;
-    }
-    
-    .summary-value {
-        font-size: 19px;
-    }
-}
-
-@media (max-width: 480px) {
-    .summaries-grid-three {
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-    }
-    
-    .summaries-grid-three .summary-card:last-child {
-        grid-column: span 2;
-    }
-    
-    .summary-card {
-        padding: 12px 14px;
-        min-height: 90px;
-        height: 90px;
-    }
-    
-    .summary-icon {
-        width: 40px;
-        height: 40px;
-        font-size: 16px;
-    }
-    
-    .summary-value {
-        font-size: 16px;
-    }
-    
-    .summary-label {
-        font-size: 9px;
-    }
-    
-    .summary-sub {
-        font-size: 9px;
-    }
-    
-    .data-table thead th,
-    .data-table tbody td {
-        padding: 8px 10px;
-        font-size: 12px;
-    }
-    
-    .action-buttons {
+    .filter-group { width: 100%; }
+    .filter-group .form-control { width: 100%; }
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .header-right { width: 100%; flex-wrap: wrap; }
+    .header-right .btn { flex: 1; justify-content: center; }
+    .pagination {
         flex-direction: column;
-        gap: 4px;
+        align-items: center;
     }
-    
-    .btn-action {
-        width: 28px;
-        height: 28px;
-        font-size: 11px;
-    }
-    
-    .btn-add-empty {
-        padding: 10px 20px;
-        font-size: 13px;
-        width: 100%;
-        justify-content: center;
-    }
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.summary-card {
-    animation: fadeInUp 0.4s ease forwards;
-}
-
-.summary-card:nth-child(1) { animation-delay: 0.05s; }
-.summary-card:nth-child(2) { animation-delay: 0.10s; }
-.summary-card:nth-child(3) { animation-delay: 0.15s; }
-
-.table-container {
-    animation: fadeInUp 0.4s ease forwards;
-    animation-delay: 0.20s;
 }
 </style>
 
 <script>
 // ============================================================
-// DROPDOWN TOGGLE
+// DARK MODE TOGGLE
+// ============================================================
+function toggleDarkMode() {
+    document.body.classList.toggle('dark-mode');
+    const btn = document.getElementById('darkModeToggle');
+    if (document.body.classList.contains('dark-mode')) {
+        btn.querySelector('i').className = 'fas fa-sun';
+        btn.querySelector('span').textContent = 'Light Mode';
+        localStorage.setItem('darkMode', 'enabled');
+    } else {
+        btn.querySelector('i').className = 'fas fa-moon';
+        btn.querySelector('span').textContent = 'Dark Mode';
+        localStorage.setItem('darkMode', 'disabled');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (localStorage.getItem('darkMode') === 'enabled') {
+        document.body.classList.add('dark-mode');
+        const btn = document.getElementById('darkModeToggle');
+        if (btn) {
+            btn.querySelector('i').className = 'fas fa-sun';
+            btn.querySelector('span').textContent = 'Light Mode';
+        }
+    }
+});
+
+// ============================================================
+// EXPORT DROPDOWN
 // ============================================================
 function toggleDropdown() {
-    var dropdown = document.getElementById('exportDropdown');
-    dropdown.classList.toggle('show');
+    document.getElementById('exportMenu').classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
-document.addEventListener('click', function(event) {
-    var dropdown = document.getElementById('exportDropdown');
-    var button = document.querySelector('.dropdown-toggle');
-    if (button && !button.contains(event.target) && !dropdown.contains(event.target)) {
-        dropdown.classList.remove('show');
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.export-dropdown')) {
+        document.getElementById('exportMenu').classList.remove('show');
     }
 });
 
-// ============================================================
-// EXPORT FUNCTIONS
-// ============================================================
 function exportData(format) {
-    var dropdown = document.getElementById('exportDropdown');
-    dropdown.classList.remove('show');
-    
-    var table = document.getElementById('expensesTable');
-    if (!table) {
-        alert('No data to export!');
-        return;
-    }
-    
-    var rows = table.querySelectorAll('tbody tr');
-    var headers = [];
-    var headerCells = table.querySelectorAll('thead th');
-    
-    // Get headers (skip Actions column)
-    for (var i = 0; i < headerCells.length - 1; i++) {
-        headers.push(headerCells[i].textContent.trim());
-    }
-    
-    // Get data
-    var data = [];
-    rows.forEach(function(row) {
-        var rowData = [];
-        var cells = row.querySelectorAll('td');
-        for (var i = 0; i < cells.length - 1; i++) {
-            rowData.push(cells[i].textContent.trim());
-        }
-        data.push(rowData);
-    });
-    
-    if (data.length === 0) {
-        alert('No data to export!');
-        return;
-    }
-    
-    if (format === 'csv') {
-        exportCSV(headers, data);
-    } else if (format === 'excel') {
-        exportExcel(headers, data);
-    } else if (format === 'pdf') {
-        exportPDF(headers, data);
-    } else if (format === 'print') {
-        window.print();
-    }
+    document.getElementById('exportMenu').classList.remove('show');
+    const params = new URLSearchParams(window.location.search);
+    window.location.href = 'export.php?format=' + format + '&' + params.toString();
 }
 
 // ============================================================
-// EXPORT CSV
+// DELETE FUNCTION
 // ============================================================
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) {
-        csv += row.join(',') + '\n';
-    });
-    
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'expenses_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT EXCEL (HTML Table format)
-// ============================================================
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Expenses Export</title>';
-    html += '<style>';
-    html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #DC2626; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
-    html += '</style>';
-    html += '</head><body>';
-    html += '<h1>Expenses Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table>';
-    html += '<thead><tr>';
-    headers.forEach(function(h) {
-        html += '<th>' + h + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) {
-            html += '<td>' + cell + '</td>';
-        });
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    html += '</body></html>';
-    
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'expenses_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT PDF (using window.print)
-// ============================================================
-function exportPDF(headers, data) {
-    // Create printable version
-    var printContent = '<html><head><title>Expenses Export</title>';
-    printContent += '<style>';
-    printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #DC2626; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
-    printContent += '</style>';
-    printContent += '</head><body>';
-    printContent += '<h1>Expenses Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    // Calculate total
-    var totalAmount = 0;
-    
-    printContent += '<table>';
-    printContent += '<thead><tr>';
-    headers.forEach(function(h) {
-        printContent += '<th>' + h + '</th>';
-    });
-    printContent += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Check if this is the Amount column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalAmount += numAmount;
-                }
-            }
-            printContent += '<td>' + cell + '</td>';
-        });
-        printContent += '</tr>';
-    });
-    
-    printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Amount: ' + formatNumber(totalAmount) + '</div>';
-    printContent += '</body></html>';
-    
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
-// ============================================================
-// FORMAT NUMBER
-// ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-// ============================================================
-// FILTER BY CATEGORY
-// ============================================================
-function filterByCategory(category) {
-    var rows = document.querySelectorAll('#expensesTable tbody tr');
-    var categoryFilter = category.toLowerCase();
-    
-    rows.forEach(function(row) {
-        var rowCategory = row.getAttribute('data-category');
-        if (categoryFilter === '' || rowCategory === categoryFilter) {
-            row.style.display = '';
-        } else {
-            row.style.display = 'none';
-        }
-    });
-}
-
-// ============================================================
-// SEARCH FUNCTIONALITY
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    var searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.addEventListener('keyup', function() {
-            var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#expensesTable tbody tr');
-            
-            rows.forEach(function(row) {
-                var text = row.textContent.toLowerCase();
-                if (text.indexOf(filter) > -1) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-        });
+function deleteExpense(id) {
+    if (confirm('Are you sure you want to delete this expense? This action cannot be undone.')) {
+        window.location.href = 'delete.php?id=' + id;
     }
-    
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
-    function syncDarkMode() {
-        var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
-    }
-    
-    syncDarkMode();
-    
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
-});
+}
 </script>
 
 </body>

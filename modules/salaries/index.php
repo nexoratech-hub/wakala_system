@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/salaries/index.php
 // WAKALA FINANCIAL SYSTEM - SALARIES LIST
-// WITH DARK MODE SUPPORT
+// WITH FULL DARK MODE SUPPORT
 // ================================================================
 
 // ============================================================
@@ -168,6 +168,20 @@ $salaries = $stmt->fetchAll();
 $salary_count = count($salaries);
 
 // ============================================================
+// HANDLE SUCCESS/ERROR MESSAGES
+// ============================================================
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
+// ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
 // ============================================================
 include_once '../../includes/admin_header.php';
@@ -218,6 +232,25 @@ DASHBOARD CONTENT
                 </div>
             </div>
         </div>
+
+        <!-- ============================================================
+        SUCCESS/ERROR MESSAGES
+        ============================================================ -->
+        <?php if (!empty($success_message)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> 
+                <span><?php echo $error_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
 
         <!-- ===== BRANCH FILTER ===== -->
         <div class="branch-filter-bar">
@@ -325,7 +358,6 @@ DASHBOARD CONTENT
                             <?php 
                             $counter = 1;
                             foreach ($salaries as $salary): 
-                                // Status colors
                                 $status = ucfirst($salary['status'] ?? 'pending');
                                 $status_colors = [
                                     'paid' => 'status-paid',
@@ -390,7 +422,7 @@ DASHBOARD CONTENT
                                             <a href="edit.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this salary record?')">
+                                            <a href="delete.php?id=<?php echo $salary['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirmDelete(<?php echo $salary['id']; ?>)">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -412,47 +444,51 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH DARK MODE SUPPORT
+DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --salaries-bg: #FFFFFF;
-    --salaries-text: #1F2937;
-    --salaries-text-secondary: #6B7280;
-    --salaries-text-light: #9CA3AF;
-    --salaries-border: #E5E7EB;
-    --salaries-card-bg: #FFFFFF;
-    --salaries-card-header: #FAFBFC;
-    --salaries-input-bg: #F9FAFB;
-    --salaries-hover: #F3F4F6;
-    --salaries-shadow: rgba(0,0,0,0.06);
-    --salaries-shadow-lg: rgba(0,0,0,0.12);
-    --salaries-dropdown-bg: #FFFFFF;
-    --salaries-dropdown-border: #E5E7EB;
+    --salary-bg: #FFFFFF;
+    --salary-text: #1F2937;
+    --salary-text-secondary: #6B7280;
+    --salary-text-light: #9CA3AF;
+    --salary-border: #E5E7EB;
+    --salary-card-bg: #FFFFFF;
+    --salary-input-bg: #F9FAFB;
+    --salary-hover: #F3F4F6;
+    --salary-shadow: rgba(0,0,0,0.06);
+    --salary-shadow-lg: rgba(0,0,0,0.12);
+    --salary-dropdown-bg: #FFFFFF;
+    --salary-dropdown-border: #E5E7EB;
 }
 
 html.dark-mode {
-    --salaries-bg: #1F2937;
-    --salaries-text: #F9FAFB;
-    --salaries-text-secondary: #9CA3AF;
-    --salaries-text-light: #6B7280;
-    --salaries-border: #374151;
-    --salaries-card-bg: #1F2937;
-    --salaries-card-header: #374151;
-    --salaries-input-bg: #374151;
-    --salaries-hover: #374151;
-    --salaries-shadow: rgba(0,0,0,0.3);
-    --salaries-shadow-lg: rgba(0,0,0,0.4);
-    --salaries-dropdown-bg: #1F2937;
-    --salaries-dropdown-border: #374151;
+    --salary-bg: #1F2937;
+    --salary-text: #F9FAFB;
+    --salary-text-secondary: #9CA3AF;
+    --salary-text-light: #6B7280;
+    --salary-border: #374151;
+    --salary-card-bg: #1F2937;
+    --salary-input-bg: #374151;
+    --salary-hover: #374151;
+    --salary-shadow: rgba(0,0,0,0.3);
+    --salary-shadow-lg: rgba(0,0,0,0.4);
+    --salary-dropdown-bg: #1F2937;
+    --salary-dropdown-border: #374151;
 }
 
-/* ============================================================
-   PAGE HEADER - DARK MODE SUPPORT
-   ============================================================ */
+body {
+    background: var(--salary-bg) !important;
+    color: var(--salary-text);
+    transition: background 0.3s ease, color 0.3s ease;
+}
+
+.main-wrapper { background: var(--salary-bg) !important; }
+.main-content { background: var(--salary-bg) !important; }
+
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -470,7 +506,7 @@ html.dark-mode {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     margin: 0;
     transition: color 0.3s ease;
 }
@@ -482,8 +518,8 @@ html.dark-mode {
 
 .record-count {
     font-size: 13px;
-    color: var(--salaries-text-secondary);
-    background: var(--salaries-hover);
+    color: var(--salary-text-secondary);
+    background: var(--salary-hover);
     padding: 2px 12px;
     border-radius: 12px;
     transition: all 0.3s ease;
@@ -495,9 +531,6 @@ html.dark-mode {
     align-items: center;
 }
 
-/* ============================================================
-   ADD BUTTON - RED
-   ============================================================ */
 .btn-add {
     background: #DC2626;
     color: white;
@@ -521,9 +554,6 @@ html.dark-mode {
     color: white;
 }
 
-/* ============================================================
-   EMPTY STATE ADD BUTTON - RED
-   ============================================================ */
 .btn-add-empty {
     background: #DC2626;
     color: white;
@@ -547,9 +577,6 @@ html.dark-mode {
     color: white;
 }
 
-/* ============================================================
-   EXPORT BUTTON - BLUE
-   ============================================================ */
 .btn-export {
     background: #1E40AF;
     color: white;
@@ -588,20 +615,18 @@ html.dark-mode {
     right: 0;
     top: 100%;
     margin-top: 4px;
-    background: var(--salaries-dropdown-bg);
+    background: var(--salary-dropdown-bg);
     min-width: 200px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px var(--salaries-shadow-lg);
-    border: 1px solid var(--salaries-dropdown-border);
+    box-shadow: 0 4px 20px var(--salary-shadow-lg);
+    border: 1px solid var(--salary-dropdown-border);
     z-index: 1000;
     overflow: hidden;
     padding: 4px 0;
     transition: all 0.3s ease;
 }
 
-.dropdown-menu.show {
-    display: block;
-}
+.dropdown-menu.show { display: block; }
 
 .dropdown-menu a {
     display: flex;
@@ -609,14 +634,14 @@ html.dark-mode {
     gap: 10px;
     padding: 10px 16px;
     text-decoration: none;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     font-size: 13px;
     font-weight: 500;
     transition: background 0.2s ease;
 }
 
 .dropdown-menu a:hover {
-    background: var(--salaries-hover);
+    background: var(--salary-hover);
 }
 
 .dropdown-menu a i {
@@ -629,19 +654,16 @@ html.dark-mode {
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
 
-/* ============================================================
-   BRANCH FILTER BAR - DARK MODE SUPPORT
-   ============================================================ */
 .branch-filter-bar {
-    background: var(--salaries-card-bg);
+    background: var(--salary-card-bg);
     border-radius: 10px;
     padding: 12px 20px;
     margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 1px 3px var(--salaries-shadow);
-    border: 1px solid var(--salaries-border);
+    box-shadow: 0 1px 3px var(--salary-shadow);
+    border: 1px solid var(--salary-border);
     transition: all 0.3s ease;
 }
 
@@ -650,7 +672,7 @@ html.dark-mode {
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: var(--salaries-text);
+    color: var(--salary-text);
 }
 
 .branch-filter-left i {
@@ -661,10 +683,10 @@ html.dark-mode {
 .branch-filter-left select {
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid var(--salaries-border);
-    background: var(--salaries-input-bg);
+    border: 1px solid var(--salary-border);
+    background: var(--salary-input-bg);
     font-size: 13px;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     outline: none;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -676,8 +698,8 @@ html.dark-mode {
 }
 
 .branch-filter-left select option {
-    background: var(--salaries-dropdown-bg);
-    color: var(--salaries-text);
+    background: var(--salary-dropdown-bg);
+    color: var(--salary-text);
 }
 
 .branch-badge {
@@ -691,16 +713,69 @@ html.dark-mode {
 
 .branch-filter-right .date-display {
     font-size: 13px;
-    color: var(--salaries-text-secondary);
+    color: var(--salary-text-secondary);
 }
 
 .branch-filter-right .date-display i {
     color: #DC2626;
 }
 
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE SUPPORT
-   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+    transition: all 0.3s ease;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; }
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+.alert-close:hover { opacity: 1; }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .summaries-grid-three {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -709,14 +784,14 @@ html.dark-mode {
 }
 
 .summary-card {
-    background: var(--salaries-card-bg);
+    background: var(--salary-card-bg);
     border-radius: 10px;
     padding: 18px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--salaries-shadow);
-    border: 1px solid var(--salaries-border);
+    box-shadow: 0 1px 3px var(--salary-shadow);
+    border: 1px solid var(--salary-border);
     transition: all 0.3s ease;
     min-height: 110px;
     height: 110px;
@@ -724,7 +799,7 @@ html.dark-mode {
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--salaries-shadow-lg);
+    box-shadow: 0 4px 12px var(--salary-shadow-lg);
 }
 
 .summary-icon {
@@ -751,13 +826,13 @@ html.dark-mode {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
-    color: var(--salaries-text-secondary);
+    color: var(--salary-text-secondary);
 }
 
 .summary-value {
     font-size: 22px;
     font-weight: 800;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     margin: 4px 0;
     white-space: nowrap;
     overflow: hidden;
@@ -767,11 +842,10 @@ html.dark-mode {
 
 .summary-sub {
     font-size: 11px;
-    color: var(--salaries-text-light);
+    color: var(--salary-text-light);
     font-weight: 500;
 }
 
-/* Card Colors */
 .card-today .summary-icon { background: #FECACA; color: #7F1D1D; }
 .card-today { border-left: 4px solid #7F1D1D; }
 
@@ -781,14 +855,11 @@ html.dark-mode {
 .card-total .summary-icon { background: #FECACA; color: #5C1313; }
 .card-total { border-left: 4px solid #5C1313; }
 
-/* ============================================================
-   TABLE CONTAINER - DARK MODE SUPPORT
-   ============================================================ */
 .table-container {
-    background: var(--salaries-card-bg);
+    background: var(--salary-card-bg);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--salaries-shadow);
-    border: 1px solid var(--salaries-border);
+    box-shadow: 0 1px 3px var(--salary-shadow);
+    border: 1px solid var(--salary-border);
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -798,7 +869,7 @@ html.dark-mode {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--salaries-border);
+    border-bottom: 1px solid var(--salary-border);
     flex-wrap: wrap;
     gap: 10px;
     transition: all 0.3s ease;
@@ -807,7 +878,7 @@ html.dark-mode {
 .table-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     margin: 0;
 }
 
@@ -826,17 +897,17 @@ html.dark-mode {
 .search-input {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--salaries-border);
+    border: 1px solid var(--salary-border);
     font-size: 13px;
     outline: none;
     width: 200px;
     transition: all 0.3s ease;
-    background: var(--salaries-input-bg);
-    color: var(--salaries-text);
+    background: var(--salary-input-bg);
+    color: var(--salary-text);
 }
 
 .search-input::placeholder {
-    color: var(--salaries-text-light);
+    color: var(--salary-text-light);
 }
 
 .search-input:focus {
@@ -847,11 +918,11 @@ html.dark-mode {
 .filter-select {
     padding: 8px 14px;
     border-radius: 8px;
-    border: 1px solid var(--salaries-border);
+    border: 1px solid var(--salary-border);
     font-size: 13px;
     outline: none;
-    background: var(--salaries-input-bg);
-    color: var(--salaries-text);
+    background: var(--salary-input-bg);
+    color: var(--salary-text);
     cursor: pointer;
     transition: all 0.3s ease;
 }
@@ -862,8 +933,8 @@ html.dark-mode {
 }
 
 .filter-select option {
-    background: var(--salaries-dropdown-bg);
-    color: var(--salaries-text);
+    background: var(--salary-dropdown-bg);
+    color: var(--salary-text);
 }
 
 .table-responsive {
@@ -876,9 +947,6 @@ html.dark-mode {
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND
-   ============================================================ */
 .data-table thead {
     background: #DC2626;
 }
@@ -901,73 +969,52 @@ html.dark-mode {
 }
 
 .data-table tbody tr {
-    border-bottom: 1px solid var(--salaries-border);
+    border-bottom: 1px solid var(--salary-border);
     transition: background 0.2s ease;
 }
 
 .data-table tbody tr:hover {
-    background: var(--salaries-hover);
+    background: var(--salary-hover);
 }
 
 .data-table tbody td {
     padding: 12px 16px;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     transition: color 0.3s ease;
 }
 
-/* Salary Number */
 .salary-number {
     font-weight: 600;
     color: #7F1D1D;
     font-size: 12px;
 }
 
-/* Employee Name */
 .employee-name {
     font-weight: 500;
-    color: var(--salaries-text);
+    color: var(--salary-text);
 }
 
-/* Salary Month */
 .salary-month {
     font-weight: 500;
-    color: var(--salaries-text-secondary);
+    color: var(--salary-text-secondary);
     font-size: 12px;
 }
 
-/* Branch Name */
 .branch-name {
-    background: var(--salaries-hover);
+    background: var(--salary-hover);
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
-    color: var(--salaries-text-secondary);
+    color: var(--salary-text-secondary);
     transition: all 0.3s ease;
 }
 
-/* Amounts */
-.amount {
-    font-weight: 600;
-}
+.amount { font-weight: 600; }
+.amount.gross { color: #1D4ED8; }
+.amount.tax { color: #DC2626; }
+.amount.deductions { color: #D97706; }
+.amount.net-pay { color: #059669; font-weight: 700; }
 
-.amount.gross {
-    color: #1D4ED8;
-}
-
-.amount.tax {
-    color: #DC2626;
-}
-
-.amount.deductions {
-    color: #D97706;
-}
-
-.amount.net-pay {
-    color: #059669;
-    font-weight: 700;
-}
-
-/* Status Badge */
 .status-badge {
     display: inline-block;
     padding: 3px 12px;
@@ -996,7 +1043,6 @@ html.dark-mode {
     color: #5B21B6;
 }
 
-/* Action Buttons */
 .action-buttons {
     display: flex;
     gap: 6px;
@@ -1044,9 +1090,6 @@ html.dark-mode {
     color: #B91C1C;
 }
 
-/* ============================================================
-   EMPTY STATE - DARK MODE SUPPORT
-   ============================================================ */
 .empty-state {
     text-align: center;
     padding: 60px 20px;
@@ -1060,19 +1103,16 @@ html.dark-mode {
 
 .empty-state h3 {
     font-size: 20px;
-    color: var(--salaries-text);
+    color: var(--salary-text);
     margin: 0 0 8px 0;
 }
 
 .empty-state p {
-    color: var(--salaries-text-secondary);
+    color: var(--salary-text-secondary);
     font-size: 14px;
     margin: 0 0 24px 0;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 1024px) {
     .summaries-grid-three {
         grid-template-columns: repeat(3, 1fr);
@@ -1217,9 +1257,6 @@ html.dark-mode {
     }
 }
 
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1240,15 +1277,11 @@ html.dark-mode {
 </style>
 
 <script>
-// ============================================================
-// DROPDOWN TOGGLE
-// ============================================================
 function toggleDropdown() {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(event) {
     var dropdown = document.getElementById('exportDropdown');
     var button = document.querySelector('.dropdown-toggle');
@@ -1257,9 +1290,6 @@ document.addEventListener('click', function(event) {
     }
 });
 
-// ============================================================
-// EXPORT FUNCTIONS
-// ============================================================
 function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
@@ -1274,12 +1304,10 @@ function exportData(format) {
     var headers = [];
     var headerCells = table.querySelectorAll('thead th');
     
-    // Get headers (skip Actions column)
     for (var i = 0; i < headerCells.length - 1; i++) {
         headers.push(headerCells[i].textContent.trim());
     }
     
-    // Get data
     var data = [];
     rows.forEach(function(row) {
         var rowData = [];
@@ -1296,173 +1324,92 @@ function exportData(format) {
     }
     
     if (format === 'csv') {
-        exportCSV(headers, data);
+        var csv = headers.join(',') + '\n';
+        data.forEach(function(row) {
+            csv += row.join(',') + '\n';
+        });
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'excel') {
-        exportExcel(headers, data);
+        var html = '<html><head><meta charset="UTF-8"><title>Salaries Export</title>';
+        html += '<style>';
+        html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        html += 'h1 { color: #7F1D1D; }';
+        html += 'table { width: 100%; border-collapse: collapse; }';
+        html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
+        html += '</style>';
+        html += '</head><body>';
+        html += '<h1>Salaries Report</h1>';
+        html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        html += '<table>';
+        html += '<thead><tr>';
+        headers.forEach(function(h) {
+            html += '<th>' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            html += '<tr>';
+            row.forEach(function(cell) {
+                html += '<td>' + cell + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '</body></html>';
+        var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.xls';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
-        exportPDF(headers, data);
+        var printContent = '<html><head><title>Salaries Export</title>';
+        printContent += '<style>';
+        printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
+        printContent += 'h1 { color: #7F1D1D; }';
+        printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
+        printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
+        printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
+        printContent += '</style>';
+        printContent += '</head><body>';
+        printContent += '<h1>Salaries Report</h1>';
+        printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
+        printContent += '<table>';
+        printContent += '<thead><tr>';
+        headers.forEach(function(h) {
+            printContent += '<th>' + h + '</th>';
+        });
+        printContent += '</tr></thead><tbody>';
+        data.forEach(function(row) {
+            printContent += '<tr>';
+            row.forEach(function(cell) {
+                printContent += '<td>' + cell + '</td>';
+            });
+            printContent += '</tr>';
+        });
+        printContent += '</tbody></table>';
+        printContent += '</body></html>';
+        var printWindow = window.open('', '_blank');
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
     } else if (format === 'print') {
         window.print();
     }
 }
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) {
-        csv += row.join(',') + '\n';
-    });
-    
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT EXCEL (HTML Table format)
-// ============================================================
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Salaries Export</title>';
-    html += '<style>';
-    html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #7F1D1D; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
-    html += '</style>';
-    html += '</head><body>';
-    html += '<h1>Salaries Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table>';
-    html += '<thead><tr>';
-    headers.forEach(function(h) {
-        html += '<th>' + h + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) {
-            html += '<td>' + cell + '</td>';
-        });
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    html += '</body></html>';
-    
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'salaries_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT PDF
-// ============================================================
-function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Salaries Export</title>';
-    printContent += '<style>';
-    printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #7F1D1D; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '.total { margin-top: 20px; font-weight: bold; font-size: 16px; }';
-    printContent += '</style>';
-    printContent += '</head><body>';
-    printContent += '<h1>Salaries Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    
-    var totalGross = 0;
-    var totalTax = 0;
-    var totalDeductions = 0;
-    var totalNetPay = 0;
-    
-    printContent += '<table>';
-    printContent += '<thead><tr>';
-    headers.forEach(function(h) {
-        printContent += '<th>' + h + '</th>';
-    });
-    printContent += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell, index) {
-            // Gross Pay column (index 5)
-            if (index === 5) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalGross += numAmount;
-                }
-            }
-            // Tax column (index 6)
-            if (index === 6) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalTax += numAmount;
-                }
-            }
-            // Deductions column (index 7)
-            if (index === 7) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalDeductions += numAmount;
-                }
-            }
-            // Net Pay column (index 8)
-            if (index === 8) {
-                var cleanAmount = cell.replace(/[^0-9,]/g, '');
-                var numAmount = parseFloat(cleanAmount.replace(/,/g, ''));
-                if (!isNaN(numAmount)) {
-                    totalNetPay += numAmount;
-                }
-            }
-            printContent += '<td>' + cell + '</td>';
-        });
-        printContent += '</tr>';
-    });
-    
-    printContent += '</tbody></table>';
-    printContent += '<div class="total">Total Gross Pay: ' + formatNumber(totalGross) + '</div>';
-    printContent += '<div class="total">Total Tax: ' + formatNumber(totalTax) + '</div>';
-    printContent += '<div class="total">Total Deductions: ' + formatNumber(totalDeductions) + '</div>';
-    printContent += '<div class="total">Total Net Pay: ' + formatNumber(totalNetPay) + '</div>';
-    printContent += '</body></html>';
-    
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
-// ============================================================
-// FORMAT NUMBER
-// ============================================================
-function formatNumber(num) {
-    return 'TSh ' + num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-// ============================================================
-// FILTER BY STATUS
-// ============================================================
 function filterByStatus(status) {
     var rows = document.querySelectorAll('#salariesTable tbody tr');
     var statusFilter = status.toLowerCase();
@@ -1477,9 +1424,10 @@ function filterByStatus(status) {
     });
 }
 
-// ============================================================
-// SEARCH FUNCTIONALITY
-// ============================================================
+function confirmDelete(id) {
+    return confirm('Are you sure you want to delete this salary record? This action cannot be undone.');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
@@ -1498,9 +1446,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1512,13 +1457,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     syncDarkMode();
-    
-    // Listen for dark mode changes
     document.addEventListener('darkModeChanged', function(e) {
         syncDarkMode();
     });
+    
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
+    }
+    
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    }
 });
 </script>
-
 </body>
 </html>

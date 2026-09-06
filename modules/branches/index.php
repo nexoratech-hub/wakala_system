@@ -83,6 +83,20 @@ foreach ($branches as $b) {
 $inactive_count = $branch_count - $active_count;
 
 // ============================================================
+// HANDLE SUCCESS/ERROR MESSAGES
+// ============================================================
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
+// ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
 // ============================================================
 include_once '../../includes/admin_header.php';
@@ -133,6 +147,25 @@ DASHBOARD CONTENT
                 </div>
             </div>
         </div>
+
+        <!-- ============================================================
+        SUCCESS/ERROR MESSAGES
+        ============================================================ -->
+        <?php if (!empty($success_message)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> 
+                <span><?php echo $error_message; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
 
         <!-- ============================================================
         SUMMARIES CARDS
@@ -265,7 +298,7 @@ DASHBOARD CONTENT
                                             <a href="edit.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-edit" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="delete.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirm('Are you sure you want to delete this branch?')">
+                                            <a href="delete.php?id=<?php echo $branch['id']; ?>" class="btn-action btn-delete" title="Delete" onclick="return confirmDelete(<?php echo $branch['id']; ?>, '<?php echo addslashes($branch['branch_name']); ?>')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -385,6 +418,75 @@ body {
     display: flex;
     gap: 10px;
     align-items: center;
+}
+
+/* ============================================================
+   ALERTS
+   ============================================================ */
+.alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    position: relative;
+    animation: slideDown 0.4s ease forwards;
+    transition: all 0.3s ease;
+}
+
+.alert-success {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+
+.alert-danger {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+html.dark-mode .alert-success {
+    background: #065F46;
+    color: #D1FAE5;
+    border: 1px solid #047857;
+}
+
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
+}
+
+.alert i {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.alert span {
+    flex: 1;
+}
+
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.alert-close:hover {
+    opacity: 1;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* ============================================================
@@ -1221,6 +1323,13 @@ function filterByStatus(status) {
             row.style.display = 'none';
         }
     });
+}
+
+// ============================================================
+// CONFIRM DELETE
+// ============================================================
+function confirmDelete(id, name) {
+    return confirm('Are you sure you want to delete the branch "' + name + '"? This action cannot be undone.');
 }
 
 // ============================================================

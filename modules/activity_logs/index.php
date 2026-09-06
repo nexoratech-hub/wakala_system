@@ -1,649 +1,446 @@
 <?php
 // ================================================================
 // FILE: modules/activity_logs/index.php
-// WAKALA FINANCIAL SYSTEM - ACTIVITY LOGS
-// WITH DARK MODE SUPPORT
+// ACTIVITY LOGS - VIEW ALL SYSTEM ACTIVITIES
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+session_start();
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// CHECK PERMISSION - Only admin and super_admin can access
-// ============================================================
+// Only admin and super_admin can view activity logs
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
 
-// ============================================================
-// GET USER DATA
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+// Pagination
+$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
+$per_page = 50;
+$offset = ($page - 1) * $per_page;
 
-// ============================================================
-// GET BRANCHES FOR FILTER
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-$stmt->execute();
-$branches = $stmt->fetchAll();
+// Filters
+$action_filter = isset($_GET['action']) ? $_GET['action'] : '';
+$module_filter = isset($_GET['module']) ? $_GET['module'] : '';
+$employee_filter = isset($_GET['employee']) ? intval($_GET['employee']) : 0;
+$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-d', strtotime('-7 days'));
+$to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 
-// ============================================================
-// FILTER HANDLING
-// ============================================================
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
-$selected_action = isset($_GET['action']) ? $_GET['action'] : '';
-$selected_module = isset($_GET['module']) ? $_GET['module'] : '';
-$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : date('Y-m-d', strtotime('-7 days'));
-$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : date('Y-m-d');
+$error = '';
+$logs = [];
+$total_records = 0;
+$total_pages = 0;
 
-// Build filter SQL
-$where_conditions = [];
-$params = [];
-
-if ($selected_branch > 0) {
-    $where_conditions[] = "al.branch_id = ?";
-    $params[] = $selected_branch;
-}
-
-if (!empty($selected_action)) {
-    $where_conditions[] = "al.action = ?";
-    $params[] = $selected_action;
-}
-
-if (!empty($selected_module)) {
-    $where_conditions[] = "al.module = ?";
-    $params[] = $selected_module;
-}
-
-if (!empty($date_from)) {
-    $where_conditions[] = "DATE(al.created_at) >= ?";
-    $params[] = $date_from;
-}
-
-if (!empty($date_to)) {
-    $where_conditions[] = "DATE(al.created_at) <= ?";
-    $params[] = $date_to;
-}
-
-$where_clause = '';
-if (!empty($where_conditions)) {
-    $where_clause = "WHERE " . implode(" AND ", $where_conditions);
-}
-
-// ============================================================
-// GET ACTIVITY LOGS SUMMARIES
-// ============================================================
-// Total logs
-$sql = "SELECT COUNT(*) as total FROM activity_logs al";
-$stmt = $db->prepare($sql);
-$stmt->execute();
-$result = $stmt->fetch();
-$total_logs = $result['total'] ?? 0;
-
-// Today's logs
-$sql = "SELECT COUNT(*) as total FROM activity_logs al WHERE DATE(created_at) = CURDATE()";
-$stmt = $db->prepare($sql);
-$stmt->execute();
-$result = $stmt->fetch();
-$today_logs = $result['total'] ?? 0;
-
-// Unique users who logged activity
-$sql = "SELECT COUNT(DISTINCT employee_id) as total FROM activity_logs al";
-$stmt = $db->prepare($sql);
-$stmt->execute();
-$result = $stmt->fetch();
-$active_users = $result['total'] ?? 0;
-
-// ============================================================
-// GET ACTIVITY LOGS LIST
-// ============================================================
-$sql = "SELECT 
-            al.id,
-            al.employee_id,
-            al.action,
-            al.module,
-            al.record_id,
-            al.old_value,
-            al.new_value,
-            al.ip_address,
-            al.user_agent,
-            al.branch_id,
-            al.created_at,
+try {
+    // Build query
+    $sql = "SELECT al.*, 
             e.full_name as employee_name,
-            e.role as employee_role,
-            b.branch_name as branch_name
-        FROM activity_logs al
-        LEFT JOIN employees e ON al.employee_id = e.id
-        LEFT JOIN branches b ON al.branch_id = b.id
-        " . $where_clause . "
-        ORDER BY al.created_at DESC
-        LIMIT 500";
+            e.username,
+            b.branch_name
+            FROM activity_logs al
+            LEFT JOIN employees e ON al.employee_id = e.id
+            LEFT JOIN branches b ON al.branch_id = b.id
+            WHERE DATE(al.created_at) BETWEEN ? AND ?";
+    $params = [$from_date, $to_date];
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$logs = $stmt->fetchAll();
+    if (!empty($action_filter)) {
+        $sql .= " AND al.action LIKE ?";
+        $params[] = '%' . $action_filter . '%';
+    }
 
-// Count logs
-$log_count = count($logs);
+    if (!empty($module_filter)) {
+        $sql .= " AND al.module = ?";
+        $params[] = $module_filter;
+    }
 
-// Get unique actions and modules for filters
-$action_stmt = $db->prepare("SELECT DISTINCT action FROM activity_logs ORDER BY action");
-$action_stmt->execute();
-$actions = $action_stmt->fetchAll();
+    if ($employee_filter > 0) {
+        $sql .= " AND al.employee_id = ?";
+        $params[] = $employee_filter;
+    }
 
-$module_stmt = $db->prepare("SELECT DISTINCT module FROM activity_logs ORDER BY module");
-$module_stmt->execute();
-$modules = $module_stmt->fetchAll();
+    // Count total records
+    $count_sql = str_replace("al.*, e.full_name as employee_name, e.username, b.branch_name", "COUNT(*) as total", $sql);
+    $stmt = $db->prepare($count_sql);
+    $stmt->execute($params);
+    $total_records = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $total_pages = ceil($total_records / $per_page);
 
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
+    // Get logs with pagination
+    $sql .= " ORDER BY al.created_at DESC LIMIT ? OFFSET ?";
+    $params[] = $per_page;
+    $params[] = $offset;
+
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get distinct modules for filter
+    $stmt = $db->prepare("SELECT DISTINCT module FROM activity_logs ORDER BY module");
+    $stmt->execute();
+    $modules = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    // Get employees for filter
+    $stmt = $db->prepare("SELECT id, full_name FROM employees WHERE is_active = 1 ORDER BY full_name");
+    $stmt->execute();
+    $employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get distinct actions for filter
+    $stmt = $db->prepare("SELECT DISTINCT action FROM activity_logs ORDER BY action");
+    $stmt->execute();
+    $actions = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+} catch (PDOException $e) {
+    $error = 'Database error: ' . $e->getMessage();
+    error_log("Error loading activity logs: " . $e->getMessage());
+    $logs = [];
+    $modules = [];
+    $employees = [];
+    $actions = [];
+}
+
+// Get summary statistics
+try {
+    $stmt = $db->prepare("SELECT 
+            COUNT(*) as total_activities,
+            COUNT(DISTINCT employee_id) as unique_users,
+            COUNT(DISTINCT module) as unique_modules,
+            MAX(created_at) as last_activity
+            FROM activity_logs
+            WHERE DATE(created_at) BETWEEN ? AND ?");
+    $stmt->execute([$from_date, $to_date]);
+    $summary = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $summary = [
+        'total_activities' => 0,
+        'unique_users' => 0,
+        'unique_modules' => 0,
+        'last_activity' => null
+    ];
+}
+
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-DASHBOARD CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== PAGE HEADER ===== -->
+        <!-- Dark Mode Toggle -->
+        <div class="dark-mode-toggle">
+            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
+                <i class="fas fa-moon"></i>
+                <span>Dark Mode</span>
+            </button>
+        </div>
+
+        <!-- Page Header -->
         <div class="page-header">
-            <div class="page-header-left">
-                <h2><i class="fas fa-history"></i> Activity Logs</h2>
-                <span class="record-count"><?php echo number_format($log_count); ?> records</span>
+            <div class="header-left">
+                <h2><i class="fas fa-history" style="color:#bb0404;"></i> Activity Logs</h2>
+                <p class="text-muted">View all system activities and user actions</p>
             </div>
-            <div class="page-header-right">
-                <div class="header-actions">
-                    <!-- Export Dropdown -->
-                    <div class="dropdown">
-                        <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
-                            <i class="fas fa-download"></i> Export
-                            <i class="fas fa-chevron-down"></i>
-                        </button>
-                        <div class="dropdown-menu" id="exportDropdown">
-                            <a href="#" onclick="exportData('csv')">
-                                <i class="fas fa-file-csv"></i> Export as CSV
-                            </a>
-                            <a href="#" onclick="exportData('excel')">
-                                <i class="fas fa-file-excel"></i> Export as Excel
-                            </a>
-                            <a href="#" onclick="exportData('pdf')">
-                                <i class="fas fa-file-pdf"></i> Export as PDF
-                            </a>
-                            <a href="#" onclick="exportData('print')">
-                                <i class="fas fa-print"></i> Print
-                            </a>
-                        </div>
-                    </div>
+            <div class="header-right">
+                <button onclick="window.location.reload()" class="btn btn-secondary">
+                    <i class="fas fa-sync"></i> Refresh
+                </button>
+                <a href="export.php" class="btn btn-export">
+                    <i class="fas fa-file-export"></i> Export
+                </a>
+                <button onclick="clearLogs()" class="btn btn-danger">
+                    <i class="fas fa-trash"></i> Clear All
+                </button>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#DBEAFE;color:#1D4ED8;">
+                    <i class="fas fa-list"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Activities</span>
+                    <span class="summary-value"><?php echo number_format($summary['total_activities'] ?? 0); ?></span>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#D1FAE5;color:#065F46;">
+                    <i class="fas fa-users"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Unique Users</span>
+                    <span class="summary-value"><?php echo number_format($summary['unique_users'] ?? 0); ?></span>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#EDE9FE;color:#6D28D9;">
+                    <i class="fas fa-cubes"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Modules Used</span>
+                    <span class="summary-value"><?php echo number_format($summary['unique_modules'] ?? 0); ?></span>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-icon" style="background:#FEF3C7;color:#92400E;">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Last Activity</span>
+                    <span class="summary-value" style="font-size:14px;">
+                        <?php echo $summary['last_activity'] ? date('d M Y H:i', strtotime($summary['last_activity'])) : 'N/A'; ?>
+                    </span>
                 </div>
             </div>
         </div>
 
-        <!-- ============================================================
-        SUMMARIES CARDS
-        ============================================================ -->
-        <div class="summaries-grid-three">
-            <!-- Total Logs -->
-            <div class="summary-card card-total">
-                <div class="summary-icon"><i class="fas fa-file-alt"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">TOTAL LOGS</div>
-                    <div class="summary-value"><?php echo number_format($total_logs); ?></div>
-                    <div class="summary-sub">All Time</div>
+        <!-- Filters -->
+        <div class="filters-bar">
+            <form method="GET" action="" class="filters-form">
+                <div class="filter-group">
+                    <label>From Date</label>
+                    <input type="date" name="from_date" value="<?php echo htmlspecialchars($from_date); ?>" class="form-control">
                 </div>
-            </div>
-
-            <!-- Today's Logs -->
-            <div class="summary-card card-today">
-                <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">TODAY'S LOGS</div>
-                    <div class="summary-value"><?php echo number_format($today_logs); ?></div>
-                    <div class="summary-sub"><?php echo date('d M Y'); ?></div>
+                <div class="filter-group">
+                    <label>To Date</label>
+                    <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
                 </div>
-            </div>
-
-            <!-- Active Users -->
-            <div class="summary-card card-users">
-                <div class="summary-icon"><i class="fas fa-users"></i></div>
-                <div class="summary-content">
-                    <div class="summary-label">ACTIVE USERS</div>
-                    <div class="summary-value"><?php echo number_format($active_users); ?></div>
-                    <div class="summary-sub">Who Logged Activity</div>
+                <div class="filter-group">
+                    <label>Module</label>
+                    <select name="module" class="form-control">
+                        <option value="">All Modules</option>
+                        <?php foreach ($modules as $m): ?>
+                            <option value="<?php echo htmlspecialchars($m); ?>" <?php echo $module_filter == $m ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($m); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
-            </div>
-        </div>
-
-        <!-- ============================================================
-        FILTERS
-        ============================================================ -->
-        <div class="filter-bar">
-            <form method="GET" action="" class="filter-form">
-                <div class="filter-row">
-                    <div class="filter-group">
-                        <label for="branch">Branch</label>
-                        <select id="branch" name="branch" class="form-control">
-                            <option value="0">All Branches</option>
-                            <?php foreach ($branches as $b): ?>
-                                <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($b['branch_name']); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <div class="filter-group">
-                        <label for="action">Action</label>
-                        <select id="action" name="action" class="form-control">
-                            <option value="">All Actions</option>
-                            <?php foreach ($actions as $a): ?>
-                                <option value="<?php echo htmlspecialchars($a['action']); ?>" <?php echo $selected_action == $a['action'] ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($a['action']); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <div class="filter-group">
-                        <label for="module">Module</label>
-                        <select id="module" name="module" class="form-control">
-                            <option value="">All Modules</option>
-                            <?php foreach ($modules as $m): ?>
-                                <option value="<?php echo htmlspecialchars($m['module']); ?>" <?php echo $selected_module == $m['module'] ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($m['module']); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <div class="filter-group">
-                        <label for="date_from">Date From</label>
-                        <input type="date" id="date_from" name="date_from" class="form-control" value="<?php echo $date_from; ?>">
-                    </div>
-                    
-                    <div class="filter-group">
-                        <label for="date_to">Date To</label>
-                        <input type="date" id="date_to" name="date_to" class="form-control" value="<?php echo $date_to; ?>">
-                    </div>
-                    
-                    <div class="filter-group filter-actions">
-                        <button type="submit" class="btn btn-filter">
-                            <i class="fas fa-search"></i> Filter
-                        </button>
-                        <a href="?branch=0&action=&module=&date_from=&date_to=" class="btn btn-reset-filter">
-                            <i class="fas fa-times"></i> Reset
-                        </a>
-                    </div>
+                <div class="filter-group">
+                    <label>Action</label>
+                    <select name="action" class="form-control">
+                        <option value="">All Actions</option>
+                        <?php foreach ($actions as $a): ?>
+                            <option value="<?php echo htmlspecialchars($a); ?>" <?php echo $action_filter == $a ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($a); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Employee</label>
+                    <select name="employee" class="form-control">
+                        <option value="0">All Employees</option>
+                        <?php foreach ($employees as $e): ?>
+                            <option value="<?php echo $e['id']; ?>" <?php echo $employee_filter == $e['id'] ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($e['full_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <button type="submit" class="btn btn-filter"><i class="fas fa-search"></i> Filter</button>
+                    <a href="index.php" class="btn btn-reset"><i class="fas fa-undo"></i> Reset</a>
                 </div>
             </form>
         </div>
 
-        <!-- ============================================================
-        TABLE - ACTIVITY LOGS
-        ============================================================ -->
+        <?php if ($error): ?>
+            <div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error); ?></div>
+        <?php endif; ?>
+
+        <!-- Logs Table -->
         <div class="table-container">
             <div class="table-header">
-                <h3><i class="fas fa-list"></i> Activity Logs</h3>
-                <div class="table-actions">
-                    <input type="text" id="searchInput" placeholder="Search logs..." class="search-input">
-                </div>
+                <h4><i class="fas fa-list"></i> Activity Logs</h4>
+                <span class="record-count"><?php echo number_format($total_records); ?> records</span>
             </div>
-
-            <?php if (empty($logs)): ?>
-                <div class="empty-state">
-                    <i class="fas fa-history"></i>
-                    <h3>No Activity Logs Found</h3>
-                    <p>No activity logs match your filter criteria.</p>
-                </div>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="data-table" id="logsTable">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>User</th>
-                                <th>Action</th>
-                                <th>Module</th>
-                                <th>Record ID</th>
-                                <th>IP Address</th>
-                                <th>Branch</th>
-                                <th>Date/Time</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            $counter = 1;
-                            foreach ($logs as $log): 
-                                // Action color
-                                $action = $log['action'] ?? 'Unknown';
-                                $action_class = 'action-default';
-                                
-                                $action_colors = [
-                                    'Login' => 'action-login',
-                                    'Logout' => 'action-logout',
-                                    'Add' => 'action-add',
-                                    'Edit' => 'action-edit',
-                                    'Update' => 'action-edit',
-                                    'Delete' => 'action-delete',
-                                    'View' => 'action-view',
-                                    'Export' => 'action-export',
-                                    'Print' => 'action-print',
-                                    'Generate' => 'action-generate',
-                                    'Approve' => 'action-approve',
-                                    'Reject' => 'action-reject',
-                                    'Cancel' => 'action-cancel'
-                                ];
-                                
-                                foreach ($action_colors as $key => $class) {
-                                    if (stripos($action, $key) !== false) {
-                                        $action_class = $class;
-                                        break;
-                                    }
-                                }
-                                
-                                // Get role badge color
-                                $role_class = '';
-                                if (strtolower($log['employee_role'] ?? '') == 'super_admin') {
-                                    $role_class = 'role-super-admin';
-                                } elseif (strtolower($log['employee_role'] ?? '') == 'admin') {
-                                    $role_class = 'role-admin';
-                                } else {
-                                    $role_class = 'role-employee';
-                                }
-                            ?>
+            
+            <div class="table-responsive">
+                <table class="data-table" id="logsTable">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Date & Time</th>
+                            <th>Employee</th>
+                            <th>Module</th>
+                            <th>Action</th>
+                            <th>Details</th>
+                            <th>IP Address</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (count($logs) > 0): ?>
+                            <?php $counter = $offset + 1; ?>
+                            <?php foreach ($logs as $log): ?>
                                 <tr>
                                     <td><?php echo $counter++; ?></td>
                                     <td>
-                                        <div class="user-cell">
-                                            <span class="user-name"><?php echo htmlspecialchars($log['employee_name'] ?? 'Unknown'); ?></span>
-                                            <span class="user-role-badge <?php echo $role_class; ?>">
-                                                <?php echo ucfirst($log['employee_role'] ?? 'N/A'); ?>
-                                            </span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="action-badge <?php echo $action_class; ?>">
-                                            <?php echo htmlspecialchars($action); ?>
+                                        <span class="datetime">
+                                            <?php echo date('d M Y', strtotime($log['created_at'])); ?>
+                                            <br>
+                                            <small><?php echo date('H:i:s', strtotime($log['created_at'])); ?></small>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="module-badge">
-                                            <?php echo htmlspecialchars($log['module'] ?? 'N/A'); ?>
+                                        <span class="employee-name">
+                                            <?php echo htmlspecialchars($log['employee_name'] ?? 'Unknown'); ?>
+                                            <br>
+                                            <small class="text-muted"><?php echo htmlspecialchars($log['username'] ?? ''); ?></small>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="record-id">
-                                            <?php echo $log['record_id'] ? '#' . $log['record_id'] : '—'; ?>
+                                        <span class="module-badge"><?php echo htmlspecialchars($log['module']); ?></span>
+                                    </td>
+                                    <td>
+                                        <span class="action-badge <?php echo getActionClass($log['action']); ?>">
+                                            <?php echo htmlspecialchars($log['action']); ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="ip-address">
-                                            <?php echo htmlspecialchars($log['ip_address'] ?? '—'); ?>
-                                        </span>
+                                        <?php if ($log['new_value']): ?>
+                                            <button class="btn-detail" onclick="showDetails(<?php echo $log['id']; ?>, '<?php echo htmlspecialchars($log['new_value']); ?>')">
+                                                <i class="fas fa-eye"></i> View
+                                            </button>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td>
-                                        <span class="branch-name">
-                                            <?php echo htmlspecialchars($log['branch_name'] ?? 'Main'); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="datetime-cell">
-                                            <span class="log-date"><?php echo date('d M Y', strtotime($log['created_at'])); ?></span>
-                                            <span class="log-time"><?php echo date('H:i:s', strtotime($log['created_at'])); ?></span>
-                                        </div>
+                                        <span class="ip-address"><?php echo htmlspecialchars($log['ip_address'] ?? 'N/A'); ?></span>
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <button class="btn-action btn-view" onclick="viewLog(<?php echo $log['id']; ?>)" title="View Details">
+                                            <button onclick="viewLog(<?php echo $log['id']; ?>)" class="btn-action btn-view" title="View Details">
                                                 <i class="fas fa-eye"></i>
                                             </button>
-                                            <button class="btn-action btn-delete" onclick="deleteLog(<?php echo $log['id']; ?>)" title="Delete">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
+                                            <?php if ($role === 'super_admin'): ?>
+                                                <button onclick="deleteLog(<?php echo $log['id']; ?>)" class="btn-action btn-delete" title="Delete">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="8" class="text-center no-data">
+                                    <i class="fas fa-inbox" style="font-size:48px;color:var(--text-light);display:block;margin:20px 0;"></i>
+                                    <p style="color:var(--text-muted);">No activity logs found</p>
+                                    <p style="color:var(--text-muted);font-size:12px;">Try adjusting your filters</p>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <?php if ($total_pages > 1): ?>
+                <div class="pagination">
+                    <div class="pagination-info">
+                        Showing <?php echo $offset + 1; ?> - <?php echo min($offset + $per_page, $total_records); ?> of <?php echo number_format($total_records); ?>
+                    </div>
+                    <div class="pagination-links">
+                        <?php if ($page > 1): ?>
+                            <a href="?page=<?php echo $page - 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" class="page-link">
+                                <i class="fas fa-chevron-left"></i>
+                            </a>
+                        <?php endif; ?>
+                        
+                        <?php
+                        $start_page = max(1, $page - 2);
+                        $end_page = min($total_pages, $page + 2);
+                        for ($i = $start_page; $i <= $end_page; $i++):
+                        ?>
+                            <a href="?page=<?php echo $i; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" 
+                               class="page-link <?php echo $i == $page ? 'active' : ''; ?>">
+                                <?php echo $i; ?>
+                            </a>
+                        <?php endfor; ?>
+                        
+                        <?php if ($page < $total_pages): ?>
+                            <a href="?page=<?php echo $page + 1; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&module=<?php echo $module_filter; ?>&action=<?php echo $action_filter; ?>&employee=<?php echo $employee_filter; ?>" class="page-link">
+                                <i class="fas fa-chevron-right"></i>
+                            </a>
+                        <?php endif; ?>
+                    </div>
                 </div>
             <?php endif; ?>
         </div>
 
     </div>
-    
-    <!-- ============================================================
-    FOOTER
-    ============================================================ -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-DASHBOARD STYLES - WITH DARK MODE SUPPORT
-============================================================ -->
+<!-- View Log Modal -->
+<div id="viewModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h4><i class="fas fa-info-circle" style="color:#bb0404;"></i> Log Details</h4>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="logDetails">
+            <!-- Content loaded via JavaScript -->
+        </div>
+    </div>
+</div>
+
+<!-- Details Modal -->
+<div id="detailsModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h4><i class="fas fa-code" style="color:#bb0404;"></i> Data Details</h4>
+            <button class="modal-close" onclick="closeDetailsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <pre id="detailsContent" style="background:var(--bg-input);padding:16px;border-radius:8px;overflow:auto;max-height:400px;font-size:12px;"></pre>
+        </div>
+    </div>
+</div>
+
 <style>
-/* ============================================================
-   DARK MODE VARIABLES
-   ============================================================ */
-:root {
-    --logs-bg: #FFFFFF;
-    --logs-text: #1F2937;
-    --logs-text-secondary: #6B7280;
-    --logs-text-light: #9CA3AF;
-    --logs-border: #E5E7EB;
-    --logs-card-bg: #FFFFFF;
-    --logs-input-bg: #F9FAFB;
-    --logs-hover: #F3F4F6;
-    --logs-shadow: rgba(0,0,0,0.06);
-    --logs-shadow-lg: rgba(0,0,0,0.12);
-    --logs-dropdown-bg: #FFFFFF;
-    --logs-dropdown-border: #E5E7EB;
-}
-
-html.dark-mode {
-    --logs-bg: #1F2937;
-    --logs-text: #F9FAFB;
-    --logs-text-secondary: #9CA3AF;
-    --logs-text-light: #6B7280;
-    --logs-border: #374151;
-    --logs-card-bg: #1F2937;
-    --logs-input-bg: #374151;
-    --logs-hover: #374151;
-    --logs-shadow: rgba(0,0,0,0.3);
-    --logs-shadow-lg: rgba(0,0,0,0.4);
-    --logs-dropdown-bg: #1F2937;
-    --logs-dropdown-border: #374151;
-}
-
-/* ============================================================
-   PAGE HEADER - DARK MODE SUPPORT
-   ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
-}
-
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--logs-text);
-    margin: 0;
-    transition: color 0.3s ease;
-}
-
-.page-header-left h2 i {
-    color: var(--logs-text-secondary);
-    margin-right: 8px;
-}
-
-.record-count {
-    font-size: 13px;
-    color: var(--logs-text-secondary);
-    background: var(--logs-hover);
-    padding: 2px 12px;
-    border-radius: 12px;
-    transition: all 0.3s ease;
-}
-
-.header-actions {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-/* ============================================================
-   EXPORT BUTTON - DARK MODE SUPPORT
-   ============================================================ */
-.btn-export {
-    background: #1E40AF;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    border: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-}
-
-.btn-export:hover {
-    background: #1D4ED8;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3);
-}
-
-.dropdown {
-    position: relative;
-    display: inline-block;
-}
-
-.dropdown-toggle i.fa-chevron-down {
-    font-size: 11px;
-    margin-left: 2px;
-}
-
-.dropdown-menu {
-    display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 4px;
-    background: var(--logs-dropdown-bg);
-    min-width: 200px;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px var(--logs-shadow-lg);
-    border: 1px solid var(--logs-dropdown-border);
-    z-index: 1000;
-    overflow: hidden;
-    padding: 4px 0;
-    transition: all 0.3s ease;
-}
-
-.dropdown-menu.show {
-    display: block;
-}
-
-.dropdown-menu a {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    text-decoration: none;
-    color: var(--logs-text);
-    font-size: 13px;
-    font-weight: 500;
-    transition: background 0.2s ease;
-}
-
-.dropdown-menu a:hover {
-    background: var(--logs-hover);
-}
-
-.dropdown-menu a i {
-    width: 18px;
-    font-size: 15px;
-}
-
-.dropdown-menu a i.fa-file-csv { color: #0B5ED7; }
-.dropdown-menu a i.fa-file-excel { color: #1D7D1D; }
-.dropdown-menu a i.fa-file-pdf { color: #DC2626; }
-.dropdown-menu a i.fa-print { color: #6B7280; }
-
-/* ============================================================
-   SUMMARIES GRID - 3 CARDS - DARK MODE SUPPORT
-   ============================================================ */
-.summaries-grid-three {
+/* Summary Cards */
+.summary-cards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-bottom: 18px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
 }
 
 .summary-card {
-    background: var(--logs-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
-    padding: 18px 20px;
+    padding: 16px 20px;
+    border: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 1px 3px var(--logs-shadow);
-    border: 1px solid var(--logs-border);
     transition: all 0.3s ease;
-    min-height: 110px;
-    height: 110px;
 }
 
 .summary-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--logs-shadow-lg);
+    box-shadow: 0 4px 12px var(--shadow-hover);
 }
 
 .summary-icon {
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -651,68 +448,119 @@ html.dark-mode {
     flex-shrink: 0;
 }
 
-.summary-content {
-    flex: 1;
-    min-width: 0;
+.summary-info {
     display: flex;
     flex-direction: column;
-    justify-content: center;
 }
 
 .summary-label {
-    font-size: 11px;
+    font-size: 12px;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    font-weight: 700;
-    color: var(--logs-text-secondary);
+    font-weight: 600;
 }
 
 .summary-value {
-    font-size: 22px;
-    font-weight: 800;
-    color: var(--logs-text);
-    margin: 4px 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: color 0.3s ease;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
 }
 
-.summary-sub {
-    font-size: 11px;
-    color: var(--logs-text-light);
-    font-weight: 500;
-}
-
-.card-total .summary-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-total { border-left: 4px solid #3B82F6; }
-
-.card-today .summary-icon { background: #D1FAE5; color: #065F46; }
-.card-today { border-left: 4px solid #10B981; }
-
-.card-users .summary-icon { background: #FEF3C7; color: #D97706; }
-.card-users { border-left: 4px solid #D97706; }
-
-/* ============================================================
-   FILTER BAR - DARK MODE SUPPORT
-   ============================================================ */
-.filter-bar {
-    background: var(--logs-card-bg);
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin-bottom: 16px;
-    border: 1px solid var(--logs-border);
-    box-shadow: 0 1px 3px var(--logs-shadow);
-    transition: all 0.3s ease;
-}
-
-.filter-form {
-    width: 100%;
-}
-
-.filter-row {
+/* Page Header */
+.page-header {
     display: flex;
-    gap: 14px;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.page-header .header-left h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.page-header .header-left h2 i {
+    margin-right: 10px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Buttons */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.btn-secondary {
+    background: var(--bg-table-even);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+.btn-secondary:hover { background: var(--bg-table-hover); }
+
+.btn-export { background: #10B981; color: white; }
+.btn-export:hover { background: #059669; transform: translateY(-1px); }
+
+.btn-danger { background: #DC2626; color: white; }
+.btn-danger:hover { background: #991B1B; transform: translateY(-1px); }
+
+.btn-filter { background: #bb0404; color: white; }
+.btn-filter:hover { background: #8a0303; }
+
+.btn-reset { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
+.btn-reset:hover { background: var(--bg-table-hover); }
+
+.btn-detail {
+    background: #DBEAFE;
+    color: #1D4ED8;
+    border: none;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+.btn-detail:hover { background: #1D4ED8; color: white; }
+
+/* Filters */
+.filters-bar {
+    background: var(--bg-card);
+    padding: 16px 20px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.filters-form {
+    display: flex;
+    gap: 16px;
     flex-wrap: wrap;
     align-items: flex-end;
 }
@@ -721,833 +569,480 @@ html.dark-mode {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    flex: 1;
-    min-width: 120px;
 }
 
 .filter-group label {
     font-size: 12px;
     font-weight: 600;
-    color: var(--logs-text-secondary);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    transition: color 0.3s ease;
 }
 
-.filter-group .form-control {
+.form-control {
     padding: 8px 12px;
+    border: 1px solid var(--border-color);
     border-radius: 6px;
-    border: 1px solid var(--logs-border);
     font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    transition: all 0.3s ease;
+    min-width: 150px;
+}
+
+.form-control:focus {
     outline: none;
-    transition: all 0.3s ease;
-    background: var(--logs-input-bg);
-    color: var(--logs-text);
-    width: 100%;
-    font-family: 'Inter', sans-serif;
+    border-color: #bb0404;
+    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
 }
 
-.filter-group .form-control option {
-    background: var(--logs-dropdown-bg);
-    color: var(--logs-text);
-}
-
-.filter-group .form-control:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.filter-actions {
-    display: flex;
-    flex-direction: row;
-    gap: 8px;
-    align-items: flex-end;
-    min-width: 180px;
-}
-
-.btn-filter {
-    background: #DC2626;
-    color: white;
-    padding: 8px 18px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.btn-filter:hover {
-    background: #B91C1C;
-    transform: translateY(-1px);
-}
-
-.btn-reset-filter {
-    background: var(--logs-hover);
-    color: var(--logs-text-secondary);
-    padding: 8px 18px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-decoration: none;
-    font-family: 'Inter', sans-serif;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.btn-reset-filter:hover {
-    background: var(--logs-border);
-    color: var(--logs-text);
-}
-
-/* ============================================================
-   TABLE CONTAINER - DARK MODE SUPPORT
-   ============================================================ */
+/* Table */
 .table-container {
-    background: var(--logs-card-bg);
+    background: var(--bg-card);
     border-radius: 10px;
-    box-shadow: 0 1px 3px var(--logs-shadow);
-    border: 1px solid var(--logs-border);
-    overflow: hidden;
-    transition: all 0.3s ease;
+    padding: 16px 20px;
+    border: 1px solid var(--border-color);
 }
 
 .table-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--logs-border);
-    flex-wrap: wrap;
-    gap: 10px;
-    transition: all 0.3s ease;
+    margin-bottom: 16px;
 }
 
-.table-header h3 {
-    font-size: 15px;
+.table-header h4 {
+    font-size: 14px;
     font-weight: 600;
-    color: var(--logs-text);
+    color: var(--text-primary);
     margin: 0;
 }
 
-.table-header h3 i {
-    color: var(--logs-text-secondary);
-    margin-right: 8px;
-}
+.table-header h4 i { color: #bb0404; margin-right: 8px; }
+.record-count { font-size: 12px; color: var(--text-muted); }
 
-.table-actions {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.search-input {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--logs-border);
-    font-size: 13px;
-    outline: none;
-    width: 200px;
-    transition: all 0.3s ease;
-    background: var(--logs-input-bg);
-    color: var(--logs-text);
-}
-
-.search-input::placeholder {
-    color: var(--logs-text-light);
-}
-
-.search-input:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-}
-
-.table-responsive {
-    overflow-x: auto;
-}
-
+.table-responsive { overflow-x: auto; }
 .data-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND (Stays Red in Dark Mode)
-   ============================================================ */
 .data-table thead {
-    background: #DC2626;
+    background: #bb0404;
 }
-
 .data-table thead th {
-    padding: 12px 16px;
+    padding: 10px 12px;
     text-align: left;
     font-weight: 600;
     color: #FFFFFF;
     text-transform: uppercase;
     font-size: 11px;
     letter-spacing: 0.5px;
-    border-bottom: 2px solid #B91C1C;
+    border-bottom: 2px solid #8a0303;
     white-space: nowrap;
 }
 
-.data-table thead th i {
-    color: #FFFFFF;
-    margin-right: 4px;
-}
-
 .data-table tbody tr {
-    border-bottom: 1px solid var(--logs-border);
+    border-bottom: 1px solid var(--border-color);
     transition: background 0.2s ease;
 }
+.data-table tbody tr:hover { background: var(--bg-table-hover); }
+.data-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
+.data-table tbody td { padding: 10px 12px; color: var(--text-secondary); }
 
-.data-table tbody tr:hover {
-    background: var(--logs-hover);
+.datetime {
+    font-size: 12px;
+}
+.datetime small {
+    color: var(--text-muted);
+    font-size: 11px;
 }
 
-.data-table tbody td {
-    padding: 10px 16px;
-    color: var(--logs-text);
-    transition: color 0.3s ease;
-}
-
-/* User Cell */
-.user-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.user-name {
+.employee-name {
     font-weight: 500;
-    color: var(--logs-text);
+}
+.employee-name small {
+    font-weight: 400;
 }
 
-.user-role-badge {
-    font-size: 9px;
-    font-weight: 600;
-    padding: 1px 8px;
-    border-radius: 10px;
+.module-badge {
     display: inline-block;
-    width: fit-content;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #EDE9FE;
+    color: #6D28D9;
 }
 
-.role-super-admin {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.role-admin {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.role-employee {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-/* Action Badge */
 .action-badge {
     display: inline-block;
-    padding: 3px 12px;
+    padding: 2px 10px;
     border-radius: 12px;
     font-size: 11px;
     font-weight: 600;
 }
+.action-badge.action-add { background: #D1FAE5; color: #065F46; }
+.action-badge.action-edit { background: #DBEAFE; color: #1D4ED8; }
+.action-badge.action-delete { background: #FEE2E2; color: #991B1B; }
+.action-badge.action-view { background: #FEF3C7; color: #92400E; }
+.action-badge.action-login { background: #E0E7FF; color: #3730A3; }
+.action-badge.action-logout { background: #F3F4F6; color: #6B7280; }
+.action-badge.action-generate { background: #EDE9FE; color: #6D28D9; }
 
-.action-login {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.action-logout {
-    background: #FEE2E2;
-    color: #991B1B;
-}
-
-.action-add {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.action-edit {
-    background: #FEF3C7;
-    color: #92400E;
-}
-
-.action-delete {
-    background: #FEE2E2;
-    color: #991B1B;
-}
-
-.action-view {
-    background: #EDE9FE;
-    color: #5B21B6;
-}
-
-.action-export {
-    background: #DBEAFE;
-    color: #1E40AF;
-}
-
-.action-print {
-    background: #F3F4F6;
-    color: #374151;
-}
-
-.action-generate {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.action-approve {
-    background: #D1FAE5;
-    color: #065F46;
-}
-
-.action-reject {
-    background: #FEE2E2;
-    color: #991B1B;
-}
-
-.action-cancel {
-    background: #F3F4F6;
-    color: #6B7280;
-}
-
-.action-default {
-    background: #F3F4F6;
-    color: #374151;
-}
-
-/* Module Badge */
-.module-badge {
-    background: var(--logs-hover);
-    color: var(--logs-text-secondary);
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 500;
-    transition: all 0.3s ease;
-}
-
-/* Record ID */
-.record-id {
-    font-size: 12px;
-    color: var(--logs-text-light);
-    font-weight: 500;
-}
-
-/* IP Address */
 .ip-address {
-    font-family: 'Courier New', monospace;
     font-size: 12px;
-    color: var(--logs-text-light);
-}
-
-/* Branch Name */
-.branch-name {
-    background: var(--logs-hover);
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    color: var(--logs-text-secondary);
-    transition: all 0.3s ease;
-}
-
-/* DateTime Cell */
-.datetime-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-
-.log-date {
-    font-weight: 500;
-    color: var(--logs-text);
-    font-size: 12px;
-}
-
-.log-time {
-    font-size: 11px;
-    color: var(--logs-text-light);
+    color: var(--text-muted);
+    font-family: monospace;
 }
 
 /* Action Buttons */
-.action-buttons {
-    display: flex;
-    gap: 6px;
-}
-
+.action-buttons { display: flex; gap: 4px; }
 .btn-action {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
+    border: none;
     border-radius: 6px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: none;
     cursor: pointer;
     transition: all 0.2s ease;
+    text-decoration: none;
     font-size: 13px;
 }
 
-.btn-view {
-    background: #DBEAFE;
-    color: #1D4ED8;
+.btn-view { background: #DBEAFE; color: #1D4ED8; }
+.btn-view:hover { background: #1D4ED8; color: #ffffff; }
+
+.btn-delete { background: #FEE2E2; color: #991B1B; }
+.btn-delete:hover { background: #991B1B; color: #ffffff; }
+
+/* Pagination */
+.pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+    margin-top: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
 }
 
-.btn-view:hover {
-    background: #BFDBFE;
-    color: #1E40AF;
+.pagination-info {
+    font-size: 13px;
+    color: var(--text-muted);
 }
 
-.btn-delete {
-    background: #FEE2E2;
-    color: #DC2626;
+.pagination-links {
+    display: flex;
+    gap: 4px;
 }
 
-.btn-delete:hover {
-    background: #FECACA;
-    color: #B91C1C;
+.page-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.2s ease;
+    min-width: 36px;
 }
 
-/* ============================================================
-   EMPTY STATE - DARK MODE SUPPORT
-   ============================================================ */
-.empty-state {
-    text-align: center;
-    padding: 60px 20px;
+.page-link:hover {
+    background: var(--bg-table-hover);
+    border-color: #bb0404;
 }
 
-.empty-state i {
-    font-size: 60px;
-    color: var(--logs-text-light);
-    margin-bottom: 16px;
+.page-link.active {
+    background: #bb0404;
+    color: white;
+    border-color: #bb0404;
 }
 
-.empty-state h3 {
-    font-size: 20px;
-    color: var(--logs-text);
-    margin: 0 0 8px 0;
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    padding: 20px;
 }
 
-.empty-state p {
-    color: var(--logs-text-secondary);
-    font-size: 14px;
+.modal-content {
+    background: var(--bg-card);
+    border-radius: 12px;
+    max-width: 600px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
     margin: 0;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 8px;
+    line-height: 1;
+}
+
+.modal-close:hover { color: var(--text-primary); }
+
+.modal-body {
+    padding: 20px;
+}
+
+/* Alert */
+.alert {
+    padding: 12px 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+
+.no-data { padding: 40px 20px; text-align: center; }
+.text-muted { color: var(--text-muted); }
+
+/* Dark Mode */
+:root {
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-table-even: #fafafa;
+    --bg-table-hover: #f3f4f6;
+    --bg-input: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --shadow-hover: rgba(0,0,0,0.08);
+}
+
+body.dark-mode {
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-table-even: #1a2332;
+    --bg-table-hover: #2d3a4f;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+    --shadow-color: rgba(0,0,0,0.4);
+    --shadow-hover: rgba(0,0,0,0.6);
+}
+
+body {
+    background: var(--bg-body) !important;
+    color: var(--text-primary);
+    transition: background 0.3s ease, color 0.3s ease;
+}
+
+.dark-mode-toggle {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+}
+
+.dark-mode-btn {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+}
+
+.dark-mode-btn:hover {
+    background: var(--bg-table-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
 @media (max-width: 1024px) {
-    .summaries-grid-three {
-        grid-template-columns: repeat(3, 1fr);
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
 @media (max-width: 768px) {
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
+    .summary-cards {
+        grid-template-columns: 1fr;
     }
-    
-    .header-actions {
-        width: 100%;
-    }
-    
-    .header-actions .btn-export {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .dropdown {
-        width: 100%;
-    }
-    
-    .dropdown-menu {
-        width: 100%;
-        right: auto;
-        left: 0;
-    }
-    
-    .summaries-grid-three {
-        grid-template-columns: 1fr 1fr;
-    }
-    
-    .summaries-grid-three .summary-card:last-child {
-        grid-column: span 2;
-    }
-    
-    .filter-row {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .filter-group {
-        min-width: 100%;
-    }
-    
-    .filter-actions {
-        flex-direction: row;
-        min-width: 100%;
-    }
-    
-    .filter-actions .btn-filter,
-    .filter-actions .btn-reset-filter {
-        flex: 1;
-        justify-content: center;
-    }
-    
-    .table-header {
-        flex-direction: column;
-        gap: 10px;
-        align-items: flex-start;
-    }
-    
-    .table-actions {
-        width: 100%;
+    .filters-form {
         flex-direction: column;
     }
-    
-    .search-input {
-        width: 100%;
-    }
-    
-    .summary-card {
-        min-height: 100px;
-        height: 100px;
-        padding: 14px 16px;
-    }
-    
-    .summary-icon {
-        width: 44px;
-        height: 44px;
-        font-size: 18px;
-    }
-    
-    .summary-value {
-        font-size: 19px;
-    }
-}
-
-@media (max-width: 480px) {
-    .summaries-grid-three {
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-    }
-    
-    .summaries-grid-three .summary-card:last-child {
-        grid-column: span 2;
-    }
-    
-    .summary-card {
-        padding: 12px 14px;
-        min-height: 90px;
-        height: 90px;
-    }
-    
-    .summary-icon {
-        width: 40px;
-        height: 40px;
-        font-size: 16px;
-    }
-    
-    .summary-value {
-        font-size: 16px;
-    }
-    
-    .summary-label {
-        font-size: 9px;
-    }
-    
-    .summary-sub {
-        font-size: 9px;
-    }
-    
-    .data-table thead th,
-    .data-table tbody td {
-        padding: 8px 10px;
-        font-size: 12px;
-    }
-    
-    .action-buttons {
+    .filter-group { width: 100%; }
+    .filter-group .form-control { width: 100%; }
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .header-right { width: 100%; flex-wrap: wrap; }
+    .header-right .btn { flex: 1; justify-content: center; }
+    .pagination {
         flex-direction: column;
-        gap: 4px;
+        align-items: center;
     }
-    
-    .btn-action {
-        width: 28px;
-        height: 28px;
-        font-size: 11px;
-    }
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.summary-card {
-    animation: fadeInUp 0.4s ease forwards;
-}
-
-.summary-card:nth-child(1) { animation-delay: 0.05s; }
-.summary-card:nth-child(2) { animation-delay: 0.10s; }
-.summary-card:nth-child(3) { animation-delay: 0.15s; }
-
-.filter-bar {
-    animation: fadeInUp 0.4s ease forwards;
-    animation-delay: 0.10s;
-}
-
-.table-container {
-    animation: fadeInUp 0.4s ease forwards;
-    animation-delay: 0.20s;
 }
 </style>
 
 <script>
 // ============================================================
-// DROPDOWN TOGGLE
+// HELPER FUNCTIONS
 // ============================================================
-function toggleDropdown() {
-    var dropdown = document.getElementById('exportDropdown');
-    dropdown.classList.toggle('show');
+
+function getActionClass(action) {
+    const classes = {
+        'Add': 'action-add',
+        'Edit': 'action-edit',
+        'Update': 'action-edit',
+        'Delete': 'action-delete',
+        'Remove': 'action-delete',
+        'View': 'action-view',
+        'Login': 'action-login',
+        'Logout': 'action-logout',
+        'Generate': 'action-generate',
+        'Create': 'action-add',
+        'Save': 'action-add'
+    };
+    
+    for (let [key, value] of Object.entries(classes)) {
+        if (action.toLowerCase().includes(key.toLowerCase())) {
+            return value;
+        }
+    }
+    return '';
 }
 
-// Close dropdown when clicking outside
-document.addEventListener('click', function(event) {
-    var dropdown = document.getElementById('exportDropdown');
-    var button = document.querySelector('.dropdown-toggle');
-    if (button && !button.contains(event.target) && !dropdown.contains(event.target)) {
-        dropdown.classList.remove('show');
+// ============================================================
+// MODAL FUNCTIONS
+// ============================================================
+
+function viewLog(id) {
+    // Fetch log details via AJAX
+    fetch('get_log.php?id=' + id)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('logDetails').innerHTML = data.html;
+                document.getElementById('viewModal').style.display = 'flex';
+            }
+        })
+        .catch(error => {
+            alert('Error loading log details');
+        });
+}
+
+function showDetails(id, data) {
+    try {
+        const parsed = JSON.parse(data);
+        document.getElementById('detailsContent').textContent = JSON.stringify(parsed, null, 2);
+    } catch (e) {
+        document.getElementById('detailsContent').textContent = data;
+    }
+    document.getElementById('detailsModal').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('viewModal').style.display = 'none';
+}
+
+function closeDetailsModal() {
+    document.getElementById('detailsModal').style.display = 'none';
+}
+
+// Close modals on outside click
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('modal')) {
+        e.target.style.display = 'none';
     }
 });
 
 // ============================================================
-// EXPORT FUNCTIONS
+// DELETE FUNCTIONS
 // ============================================================
-function exportData(format) {
-    var dropdown = document.getElementById('exportDropdown');
-    dropdown.classList.remove('show');
-    
-    var table = document.getElementById('logsTable');
-    if (!table) {
-        alert('No data to export!');
-        return;
-    }
-    
-    var rows = table.querySelectorAll('tbody tr');
-    var headers = [];
-    var headerCells = table.querySelectorAll('thead th');
-    
-    // Get headers (skip Actions column)
-    for (var i = 0; i < headerCells.length - 1; i++) {
-        headers.push(headerCells[i].textContent.trim());
-    }
-    
-    // Get data
-    var data = [];
-    rows.forEach(function(row) {
-        var rowData = [];
-        var cells = row.querySelectorAll('td');
-        for (var i = 0; i < cells.length - 1; i++) {
-            rowData.push(cells[i].textContent.trim());
-        }
-        data.push(rowData);
-    });
-    
-    if (data.length === 0) {
-        alert('No data to export!');
-        return;
-    }
-    
-    if (format === 'csv') {
-        exportCSV(headers, data);
-    } else if (format === 'excel') {
-        exportExcel(headers, data);
-    } else if (format === 'pdf') {
-        exportPDF(headers, data);
-    } else if (format === 'print') {
-        window.print();
-    }
-}
 
-// ============================================================
-// EXPORT CSV
-// ============================================================
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) {
-        csv += row.join(',') + '\n';
-    });
-    
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'activity_logs_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT EXCEL
-// ============================================================
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Activity Logs Export</title>';
-    html += '<style>';
-    html += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #DC2626; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }';
-    html += '</style>';
-    html += '</head><body>';
-    html += '<h1>Activity Logs Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table>';
-    html += '<thead><tr>';
-    headers.forEach(function(h) {
-        html += '<th>' + h + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) {
-            html += '<td>' + cell + '</td>';
-        });
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    html += '</body></html>';
-    
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'activity_logs_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-// ============================================================
-// EXPORT PDF
-// ============================================================
-function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Activity Logs Export</title>';
-    printContent += '<style>';
-    printContent += 'body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #DC2626; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }';
-    printContent += '</style>';
-    printContent += '</head><body>';
-    printContent += '<h1>Activity Logs Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    printContent += '<table>';
-    printContent += '<thead><tr>';
-    headers.forEach(function(h) {
-        printContent += '<th>' + h + '</th>';
-    });
-    printContent += '</tr></thead><tbody>';
-    
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell) {
-            printContent += '<td>' + cell + '</td>';
-        });
-        printContent += '</tr>';
-    });
-    
-    printContent += '</tbody></table>';
-    printContent += '</body></html>';
-    
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
-// ============================================================
-// VIEW LOG DETAILS
-// ============================================================
-function viewLog(id) {
-    alert('View log details for ID: ' + id);
-}
-
-// ============================================================
-// DELETE LOG
-// ============================================================
 function deleteLog(id) {
-    if (confirm('Are you sure you want to delete this log entry?')) {
-        alert('Delete log ID: ' + id);
+    if (confirm('Are you sure you want to delete this log entry? This action cannot be undone.')) {
+        window.location.href = 'delete.php?id=' + id;
+    }
+}
+
+function clearLogs() {
+    if (confirm('Are you sure you want to clear ALL activity logs? This action cannot be undone.')) {
+        if (confirm('This will permanently delete all activity logs. Are you absolutely sure?')) {
+            window.location.href = 'clear.php';
+        }
     }
 }
 
 // ============================================================
-// SEARCH FUNCTIONALITY
+// DARK MODE TOGGLE
 // ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    var searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.addEventListener('keyup', function() {
-            var filter = this.value.toLowerCase();
-            var rows = document.querySelectorAll('#logsTable tbody tr');
-            
-            rows.forEach(function(row) {
-                var text = row.textContent.toLowerCase();
-                if (text.indexOf(filter) > -1) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-        });
+
+function toggleDarkMode() {
+    document.body.classList.toggle('dark-mode');
+    const btn = document.getElementById('darkModeToggle');
+    if (document.body.classList.contains('dark-mode')) {
+        btn.querySelector('i').className = 'fas fa-sun';
+        btn.querySelector('span').textContent = 'Light Mode';
+        localStorage.setItem('darkMode', 'enabled');
+    } else {
+        btn.querySelector('i').className = 'fas fa-moon';
+        btn.querySelector('span').textContent = 'Dark Mode';
+        localStorage.setItem('darkMode', 'disabled');
     }
-    
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
-    function syncDarkMode() {
-        var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (localStorage.getItem('darkMode') === 'enabled') {
+        document.body.classList.add('dark-mode');
+        const btn = document.getElementById('darkModeToggle');
+        if (btn) {
+            btn.querySelector('i').className = 'fas fa-sun';
+            btn.querySelector('span').textContent = 'Light Mode';
         }
     }
-    
-    syncDarkMode();
-    
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
 });
 </script>
 
