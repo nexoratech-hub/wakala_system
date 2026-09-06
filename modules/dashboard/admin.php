@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/dashboard/admin.php
 // WAKALA FINANCIAL SYSTEM - COMPLETE ADMIN DASHBOARD
-// WITH DARK MODE SUPPORT
+// WITH DARK MODE SUPPORT - FIXED
 // ================================================================
 
 // ============================================================
@@ -106,56 +106,85 @@ $stmt->execute($params);
 $result = $stmt->fetch();
 $total_cash = $result['total'] ?? 0;
 
-// --- 3. TOTAL STOCK (Morning Report - FLOAT + CASH = 63,000,000) ---
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(cumm_total + cash_balance) as total FROM morning_reports WHERE report_date = ? AND branch_id = ?";
-    $params = [$today, $selected_branch];
-} else {
-    $sql = "SELECT SUM(cumm_total + cash_balance) as total FROM morning_reports WHERE report_date = ?";
-    $params = [$today];
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$total_stock = $result['total'] ?? 0;
+// --- 3. TOTAL STOCK (Morning Report - FLOAT + CASH) ---
+$total_stock = $total_float + $total_cash;
 
-// --- 4. TOTAL DEPOSIT (This Month from daily_report_transactions) ---
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
-            JOIN daily_reports dr ON drt.daily_report_id = dr.id 
-            WHERE drt.transaction_type = 'deposit' 
-            AND MONTH(drt.transaction_date) = ? AND YEAR(drt.transaction_date) = ? 
-            AND dr.branch_id = ?";
-    $params = [$current_month, $current_year, $selected_branch];
-} else {
-    $sql = "SELECT SUM(amount) as total FROM daily_report_transactions 
-            WHERE transaction_type = 'deposit' 
-            AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?";
-    $params = [$current_month, $current_year];
+// --- 4. TOTAL DEPOSIT (This Month) ---
+// Check if daily_report_transactions table exists
+try {
+    // Try using daily_report_transactions first
+    if ($selected_branch > 0) {
+        $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
+                JOIN daily_reports dr ON drt.daily_report_id = dr.id 
+                WHERE drt.transaction_type = 'deposit' 
+                AND MONTH(drt.transaction_date) = ? AND YEAR(drt.transaction_date) = ? 
+                AND dr.branch_id = ?";
+        $params = [$current_month, $current_year, $selected_branch];
+    } else {
+        $sql = "SELECT SUM(amount) as total FROM daily_report_transactions 
+                WHERE transaction_type = 'deposit' 
+                AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?";
+        $params = [$current_month, $current_year];
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    $total_deposits = $result['total'] ?? 0;
+} catch (Exception $e) {
+    // If table doesn't exist, use daily_reports total_deposits column
+    if ($selected_branch > 0) {
+        $sql = "SELECT SUM(IFNULL(total_deposits, 0)) as total FROM daily_reports 
+                WHERE MONTH(report_date) = ? AND YEAR(report_date) = ? 
+                AND branch_id = ?";
+        $params = [$current_month, $current_year, $selected_branch];
+    } else {
+        $sql = "SELECT SUM(IFNULL(total_deposits, 0)) as total FROM daily_reports 
+                WHERE MONTH(report_date) = ? AND YEAR(report_date) = ?";
+        $params = [$current_month, $current_year];
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    $total_deposits = $result['total'] ?? 0;
 }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$total_deposits = $result['total'] ?? 0;
 
-// --- 5. TOTAL WITHDRAWAL (This Month from daily_report_transactions) ---
-if ($selected_branch > 0) {
-    $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
-            JOIN daily_reports dr ON drt.daily_report_id = dr.id 
-            WHERE drt.transaction_type = 'withdrawal' 
-            AND MONTH(drt.transaction_date) = ? AND YEAR(drt.transaction_date) = ? 
-            AND dr.branch_id = ?";
-    $params = [$current_month, $current_year, $selected_branch];
-} else {
-    $sql = "SELECT SUM(amount) as total FROM daily_report_transactions 
-            WHERE transaction_type = 'withdrawal' 
-            AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?";
-    $params = [$current_month, $current_year];
+// --- 5. TOTAL WITHDRAWAL (This Month) ---
+try {
+    // Try using daily_report_transactions first
+    if ($selected_branch > 0) {
+        $sql = "SELECT SUM(drt.amount) as total FROM daily_report_transactions drt 
+                JOIN daily_reports dr ON drt.daily_report_id = dr.id 
+                WHERE drt.transaction_type = 'withdrawal' 
+                AND MONTH(drt.transaction_date) = ? AND YEAR(drt.transaction_date) = ? 
+                AND dr.branch_id = ?";
+        $params = [$current_month, $current_year, $selected_branch];
+    } else {
+        $sql = "SELECT SUM(amount) as total FROM daily_report_transactions 
+                WHERE transaction_type = 'withdrawal' 
+                AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?";
+        $params = [$current_month, $current_year];
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    $total_withdrawals = $result['total'] ?? 0;
+} catch (Exception $e) {
+    // If table doesn't exist, use daily_reports total_withdrawals column
+    if ($selected_branch > 0) {
+        $sql = "SELECT SUM(IFNULL(total_withdrawals, 0)) as total FROM daily_reports 
+                WHERE MONTH(report_date) = ? AND YEAR(report_date) = ? 
+                AND branch_id = ?";
+        $params = [$current_month, $current_year, $selected_branch];
+    } else {
+        $sql = "SELECT SUM(IFNULL(total_withdrawals, 0)) as total FROM daily_reports 
+                WHERE MONTH(report_date) = ? AND YEAR(report_date) = ?";
+        $params = [$current_month, $current_year];
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    $total_withdrawals = $result['total'] ?? 0;
 }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$total_withdrawals = $result['total'] ?? 0;
 
 // --- 6. TOTAL CASH OUT (Store Cash Out - This Month) ---
 if ($selected_branch > 0) {
@@ -309,14 +338,6 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== DARK MODE TOGGLE ===== -->
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
-        </div>
-
         <!-- ===== BRANCH FILTER ===== -->
         <div class="branch-filter-bar">
             <div class="branch-filter-left">
@@ -572,40 +593,6 @@ body {
 .main-content {
     background: var(--bg-body) !important;
     transition: background 0.3s ease;
-}
-
-/* ============================================================
-   DARK MODE TOGGLE BUTTON
-   ============================================================ */
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-card-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-.dark-mode-btn i {
-    font-size: 16px;
 }
 
 /* ============================================================
@@ -1137,44 +1124,6 @@ body {
     animation-delay: 0.10s;
 }
 </style>
-
-<script>
-// ============================================================
-// DARK MODE TOGGLE
-// ============================================================
-function toggleDarkMode() {
-    const body = document.body;
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn.querySelector('i');
-    const text = btn.querySelector('span');
-    
-    body.classList.toggle('dark-mode');
-    
-    if (body.classList.contains('dark-mode')) {
-        icon.className = 'fas fa-sun';
-        text.textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        icon.className = 'fas fa-moon';
-        text.textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-// Check for saved dark mode preference
-document.addEventListener('DOMContentLoaded', function() {
-    const darkMode = localStorage.getItem('darkMode');
-    const btn = document.getElementById('darkModeToggle');
-    const icon = btn?.querySelector('i');
-    const text = btn?.querySelector('span');
-    
-    if (darkMode === 'enabled') {
-        document.body.classList.add('dark-mode');
-        if (icon) icon.className = 'fas fa-sun';
-        if (text) text.textContent = 'Light Mode';
-    }
-});
-</script>
 
 </body>
 </html>

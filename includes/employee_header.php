@@ -1,0 +1,94 @@
+<?php
+// ================================================================
+// FILE: includes/employee_header.php
+// WAKALA SYSTEM - EMPLOYEE HEADER
+// WITH FIXED TOPBAR SUPPORT
+// ================================================================
+
+$page_title = $page_title ?? 'Dashboard';
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wakala System - <?php echo $page_title; ?></title>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        /* ============================================================
+           GLOBAL RESET & BASE
+           ============================================================ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            height: 100%;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f3f4f6;
+            color: #1f2937;
+            display: flex;
+            min-height: 100vh;
+            transition: background 0.3s ease, color 0.3s ease;
+            padding-top: 56px; /* Space for fixed topbar */
+        }
+        
+        /* Dark Mode */
+        body.dark-mode {
+            background: #0f172a;
+            color: #f1f5f9;
+        }
+        
+        /* ============================================================
+           EMPLOYEE WRAPPER
+           ============================================================ */
+        .employee-wrapper {
+            margin-left: 240px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            flex: 1;
+        }
+        
+        .employee-content {
+            padding: 16px 20px 20px 20px;
+            flex: 1;
+        }
+        
+        /* ============================================================
+           RESPONSIVE
+           ============================================================ */
+        @media (max-width: 768px) {
+            body {
+                padding-top: 50px;
+            }
+            
+            .employee-wrapper {
+                margin-left: 0;
+            }
+            
+            .employee-content {
+                padding: 10px 12px 16px 12px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            body {
+                padding-top: 44px;
+            }
+        }
+    </style>
+</head>
+<body>

@@ -2,7 +2,6 @@
 // ================================================================
 // FILE: includes/sidebar.php
 // WAKALA SYSTEM - SIDEBAR WITH RED #bb0404
-// WITH BRANCH MENU ADDED
 // ================================================================
 
 // ============================================================
@@ -21,7 +20,6 @@ try {
         }
     }
 } catch (Exception $e) {
-    // Settings table might not exist yet
     $company_name = 'Wakala System';
 }
 
@@ -99,13 +97,6 @@ $user_initial = strtoupper(substr($full_name, 0, 1));
     margin-top: 10px;
     letter-spacing: 0.5px;
     text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.wakala-sidebar .sidebar-logo .logo-text span {
-    color: #ffffff;
-    background: rgba(0,0,0,0.25);
-    padding: 0 8px;
-    border-radius: 4px;
 }
 
 .wakala-sidebar .sidebar-logo .logo-sub {
@@ -548,20 +539,12 @@ SIDEBAR HTML
     <!-- Navigation -->
     <nav class="sidebar-nav">
         
-        <!-- Dashboard & Branches Section -->
+        <!-- Dashboard -->
         <div class="nav-section">
             <div class="section-title">Main</div>
-            
-            <!-- Dashboard -->
             <a href="../dashboard/admin.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'admin.php' ? 'active' : ''; ?>">
                 <i class="fas fa-home"></i>
                 <span>Dashboard</span>
-            </a>
-            
-            <!-- Branches -->
-            <a href="../branches/index.php" class="nav-item <?php echo strpos($_SERVER['PHP_SELF'], 'branches') !== false ? 'active' : ''; ?>">
-                <i class="fas fa-store-alt"></i>
-                <span>Branches</span>
             </a>
         </div>
         
@@ -613,6 +596,24 @@ SIDEBAR HTML
                 <i class="fas fa-wallet"></i>
                 <span>Salaries</span>
             </a>
+        </div>
+        
+        <!-- Management Section -->
+        <div class="nav-section">
+            <div class="section-title">Management</div>
+            
+            <!-- ===== PROVIDERS - NEW ===== -->
+            <a href="../providers/index.php" class="nav-item <?php echo strpos($_SERVER['PHP_SELF'], 'providers') !== false ? 'active' : ''; ?>">
+                <i class="fas fa-university"></i>
+                <span>Providers</span>
+            </a>
+            
+            <?php if ($_SESSION['role'] == 'admin' || $_SESSION['role'] == 'super_admin'): ?>
+                <a href="../branches/index.php" class="nav-item <?php echo strpos($_SERVER['PHP_SELF'], 'branches') !== false ? 'active' : ''; ?>">
+                    <i class="fas fa-store-alt"></i>
+                    <span>Branches</span>
+                </a>
+            <?php endif; ?>
         </div>
         
         <!-- System Section -->

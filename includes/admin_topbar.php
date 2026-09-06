@@ -2,9 +2,31 @@
 // ================================================================
 // FILE: includes/admin_topbar.php
 // WAKALA FINANCIAL SYSTEM - SHARED ADMIN TOP BAR
-// WITH PROFILE PICTURE FROM DATABASE & DARK MODE SUPPORT
+// WITH COMPLETE DARK MODE SUPPORT - FIXED
 // ================================================================
 
+// ============================================================
+// GET COMPANY NAME FROM DATABASE
+// ============================================================
+$site_name = 'Wakala System'; // Default name
+
+try {
+    global $db;
+    if (isset($db)) {
+        $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        if ($result && !empty($result['setting_value'])) {
+            $site_name = $result['setting_value'];
+        }
+    }
+} catch (Exception $e) {
+    $site_name = 'Wakala System';
+}
+
+// ============================================================
+// GET BRANCHES FOR DROPDOWN
+// ============================================================
 $branches = [];
 try {
     global $db;
@@ -17,69 +39,35 @@ try {
     $branches = [];
 }
 
-$current_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
-if ($current_branch == 0 && isset($_SESSION['selected_branch'])) {
-    $current_branch = $_SESSION['selected_branch'];
+// ============================================================
+// GET CURRENT BRANCH - FIXED
+// ============================================================
+$current_branch = 0;
+
+// First check GET parameters - supports both 'branch' and 'branch_id'
+if (isset($_GET['branch']) && intval($_GET['branch']) > 0) {
+    $current_branch = intval($_GET['branch']);
+} elseif (isset($_GET['branch_id']) && intval($_GET['branch_id']) > 0) {
+    $current_branch = intval($_GET['branch_id']);
+} elseif (isset($_SESSION['selected_branch']) && intval($_SESSION['selected_branch']) > 0) {
+    $current_branch = intval($_SESSION['selected_branch']);
 }
 
+// Store in session for consistency
+if ($current_branch > 0) {
+    $_SESSION['selected_branch'] = $current_branch;
+}
+
+// ============================================================
+// GET USER DATA
+// ============================================================
 $full_name = $_SESSION['full_name'] ?? 'Admin';
 $role = $_SESSION['role'] ?? 'admin';
-$user_id = $_SESSION['user_id'] ?? 0;
+$profile_image = '../../assets/images/logo.PNG';
 
 // ============================================================
-// GET PROFILE PICTURE FROM DATABASE
+// GET CURRENT PAGE
 // ============================================================
-$profile_image = '../../assets/images/logo.PNG'; // Default fallback
-
-if ($user_id > 0) {
-    try {
-        global $db;
-        $stmt = $db->prepare("SELECT profile_pic FROM employees WHERE id = ?");
-        $stmt->execute([$user_id]);
-        $user_data = $stmt->fetch();
-        
-        if ($user_data && !empty($user_data['profile_pic'])) {
-            $profile_pic = $user_data['profile_pic'];
-            
-            // Check if file exists in different possible paths
-            $paths_to_check = [
-                '../../' . $profile_pic,
-                $profile_pic,
-                '../../uploads/profiles/' . basename($profile_pic)
-            ];
-            
-            $found = false;
-            foreach ($paths_to_check as $path) {
-                if (file_exists($path)) {
-                    $profile_image = '../../' . $profile_pic;
-                    $found = true;
-                    break;
-                }
-            }
-            
-            // If still not found, try direct path
-            if (!$found && file_exists($profile_pic)) {
-                $profile_image = $profile_pic;
-                $found = true;
-            }
-            
-            // If still not found, try with different base path
-            if (!$found) {
-                $alt_path = __DIR__ . '/../' . $profile_pic;
-                if (file_exists($alt_path)) {
-                    $profile_image = '../../' . $profile_pic;
-                }
-            }
-        }
-    } catch (Exception $e) {
-        // If error, use default
-        $profile_image = '../../assets/images/logo.PNG';
-    }
-}
-
-// Store in session for quick access
-$_SESSION['profile_pic'] = $profile_image;
-
 $current_dir = basename(dirname($_SERVER['PHP_SELF']));
 $page_titles = [
     'dashboard' => 'Dashboard',
@@ -121,6 +109,9 @@ $page_icons = [
 ];
 $page_icon = $page_icons[$current_dir] ?? 'fa-chart-pie';
 
+// ============================================================
+// GET BRANCH NAME
+// ============================================================
 $branch_name = 'All Branches';
 if ($current_branch > 0) {
     foreach ($branches as $b) {
@@ -129,6 +120,21 @@ if ($current_branch > 0) {
             break;
         }
     }
+}
+
+// ============================================================
+// GET CURRENT PAGE URL FOR BRANCH PARAMETER
+// ============================================================
+$current_page_path = $_SERVER['PHP_SELF'];
+$current_page_name = basename($current_page_path);
+
+// Determine which parameter to use based on current page
+$branch_param = 'branch'; // Default
+
+// For pages that use 'branch_id' parameter
+$pages_using_branch_id = ['add.php', 'edit.php', 'view.php'];
+if (in_array($current_page_name, $pages_using_branch_id)) {
+    $branch_param = 'branch_id';
 }
 ?>
 
@@ -140,16 +146,21 @@ ADMIN TOP BAR
         <button class="topbar-toggle" id="topbarToggle" aria-label="Toggle Sidebar">
             <i class="fas fa-bars"></i>
         </button>
-        <h2 id="pageTitle">
-            <i class="fas <?php echo $page_icon; ?> page-icon"></i>
-            <?php echo $page_title; ?>
-        </h2>
+        <div class="topbar-brand">
+            <!-- Company name removed - only icon and page title -->
+            <i class="fas fa-store brand-icon"></i>
+            <span class="brand-page">
+                <i class="fas <?php echo $page_icon; ?>"></i>
+                <?php echo $page_title; ?>
+            </span>
+        </div>
     </div>
     
     <div class="topbar-right">
+        <!-- Branch Selector - FIXED -->
         <div class="branch-selector">
             <i class="fas fa-store branch-icon"></i>
-            <select id="branchFilter" onchange="window.location.href='?branch='+this.value">
+            <select id="branchFilter" onchange="window.location.href='?<?php echo $branch_param; ?>='+this.value">
                 <option value="0">All Branches</option>
                 <?php foreach ($branches as $branch): ?>
                     <option value="<?php echo $branch['id']; ?>" <?php echo $current_branch == $branch['id'] ? 'selected' : ''; ?>>
@@ -201,12 +212,9 @@ ADMIN TOP BAR
             <span id="liveDate">--/--/----</span>
         </div>
         
-        <div class="user-profile" id="userProfileContainer">
-            <div class="profile-img-wrapper">
-                <img src="<?php echo $profile_image; ?>" alt="Profile" id="topbarProfileImage"
-                     onerror="this.src='../../assets/images/logo.PNG'">
-                <span class="online-dot"></span>
-            </div>
+        <div class="user-profile">
+            <img src="<?php echo $profile_image; ?>" alt="Profile" 
+                 onerror="this.src='../../assets/images/default-avatar.png'">
             <div class="user-info">
                 <div class="user-name"><?php echo htmlspecialchars($full_name); ?></div>
                 <span class="user-role"><?php echo strtoupper($role); ?></span>
@@ -216,15 +224,6 @@ ADMIN TOP BAR
             </button>
             
             <div class="user-dropdown" id="userDropdown">
-                <div class="dropdown-header">
-                    <img src="<?php echo $profile_image; ?>" alt="Profile" 
-                         onerror="this.src='../../assets/images/logo.PNG'">
-                    <div>
-                        <div class="dd-user-name"><?php echo htmlspecialchars($full_name); ?></div>
-                        <div class="dd-user-role"><?php echo ucfirst($role); ?></div>
-                    </div>
-                </div>
-                <hr>
                 <a href="../profile/index.php">
                     <i class="fas fa-user"></i> My Profile
                 </a>
@@ -241,11 +240,11 @@ ADMIN TOP BAR
 </header>
 
 <!-- ============================================================
-TOPBAR STYLES
+TOPBAR STYLES - WITH COMPLETE DARK MODE
 ============================================================ -->
 <style>
 /* ============================================================
-   TOPBAR - COMPLETE DARK MODE SUPPORT
+   TOPBAR - COMPLETE DARK MODE SUPPORT - FIXED WIDTH & HEIGHT
    ============================================================ */
 
 :root {
@@ -285,9 +284,9 @@ html.dark-mode {
     top: 0;
     left: 260px;
     right: 0;
-    height: 64px;
+    height: 72px; /* Increased height */
     background: var(--topbar-bg);
-    padding: 0 24px;
+    padding: 0 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -295,20 +294,23 @@ html.dark-mode {
     border-bottom: 1px solid var(--topbar-border);
     transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     z-index: 999;
+    overflow: hidden;
+    max-width: 100%;
 }
 
 .topbar-left {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     flex-shrink: 0;
+    min-width: 0;
 }
 
 .topbar-toggle {
     display: none;
     background: none;
     border: none;
-    font-size: 18px;
+    font-size: 20px;
     color: var(--topbar-text);
     cursor: pointer;
     padding: 4px 8px;
@@ -320,38 +322,66 @@ html.dark-mode {
     background: var(--topbar-hover);
 }
 
-.topbar-left h2 {
-    font-size: 18px;
-    font-weight: 700;
+/* ============================================================
+   TOPBAR BRAND - COMPANY NAME REMOVED
+   ============================================================ */
+.topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
     color: var(--topbar-text);
-    transition: color 0.3s ease;
-    margin: 0;
-    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-.topbar-left h2 .page-icon {
-    margin-right: 10px;
+.topbar-brand .brand-icon {
     color: #DC2626;
+    font-size: 20px;
 }
 
+.topbar-brand .brand-page {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--topbar-text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.topbar-brand .brand-page i {
+    color: #DC2626;
+    font-size: 14px;
+}
+
+/* ============================================================
+   TOPBAR RIGHT - FIXED OVERFLOW
+   ============================================================ */
 .topbar-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: nowrap;
+    flex: 1;
+    justify-content: flex-end;
+    min-width: 0;
+    overflow: hidden;
 }
 
-/* Branch Selector */
+/* ============================================================
+   BRANCH SELECTOR - FIXED
+   ============================================================ */
 .branch-selector {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 4px 10px 4px 4px;
+    padding: 4px 8px 4px 4px;
     background: var(--topbar-input-bg);
     border-radius: 8px;
     border: 1.5px solid var(--topbar-border);
     transition: all 0.3s ease;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 200px;
 }
 
 .branch-selector:hover {
@@ -361,21 +391,23 @@ html.dark-mode {
 .branch-selector .branch-icon {
     color: #DC2626;
     font-size: 13px;
-    padding: 4px 6px;
+    padding: 3px 4px;
+    flex-shrink: 0;
 }
 
 .branch-selector select {
     background: transparent;
     border: none;
-    padding: 5px 4px 5px 0;
-    font-size: 13px;
+    padding: 5px 2px 5px 0;
+    font-size: 12px;
     font-family: 'Inter', sans-serif;
     color: var(--topbar-text);
     cursor: pointer;
     outline: none;
-    min-width: 100px;
-    max-width: 140px;
+    min-width: 60px;
+    max-width: 110px;
     transition: color 0.3s ease;
+    text-overflow: ellipsis;
 }
 
 .branch-selector select option {
@@ -385,40 +417,43 @@ html.dark-mode {
 }
 
 .branch-selector .branch-badge {
-    font-size: 9px;
+    font-size: 8px;
     font-weight: 600;
     color: #10B981;
     display: none;
+    flex-shrink: 0;
 }
 
 .branch-selector .branch-badge.show {
     display: inline-block;
 }
 
-/* Global Search */
+/* ============================================================
+   SEARCH - FIXED
+   ============================================================ */
 .global-search {
     position: relative;
     display: flex;
     align-items: center;
     flex-shrink: 1;
-    min-width: 140px;
-    max-width: 220px;
+    min-width: 100px;
+    max-width: 180px;
 }
 
 .global-search .search-icon {
     position: absolute;
-    left: 12px;
+    left: 10px;
     color: var(--topbar-text-light);
-    font-size: 13px;
+    font-size: 12px;
     transition: color 0.3s ease;
 }
 
 .global-search input {
     width: 100%;
-    padding: 7px 12px 7px 36px;
+    padding: 6px 10px 6px 32px;
     border: 1.5px solid var(--topbar-border);
     border-radius: 8px;
-    font-size: 13px;
+    font-size: 12px;
     font-family: 'Inter', sans-serif;
     transition: all 0.3s ease;
     background: var(--topbar-input-bg);
@@ -427,6 +462,7 @@ html.dark-mode {
 
 .global-search input::placeholder {
     color: var(--topbar-text-light);
+    font-size: 11px;
 }
 
 .global-search input:focus {
@@ -438,73 +474,26 @@ html.dark-mode {
 
 .global-search .search-shortcut {
     position: absolute;
-    right: 10px;
-    font-size: 10px;
+    right: 8px;
+    font-size: 9px;
     color: var(--topbar-text-light);
     background: var(--topbar-border);
-    padding: 1px 8px;
+    padding: 1px 6px;
     border-radius: 4px;
     font-weight: 600;
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.search-results {
-    display: none;
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    background: var(--topbar-dropdown-bg);
-    border-radius: 10px;
-    box-shadow: 0 10px 40px var(--topbar-shadow-lg);
-    border: 1px solid var(--topbar-dropdown-border);
-    max-height: 350px;
-    overflow-y: auto;
-    z-index: 1001;
-    padding: 4px 0;
-}
-
-.search-results.active {
-    display: block;
-}
-
-.search-results .result-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    color: var(--topbar-text);
-    text-decoration: none;
-    transition: background 0.2s ease;
-    cursor: pointer;
-    font-size: 13px;
-}
-
-.search-results .result-item:hover {
-    background: var(--topbar-hover);
-}
-
-.search-results .result-item i {
-    width: 16px;
-    color: var(--topbar-text-light);
-    font-size: 13px;
-}
-
-.search-results .result-empty {
-    padding: 16px;
-    text-align: center;
-    color: var(--topbar-text-light);
-    font-size: 13px;
-}
-
-/* Dark Mode Toggle */
+/* ============================================================
+   DARK MODE TOGGLE
+   ============================================================ */
 .dark-mode-toggle {
     background: none;
     border: none;
-    font-size: 17px;
+    font-size: 16px;
     color: var(--topbar-icon-color);
     cursor: pointer;
-    padding: 6px 8px;
+    padding: 4px 6px;
     border-radius: 6px;
     transition: all 0.3s ease;
     flex-shrink: 0;
@@ -515,15 +504,17 @@ html.dark-mode {
     color: var(--topbar-text);
 }
 
-/* Live Date/Time */
+/* ============================================================
+   LIVE DATE/TIME - FIXED
+   ============================================================ */
 .live-datetime {
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 3px;
+    font-size: 10px;
     color: var(--topbar-text-secondary);
     font-weight: 500;
-    padding: 4px 12px;
+    padding: 3px 10px;
     background: var(--topbar-hover);
     border-radius: 8px;
     border: 1px solid var(--topbar-border);
@@ -533,16 +524,18 @@ html.dark-mode {
 }
 
 .live-datetime i {
-    font-size: 11px;
+    font-size: 10px;
     color: #DC2626;
 }
 
 .live-datetime .date-separator {
     color: var(--topbar-text-light);
-    margin: 0 2px;
+    margin: 0 1px;
 }
 
-/* Notifications */
+/* ============================================================
+   NOTIFICATIONS
+   ============================================================ */
 .notification-wrapper {
     position: relative;
     flex-shrink: 0;
@@ -551,10 +544,10 @@ html.dark-mode {
 .notification-btn {
     background: none;
     border: none;
-    font-size: 17px;
+    font-size: 16px;
     color: var(--topbar-icon-color);
     cursor: pointer;
-    padding: 6px 8px;
+    padding: 4px 6px;
     border-radius: 6px;
     transition: all 0.3s ease;
     position: relative;
@@ -572,10 +565,10 @@ html.dark-mode {
     background: #DC2626;
     color: #FFFFFF;
     border-radius: 50%;
-    padding: 1px 5px;
-    font-size: 8px;
+    padding: 1px 4px;
+    font-size: 7px;
     font-weight: 700;
-    min-width: 16px;
+    min-width: 14px;
     text-align: center;
     display: none;
 }
@@ -593,7 +586,7 @@ html.dark-mode {
     border-radius: 10px;
     box-shadow: 0 10px 40px var(--topbar-shadow-lg);
     border: 1px solid var(--topbar-dropdown-border);
-    width: 320px;
+    width: 300px;
     max-height: 400px;
     overflow: hidden;
     z-index: 1001;
@@ -607,12 +600,12 @@ html.dark-mode {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 16px;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--topbar-border);
 }
 
 .notification-header h4 {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--topbar-text);
 }
@@ -621,7 +614,7 @@ html.dark-mode {
     background: none;
     border: none;
     color: #DC2626;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
     cursor: pointer;
 }
@@ -633,8 +626,8 @@ html.dark-mode {
 
 .notification-item {
     display: flex;
-    gap: 10px;
-    padding: 10px 16px;
+    gap: 8px;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--topbar-border);
     transition: background 0.2s ease;
     cursor: pointer;
@@ -645,13 +638,13 @@ html.dark-mode {
 }
 
 .notification-item .notif-icon {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 11px;
     flex-shrink: 0;
 }
 
@@ -666,26 +659,28 @@ html.dark-mode {
 
 .notification-item .notif-title {
     font-weight: 500;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--topbar-text);
 }
 
 .notification-item .notif-message {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--topbar-text-secondary);
 }
 
 .notification-item .notif-time {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--topbar-text-light);
 }
 
-/* User Profile */
+/* ============================================================
+   USER PROFILE
+   ============================================================ */
 .user-profile {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 2px 10px 2px 2px;
+    gap: 6px;
+    padding: 2px 8px 2px 2px;
     border-radius: 8px;
     cursor: pointer;
     transition: background 0.3s ease;
@@ -697,33 +692,14 @@ html.dark-mode {
     background: var(--topbar-hover);
 }
 
-.profile-img-wrapper {
-    position: relative;
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-}
-
-.profile-img-wrapper img {
-    width: 34px;
-    height: 34px;
+.user-profile img {
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     object-fit: cover;
     border: 2px solid #DC2626;
-    background: #ffffff;
-    display: block;
-}
-
-.profile-img-wrapper .online-dot {
-    position: absolute;
-    bottom: 0;
-    right: 0;
-    width: 10px;
-    height: 10px;
-    background: #10B981;
-    border-radius: 50%;
-    border: 2px solid var(--topbar-bg);
-    transition: border-color 0.3s ease;
+    background: white;
+    padding: 2px;
 }
 
 .user-profile .user-info {
@@ -732,13 +708,13 @@ html.dark-mode {
 
 .user-profile .user-name {
     font-weight: 600;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--topbar-text);
     transition: color 0.3s ease;
 }
 
 .user-profile .user-role {
-    font-size: 8px;
+    font-size: 7px;
     font-weight: 600;
     color: #DC2626;
     text-transform: uppercase;
@@ -751,7 +727,7 @@ html.dark-mode {
     color: var(--topbar-text-light);
     cursor: pointer;
     padding: 1px;
-    font-size: 10px;
+    font-size: 9px;
     transition: transform 0.3s ease, color 0.3s ease;
 }
 
@@ -759,7 +735,6 @@ html.dark-mode {
     transform: rotate(180deg);
 }
 
-/* User Dropdown */
 .user-dropdown {
     display: none;
     position: absolute;
@@ -769,7 +744,7 @@ html.dark-mode {
     border-radius: 10px;
     box-shadow: 0 10px 40px var(--topbar-shadow-lg);
     border: 1px solid var(--topbar-dropdown-border);
-    min-width: 200px;
+    min-width: 160px;
     padding: 4px 0;
     z-index: 1001;
 }
@@ -778,41 +753,14 @@ html.dark-mode {
     display: block;
 }
 
-.user-dropdown .dropdown-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--topbar-border);
-}
-
-.user-dropdown .dropdown-header img {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 2px solid #DC2626;
-}
-
-.user-dropdown .dropdown-header .dd-user-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--topbar-text);
-}
-
-.user-dropdown .dropdown-header .dd-user-role {
-    font-size: 10px;
-    color: var(--topbar-text-secondary);
-}
-
 .user-dropdown a {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
+    gap: 8px;
+    padding: 6px 12px;
     color: var(--topbar-text);
     text-decoration: none;
-    font-size: 13px;
+    font-size: 12px;
     transition: background 0.2s ease, color 0.2s ease;
 }
 
@@ -821,15 +769,15 @@ html.dark-mode {
 }
 
 .user-dropdown a i {
-    width: 16px;
+    width: 14px;
     color: var(--topbar-text-light);
-    font-size: 13px;
+    font-size: 12px;
 }
 
 .user-dropdown hr {
     border: none;
     border-top: 1px solid var(--topbar-border);
-    margin: 3px 10px;
+    margin: 2px 8px;
 }
 
 .user-dropdown .logout-dropdown {
@@ -845,73 +793,88 @@ html.dark-mode {
    ============================================================ */
 .main-wrapper {
     margin-left: 260px;
-    padding-top: 64px;
+    padding-top: 72px; /* Match increased height */
     min-height: 100vh;
     display: flex;
     flex-direction: column;
 }
 
 /* ============================================================
-   RESPONSIVE
+   RESPONSIVE - FIXED
    ============================================================ */
 @media (max-width: 1200px) {
-    .global-search { min-width: 120px; max-width: 180px; }
+    .global-search { min-width: 80px; max-width: 140px; }
+    .branch-selector select { min-width: 50px; max-width: 80px; font-size: 11px; }
 }
 
 @media (max-width: 1024px) {
-    .global-search { min-width: 100px; max-width: 150px; }
-    .branch-selector select { min-width: 80px; max-width: 110px; font-size: 12px; }
+    .global-search { min-width: 70px; max-width: 120px; }
+    .branch-selector select { min-width: 50px; max-width: 70px; font-size: 11px; }
+    .topbar-brand .brand-page { font-size: 14px; }
+    .topbar-brand .brand-page i { font-size: 12px; }
 }
 
 @media (max-width: 768px) {
     .admin-topbar {
         left: 0;
-        height: 56px;
-        padding: 0 14px;
-        flex-wrap: nowrap;
+        height: 64px;
+        padding: 0 12px;
+        flex-wrap: wrap;
         gap: 4px;
+        align-items: center;
     }
     .topbar-toggle { display: block; font-size: 16px; padding: 4px 6px; }
-    .topbar-left h2 { font-size: 15px; }
-    .topbar-left h2 .page-icon { display: none; }
-    .topbar-right { gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding: 2px 0; }
-    .global-search { min-width: 80px; max-width: 120px; }
-    .global-search input { font-size: 11px; padding: 5px 8px 5px 28px; }
+    .topbar-brand .brand-page { font-size: 13px; }
+    .topbar-brand .brand-page i { font-size: 11px; }
+    .topbar-brand .brand-icon { font-size: 16px; }
+    .topbar-right { 
+        gap: 4px; 
+        flex-wrap: nowrap; 
+        overflow-x: auto; 
+        padding: 2px 0;
+        flex: 1 1 100%;
+        justify-content: flex-start;
+    }
+    .global-search { min-width: 60px; max-width: 100px; }
+    .global-search input { font-size: 10px; padding: 4px 6px 4px 28px; }
     .global-search .search-shortcut { display: none; }
-    .global-search .search-icon { font-size: 11px; left: 8px; }
-    .branch-selector { padding: 2px 6px 2px 2px; }
-    .branch-selector select { font-size: 11px; min-width: 60px; max-width: 90px; }
+    .global-search .search-icon { font-size: 10px; left: 6px; }
+    .branch-selector { padding: 2px 4px 2px 2px; max-width: 120px; }
+    .branch-selector select { font-size: 10px; min-width: 40px; max-width: 60px; }
     .branch-selector .branch-badge { display: none !important; }
-    .live-datetime { font-size: 10px; padding: 2px 8px; }
+    .branch-selector .branch-icon { font-size: 10px; padding: 2px 3px; }
+    .live-datetime { font-size: 9px; padding: 2px 6px; }
     .live-datetime .date-separator { margin: 0 1px; }
+    .live-datetime i { display: none; }
     .user-profile .user-info { display: none; }
-    .profile-img-wrapper { width: 28px; height: 28px; }
-    .profile-img-wrapper img { width: 28px; height: 28px; }
+    .user-profile img { width: 28px; height: 28px; }
     .user-profile { padding: 2px 4px 2px 2px; }
-    .dark-mode-toggle { font-size: 15px; padding: 4px 6px; }
-    .notification-btn { font-size: 15px; padding: 4px 6px; }
-    .notification-dropdown { width: 280px; right: -30px; }
-    .main-wrapper { margin-left: 0; padding-top: 56px; }
+    .dark-mode-toggle { font-size: 14px; padding: 3px 4px; }
+    .notification-btn { font-size: 14px; padding: 3px 4px; }
+    .notification-dropdown { width: 260px; right: -20px; }
+    .main-wrapper { margin-left: 0; padding-top: 64px; }
 }
 
 @media (max-width: 480px) {
-    .admin-topbar { height: 50px; padding: 0 10px; }
-    .topbar-left h2 { font-size: 13px; }
+    .admin-topbar { height: 60px; padding: 0 8px; }
+    .topbar-brand .brand-page { font-size: 11px; }
+    .topbar-brand .brand-page i { font-size: 10px; }
+    .topbar-brand .brand-icon { font-size: 14px; }
     .topbar-toggle { font-size: 14px; padding: 3px 5px; }
-    .topbar-right { gap: 4px; }
-    .global-search { min-width: 60px; max-width: 90px; }
-    .global-search input { font-size: 10px; padding: 4px 6px 4px 24px; }
-    .global-search .search-icon { font-size: 9px; left: 6px; }
-    .branch-selector select { font-size: 10px; min-width: 50px; max-width: 70px; }
-    .branch-selector .branch-icon { font-size: 10px; padding: 2px 4px; }
-    .live-datetime { font-size: 9px; padding: 2px 6px; }
+    .topbar-right { gap: 3px; }
+    .global-search { min-width: 50px; max-width: 80px; }
+    .global-search input { font-size: 9px; padding: 3px 4px 3px 22px; }
+    .global-search .search-icon { font-size: 9px; left: 5px; }
+    .branch-selector select { font-size: 9px; min-width: 35px; max-width: 50px; }
+    .branch-selector .branch-icon { font-size: 9px; padding: 2px 2px; }
+    .branch-selector { padding: 2px 3px 2px 2px; max-width: 80px; }
+    .live-datetime { font-size: 8px; padding: 1px 4px; }
     .live-datetime i { display: none; }
-    .profile-img-wrapper { width: 24px; height: 24px; }
-    .profile-img-wrapper img { width: 24px; height: 24px; }
-    .dark-mode-toggle { font-size: 13px; padding: 3px 4px; }
-    .notification-btn { font-size: 13px; padding: 3px 4px; }
-    .notification-dropdown { width: 260px; right: -50px; }
-    .main-wrapper { padding-top: 50px; }
+    .user-profile img { width: 24px; height: 24px; }
+    .dark-mode-toggle { font-size: 12px; padding: 2px 3px; }
+    .notification-btn { font-size: 12px; padding: 2px 3px; }
+    .notification-dropdown { width: 240px; right: -40px; }
+    .main-wrapper { padding-top: 60px; }
 }
 </style>
 
@@ -966,6 +929,9 @@ document.addEventListener('DOMContentLoaded', function() {
             
             localStorage.setItem('darkMode', isDark);
             console.log('🌙 Dark Mode:', isDark ? 'ON' : 'OFF');
+            
+            // Dispatch event for other pages to sync
+            document.dispatchEvent(new CustomEvent('darkModeChanged', { detail: { isDark: isDark } }));
         });
     }
     
@@ -1093,20 +1059,9 @@ document.addEventListener('DOMContentLoaded', function() {
     updateLiveDateTime();
     setInterval(updateLiveDateTime, 1000);
     
-    console.log('%c 🏪 WAKALA ADMIN v2.0 (DARK MODE READY)',
+    console.log('%c 🏪 Wakala System v2.0 (DARK MODE READY)',
         'background:#8B0000; color:white; padding:8px 16px; border-radius:4px; font-size:14px; font-weight:bold;');
     console.log('%c 🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'),
         'color:#6B7280; font-size:12px;');
-    
-    // ============================================================
-    // PROFILE PICTURE UPDATE LISTENER
-    // ============================================================
-    // Listen for profile picture updates from profile page
-    window.addEventListener('storage', function(e) {
-        if (e.key === 'profile_pic_updated' && e.newValue === 'true') {
-            // Reload the page to refresh profile picture
-            window.location.reload();
-        }
-    });
 });
 </script>
