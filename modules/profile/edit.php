@@ -18,13 +18,42 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'employee';
 
+// Get branches for branch filter
+try {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+    $stmt->execute();
+    $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $branches_list = [];
+}
+
+// Branch filter
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
+if (isset($_GET['branch'])) {
+    $_SESSION['selected_branch'] = $selected_branch;
+} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
+    $selected_branch = $_SESSION['selected_branch'];
+}
+$selected_branch = $selected_branch ?? 0;
+
+// Get branch name for display
+$branch_name = 'All Branches';
+if ($selected_branch > 0) {
+    foreach ($branches_list as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            break;
+        }
+    }
+}
+
 try {
     // Get user profile
     $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
     $stmt->execute([$user_id]);
     $profile = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Get branches
+    // Get branches for dropdown
     if ($role === 'admin' || $role === 'super_admin') {
         $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
         $stmt->execute();
@@ -72,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if ($stmt->fetch()) {
                 $error = 'Email already exists for another user';
             } else {
-                // Upload profile picture
+                // Upload profile picture - FIXED with proper path
                 $profile_pic = $profile['profile_pic'];
                 if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] === UPLOAD_ERR_OK) {
                     $upload_dir = '../../uploads/profiles/';
@@ -126,6 +155,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 }
 
+// Get profile picture for preview - FIXED
+$profile_pic_display = '';
+if (!empty($profile['profile_pic'])) {
+    $pic_path = '../../' . $profile['profile_pic'];
+    if (file_exists($pic_path)) {
+        $profile_pic_display = '../../' . $profile['profile_pic'];
+    }
+}
+
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
@@ -134,11 +172,21 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <div class="dark-mode-toggle">
-            <button id="darkModeToggle" class="dark-mode-btn" onclick="toggleDarkMode()">
-                <i class="fas fa-moon"></i>
-                <span>Dark Mode</span>
-            </button>
+        <!-- ===== BRANCH FILTER CARD ===== -->
+        <div class="branch-card">
+            <i class="fas fa-store-alt"></i>
+            <span class="branch-label">Branch:</span>
+            <select id="branchFilter" class="branch-select" onchange="window.location.href='?branch='+this.value">
+                <option value="0">All Branches</option>
+                <?php foreach ($branches_list as $b): ?>
+                    <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($selected_branch > 0): ?>
+                <span class="branch-badge"><?php echo htmlspecialchars($branch_name); ?></span>
+            <?php endif; ?>
         </div>
 
         <div class="page-header">
@@ -168,10 +216,10 @@ include_once '../../includes/admin_topbar.php';
                     <h4><i class="fas fa-image" style="color:#bb0404;"></i> Profile Picture</h4>
                     <div class="profile-pic-upload">
                         <div class="current-pic">
-                            <?php if ($profile['profile_pic'] && file_exists('../../' . $profile['profile_pic'])): ?>
-                                <img src="../../<?php echo htmlspecialchars($profile['profile_pic']); ?>" alt="Profile Picture" class="preview-img">
+                            <?php if ($profile_pic_display): ?>
+                                <img src="<?php echo htmlspecialchars($profile_pic_display); ?>" alt="Profile Picture" class="preview-img" id="profilePreview">
                             <?php else: ?>
-                                <div class="placeholder-pic">
+                                <div class="placeholder-pic" id="profilePlaceholder">
                                     <i class="fas fa-user fa-3x"></i>
                                 </div>
                             <?php endif; ?>
@@ -181,7 +229,7 @@ include_once '../../includes/admin_topbar.php';
                             <label for="profile_pic" class="btn btn-upload">
                                 <i class="fas fa-upload"></i> Choose Photo
                             </label>
-                            <small class="form-text">Recommended: Square image, max 2MB</small>
+                            <small class="form-text">Recommended: Square image, max 25MB</small>
                         </div>
                     </div>
                 </div>
@@ -269,6 +317,84 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
+/* ============================================================
+   BRANCH CARD - RED
+   ============================================================ */
+.branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    flex-wrap: wrap;
+}
+
+.branch-card i {
+    font-size: 18px;
+}
+
+.branch-card .branch-label {
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.branch-card .branch-select {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    min-width: 150px;
+}
+
+.branch-card .branch-select:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.branch-card .branch-select:focus {
+    background: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.branch-card .branch-select option {
+    background: #1f2937;
+    color: #ffffff;
+}
+
+body.dark-mode .branch-card .branch-select option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+.branch-card .branch-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Dark mode support for branch card */
+body.dark-mode .branch-card {
+    background: #bb0404;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+}
+
+/* ============================================================
+   FORM CARD
+   ============================================================ */
 .form-card {
     background: var(--bg-card);
     border-radius: 10px;
@@ -354,7 +480,9 @@ textarea.form-control {
     margin-top: 4px;
 }
 
-/* Profile Picture Upload */
+/* ============================================================
+   PROFILE PICTURE UPLOAD
+   ============================================================ */
 .profile-pic-upload {
     display: flex;
     align-items: center;
@@ -417,7 +545,9 @@ textarea.form-control {
     border-color: #bb0404;
 }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn {
     padding: 8px 18px;
     border: none;
@@ -451,6 +581,9 @@ textarea.form-control {
     border-top: 1px solid var(--border-color);
 }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -462,7 +595,9 @@ textarea.form-control {
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 
-/* Dark Mode */
+/* ============================================================
+   DARK MODE
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -499,34 +634,22 @@ body {
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.dark-mode-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
-}
-
-.dark-mode-btn {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.dark-mode-btn:hover {
-    background: var(--bg-table-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
+    .branch-card {
+        padding: 10px 16px;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 120px;
+        width: 100%;
+        flex: 1;
+    }
+    
     .form-row {
         grid-template-columns: 1fr;
     }
@@ -542,56 +665,85 @@ body {
         width: 100%;
         justify-content: center;
     }
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+@media (max-width: 480px) {
+    .branch-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 6px;
+    }
+    
+    .branch-card .branch-select {
+        min-width: 100%;
+        width: 100%;
+    }
 }
 </style>
 
 <script>
-function toggleDarkMode() {
-    document.body.classList.toggle('dark-mode');
-    const btn = document.getElementById('darkModeToggle');
-    if (document.body.classList.contains('dark-mode')) {
-        btn.querySelector('i').className = 'fas fa-sun';
-        btn.querySelector('span').textContent = 'Light Mode';
-        localStorage.setItem('darkMode', 'enabled');
-    } else {
-        btn.querySelector('i').className = 'fas fa-moon';
-        btn.querySelector('span').textContent = 'Dark Mode';
-        localStorage.setItem('darkMode', 'disabled');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    if (localStorage.getItem('darkMode') === 'enabled') {
-        document.body.classList.add('dark-mode');
-        const btn = document.getElementById('darkModeToggle');
-        if (btn) {
-            btn.querySelector('i').className = 'fas fa-sun';
-            btn.querySelector('span').textContent = 'Light Mode';
-        }
-    }
-});
-
-// Preview image before upload
+// ============================================================
+// PROFILE PICTURE PREVIEW
+// ============================================================
 document.getElementById('profile_pic')?.addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (file) {
         const reader = new FileReader();
         reader.onload = function(event) {
-            const preview = document.querySelector('.preview-img, .placeholder-pic');
+            // Check if preview image exists
+            let preview = document.querySelector('.preview-img');
+            let placeholder = document.querySelector('.placeholder-pic');
+            
             if (preview) {
-                if (preview.classList.contains('placeholder-pic')) {
+                preview.src = event.target.result;
+            } else if (placeholder) {
+                // Replace placeholder with image
+                const img = document.createElement('img');
+                img.src = event.target.result;
+                img.className = 'preview-img';
+                img.id = 'profilePreview';
+                img.alt = 'Profile Picture';
+                placeholder.parentNode.replaceChild(img, placeholder);
+            } else {
+                // Create new image element
+                const container = document.querySelector('.current-pic');
+                if (container) {
                     const img = document.createElement('img');
                     img.src = event.target.result;
                     img.className = 'preview-img';
+                    img.id = 'profilePreview';
                     img.alt = 'Profile Picture';
-                    preview.parentNode.replaceChild(img, preview);
-                } else {
-                    preview.src = event.target.result;
+                    container.innerHTML = '';
+                    container.appendChild(img);
                 }
             }
         };
         reader.readAsDataURL(file);
     }
+});
+
+// ============================================================
+// DARK MODE - Sync with header
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    function syncDarkMode() {
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) {
+            document.body.classList.add('dark-mode');
+        } else {
+            document.body.classList.remove('dark-mode');
+        }
+    }
+    
+    syncDarkMode();
+    
+    document.addEventListener('darkModeChanged', function(e) {
+        syncDarkMode();
+    });
 });
 </script>
 

@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/profile/index.php
 // WAKALA FINANCIAL SYSTEM - USER PROFILE
-// WITH FULL DARK MODE SUPPORT
+// WITH AJAX PROFILE PICTURE UPLOAD
 // ================================================================
 
 // ============================================================
@@ -81,7 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Please enter a valid email address.');
         }
         
-        // Check if email already exists (excluding current user)
         $check_stmt = $db->prepare("SELECT id FROM employees WHERE email = ? AND id != ?");
         $check_stmt->execute([$email, $user_id]);
         if ($check_stmt->fetch()) {
@@ -91,13 +90,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $update_stmt = $db->prepare("UPDATE employees SET full_name = ?, email = ?, phone = ?, address = ? WHERE id = ?");
         $update_stmt->execute([$full_name, $email, $phone, $address, $user_id]);
         
-        // Update session
         $_SESSION['full_name'] = $full_name;
         
         $success_message = 'Profile updated successfully!';
         $show_success = true;
         
-        // Refresh user data
         $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
         $stmt->execute([$user_id]);
         $user = $stmt->fetch();
@@ -128,7 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Passwords do not match.');
         }
         
-        // Verify current password
         if (!password_verify($current_password, $user['password_hash'])) {
             throw new Exception('Current password is incorrect.');
         }
@@ -146,8 +142,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// Upload Profile Picture
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'upload_picture') {
+// ============================================================
+// AJAX UPLOAD PROFILE PICTURE
+// ============================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'ajax_upload_picture') {
+    header('Content-Type: application/json');
+    $response = ['success' => false, 'message' => '', 'image_url' => ''];
+    
     try {
         if (!isset($_FILES['profile_pic']) || $_FILES['profile_pic']['error'] !== UPLOAD_ERR_OK) {
             throw new Exception('Please select a valid image file.');
@@ -191,71 +192,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $update_stmt = $db->prepare("UPDATE employees SET profile_pic = ? WHERE id = ?");
             $update_stmt->execute([$db_path, $user_id]);
             
-            $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch();
+            // Get the URL for the image
+            $image_url = '/wakala_system/uploads/profiles/' . $filename . '?t=' . time();
             
-            $success_message = 'Profile picture updated successfully!';
-            $show_success = true;
+            $response['success'] = true;
+            $response['message'] = 'Profile picture updated successfully!';
+            $response['image_url'] = $image_url;
+            $response['db_path'] = $db_path;
         } else {
             throw new Exception('Failed to upload image.');
         }
         
     } catch (Exception $e) {
-        $error_message = $e->getMessage();
-        $show_error = true;
+        $response['message'] = $e->getMessage();
     }
+    
+    echo json_encode($response);
+    exit();
 }
 
 // ============================================================
-// GET PROFILE PICTURE PATH - FIXED
+// GET PROFILE PICTURE PATH
 // ============================================================
 $profile_pic = '';
 
-// Base path for uploads
-$base_upload_path = '/wakala_system/uploads/profiles/';
-
-// Check if user has a profile picture
 if (!empty($user['profile_pic'])) {
-    // Get the filename from the stored path
     $filename = basename($user['profile_pic']);
-    
-    // Build absolute URL path
-    $profile_pic = $base_upload_path . $filename;
-    
-    // Also check if file exists on server
-    $server_path = $_SERVER['DOCUMENT_ROOT'] . '/wakala_system/uploads/profiles/' . $filename;
-    if (!file_exists($server_path)) {
-        // If file doesn't exist, use default
-        $profile_pic = '';
-    }
+    $profile_pic = '/wakala_system/uploads/profiles/' . $filename;
 }
 
-// If no profile picture or file doesn't exist, use default
+// If no profile picture, use default
 if (empty($profile_pic)) {
-    // Check for default avatar in various locations
-    $default_paths = [
-        '../../assets/images/default-avatar.png',
-        'assets/images/default-avatar.png',
-        '../assets/images/default-avatar.png',
-        '/wakala_system/assets/images/default-avatar.png'
-    ];
-    
-    $found = false;
-    foreach ($default_paths as $path) {
-        $server_path = $_SERVER['DOCUMENT_ROOT'] . $path;
-        if (file_exists($server_path) || file_exists($path)) {
-            $profile_pic = $path;
-            $found = true;
-            break;
-        }
-    }
-    
-    // If still no default, use SVG fallback
-    if (!$found) {
-        $initial = strtoupper(substr($user['full_name'] ?? 'U', 0, 1));
-        $profile_pic = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect width="200" height="200" fill="#E5E7EB"/><circle cx="100" cy="80" r="50" fill="#9CA3AF"/><circle cx="100" cy="200" r="70" fill="#9CA3AF"/><text x="100" y="130" text-anchor="middle" font-size="40" fill="#6B7280" font-family="Arial" font-weight="bold">' . $initial . '</text></svg>');
-    }
+    $initial = strtoupper(substr($user['full_name'] ?? 'U', 0, 1));
+    $profile_pic = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect width="200" height="200" fill="#E5E7EB"/><circle cx="100" cy="80" r="50" fill="#9CA3AF"/><circle cx="100" cy="200" r="70" fill="#9CA3AF"/><text x="100" y="130" text-anchor="middle" font-size="40" fill="#6B7280" font-family="Arial" font-weight="bold">' . $initial . '</text></svg>');
 }
 
 // ============================================================
@@ -345,10 +314,14 @@ DASHBOARD CONTENT
                     <div class="profile-role"><?php echo ucfirst(str_replace('_', ' ', $user['role'])); ?></div>
                     <div class="profile-branch"><i class="fas fa-store-alt"></i> <?php echo htmlspecialchars($branch_name); ?></div>
                     
-                    <form method="POST" action="" enctype="multipart/form-data" class="profile-pic-form" id="profilePicForm">
-                        <input type="hidden" name="action" value="upload_picture">
-                        <input type="file" id="profilePicInput" name="profile_pic" accept="image/*" style="display:none" onchange="document.getElementById('profilePicForm').submit()">
+                    <!-- AJAX Upload Form -->
+                    <form id="profilePicForm" enctype="multipart/form-data">
+                        <input type="hidden" name="action" value="ajax_upload_picture">
+                        <input type="file" id="profilePicInput" name="profile_pic" accept="image/*" style="display:none">
                     </form>
+                    
+                    <!-- Upload Status -->
+                    <div id="uploadStatus" style="display:none; text-align:center; padding:8px; margin:0 16px 12px; border-radius:6px; font-size:13px;"></div>
                     
                     <div class="profile-stats">
                         <div class="stat-item">
@@ -556,12 +529,10 @@ body {
 
 .main-wrapper {
     background: var(--profile-bg) !important;
-    transition: background 0.3s ease;
 }
 
 .main-content {
     background: var(--profile-bg) !important;
-    transition: background 0.3s ease;
 }
 
 /* ============================================================
@@ -830,6 +801,7 @@ body {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: opacity 0.3s ease;
 }
 
 .profile-avatar-overlay {
@@ -890,10 +862,6 @@ body {
 .profile-branch i {
     color: #3B82F6;
     margin-right: 4px;
-}
-
-.profile-pic-form {
-    display: none;
 }
 
 .profile-stats {
@@ -1032,10 +1000,6 @@ body {
     width: 100%;
 }
 
-.input-group .form-control::placeholder {
-    color: var(--profile-text-light);
-}
-
 .input-group .form-control:focus {
     border-color: #3B82F6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
@@ -1156,11 +1120,6 @@ body {
         width: 120px;
         height: 120px;
     }
-    
-    .profile-stats {
-        grid-template-columns: 1fr 1fr;
-        padding: 12px 0;
-    }
 }
 
 @media (max-width: 768px) {
@@ -1228,16 +1187,6 @@ body {
     .btn {
         width: 100%;
         justify-content: center;
-    }
-    
-    .branch-indicator-name {
-        font-size: 14px;
-    }
-    
-    .branch-icon-wrapper {
-        width: 38px;
-        height: 38px;
-        font-size: 17px;
     }
 }
 
@@ -1355,38 +1304,73 @@ function validatePasswordForm() {
 }
 
 // ============================================================
-// PASSWORD REQUIREMENTS CHECK
+// AJAX PROFILE PICTURE UPLOAD
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    var newPassword = document.getElementById('new_password');
-    var confirmPassword = document.getElementById('confirm_password');
-    var reqLength = document.getElementById('req-length');
-    var reqMatch = document.getElementById('req-match');
+    var profilePicInput = document.getElementById('profilePicInput');
+    var profileImage = document.getElementById('profileImage');
+    var uploadStatus = document.getElementById('uploadStatus');
     
-    function checkRequirements() {
-        if (newPassword.value.length >= 6) {
-            reqLength.className = 'requirement valid';
-            reqLength.innerHTML = '<i class="fas fa-check-circle"></i> At least 6 characters';
-        } else {
-            reqLength.className = 'requirement invalid';
-            reqLength.innerHTML = '<i class="fas fa-times-circle"></i> At least 6 characters';
-        }
-        
-        if (newPassword.value.length > 0 && newPassword.value === confirmPassword.value) {
-            reqMatch.className = 'requirement valid';
-            reqMatch.innerHTML = '<i class="fas fa-check-circle"></i> Passwords match';
-        } else if (confirmPassword.value.length > 0) {
-            reqMatch.className = 'requirement invalid';
-            reqMatch.innerHTML = '<i class="fas fa-times-circle"></i> Passwords match';
-        } else {
-            reqMatch.className = 'requirement';
-            reqMatch.innerHTML = '<i class="fas fa-circle"></i> Passwords match';
-        }
-    }
-    
-    if (newPassword && confirmPassword) {
-        newPassword.addEventListener('input', checkRequirements);
-        confirmPassword.addEventListener('input', checkRequirements);
+    if (profilePicInput) {
+        profilePicInput.addEventListener('change', function(e) {
+            var file = this.files[0];
+            if (!file) return;
+            
+            // Show loading
+            uploadStatus.style.display = 'block';
+            uploadStatus.className = '';
+            uploadStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+            uploadStatus.style.background = '#FEF3C7';
+            uploadStatus.style.color = '#92400E';
+            
+            // Create FormData
+            var formData = new FormData();
+            formData.append('action', 'ajax_upload_picture');
+            formData.append('profile_pic', file);
+            
+            // Show preview immediately
+            var reader = new FileReader();
+            reader.onload = function(event) {
+                profileImage.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+            
+            // Send AJAX request
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(response) {
+                return response.json();
+            })
+            .then(function(data) {
+                if (data.success) {
+                    // Update image with new URL
+                    profileImage.src = data.image_url;
+                    
+                    uploadStatus.className = 'upload-success';
+                    uploadStatus.innerHTML = '<i class="fas fa-check-circle"></i> ' + data.message;
+                    uploadStatus.style.background = '#D1FAE5';
+                    uploadStatus.style.color = '#065F46';
+                    
+                    // Hide after 3 seconds
+                    setTimeout(function() {
+                        uploadStatus.style.display = 'none';
+                    }, 3000);
+                } else {
+                    uploadStatus.className = 'upload-error';
+                    uploadStatus.innerHTML = '<i class="fas fa-exclamation-circle"></i> ' + data.message;
+                    uploadStatus.style.background = '#FEE2E2';
+                    uploadStatus.style.color = '#991B1B';
+                }
+            })
+            .catch(function(error) {
+                uploadStatus.className = 'upload-error';
+                uploadStatus.innerHTML = '<i class="fas fa-exclamation-circle"></i> Upload failed. Please try again.';
+                uploadStatus.style.background = '#FEE2E2';
+                uploadStatus.style.color = '#991B1B';
+            });
+        });
     }
 });
 
@@ -1410,6 +1394,7 @@ document.addEventListener('DOMContentLoaded', function() {
         syncDarkMode();
     });
     
+    // Auto-hide alerts
     var successAlert = document.getElementById('successAlert');
     if (successAlert) {
         setTimeout(function() {

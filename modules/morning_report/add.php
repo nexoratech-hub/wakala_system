@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/morning_report/add.php
 // WAKALA FINANCIAL SYSTEM - ADD MORNING REPORT
-// WITH FULL DARK MODE SUPPORT - FIXED
+// WITH BRANCH INDICATOR CARD
 // ================================================================
 
 // ============================================================
@@ -52,24 +52,41 @@ $stmt->execute();
 $providers = $stmt->fetchAll();
 
 // ============================================================
-// GET BRANCH PROVIDERS (if specific branch selected)
+// BRANCH FILTER HANDLING - DEFAULT ALL BRANCHES
 // ============================================================
-// CHECK BOTH 'branch' AND 'branch_id' parameters for compatibility
-$selected_branch = 0;
+$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
 
-if (isset($_GET['branch']) && intval($_GET['branch']) > 0) {
-    $selected_branch = intval($_GET['branch']);
-} elseif (isset($_GET['branch_id']) && intval($_GET['branch_id']) > 0) {
-    $selected_branch = intval($_GET['branch_id']);
+// If no branch selected, check session
+if ($selected_branch == 0 && isset($_SESSION['selected_branch'])) {
+    $selected_branch = intval($_SESSION['selected_branch']);
 }
 
-// Store selected branch in session for header consistency
+// If still 0, default to 0 (All Branches)
+$selected_branch = $selected_branch ?? 0;
+
+// Store in session
 if ($selected_branch > 0) {
     $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch']) && !isset($_GET['branch_id'])) {
-    $selected_branch = $_SESSION['selected_branch'];
 }
 
+// Get branch name for display
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            $branch_code = $b['branch_code'] ?? '';
+            $branch_location = $b['location'] ?? '';
+            break;
+        }
+    }
+}
+
+// ============================================================
+// GET BRANCH PROVIDERS
+// ============================================================
 $branch_providers = [];
 
 // Check if branch_providers table exists
@@ -86,7 +103,6 @@ try {
         $branch_providers = $stmt->fetchAll();
     }
 } catch (Exception $e) {
-    // Table doesn't exist, use all providers
     $branch_providers = [];
 }
 
@@ -117,10 +133,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         
         // Get branch name
-        $branch_name = '';
+        $branch_name_db = '';
         foreach ($branches as $b) {
             if ($b['id'] == $branch_id) {
-                $branch_name = $b['branch_name'];
+                $branch_name_db = $b['branch_name'];
                 break;
             }
         }
@@ -145,16 +161,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         
         // ============================================================
-        // CHECK IF REPORT EXISTS FOR THIS BRANCH - FIXED
+        // CHECK IF REPORT EXISTS FOR THIS BRANCH
         // ============================================================
-        // Check if report already exists for this date, employee AND branch
         $check_stmt = $db->prepare("SELECT COUNT(*) FROM morning_reports 
                                     WHERE report_date = ? AND employee_id = ? AND branch_id = ?");
         $check_stmt->execute([$report_date, $user_id, $branch_id]);
         $exists = $check_stmt->fetchColumn();
         
         if ($exists > 0) {
-            // Get existing report number
             $existing_stmt = $db->prepare("SELECT report_number FROM morning_reports 
                                            WHERE report_date = ? AND employee_id = ? AND branch_id = ?");
             $existing_stmt->execute([$report_date, $user_id, $branch_id]);
@@ -177,7 +191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $insert_stmt->execute([
             $report_number,
             $user_id,
-            $branch_name,
+            $branch_name_db,
             $branch_id,
             $report_date,
             $provider_json,
@@ -192,36 +206,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         try {
             $stmt = $db->prepare("INSERT INTO activity_logs (employee_id, action, module, record_id, new_value, branch_id) 
                                   VALUES (?, 'Add Morning Report', 'Morning Report', ?, ?, ?)");
-            $stmt->execute([$user_id, $report_id, 'New morning report added for branch: ' . $branch_name, $branch_id]);
+            $stmt->execute([$user_id, $report_id, 'New morning report added for branch: ' . $branch_name_db, $branch_id]);
         } catch (Exception $e) {
             // Activity log table might not exist, ignore
         }
         
-        $success_message = 'Morning report added successfully! Report Number: ' . $report_number . ' (Branch: ' . $branch_name . ')';
+        $success_message = 'Morning report added successfully! Report Number: ' . $report_number . ' (Branch: ' . $branch_name_db . ')';
         $show_success = true;
         
         // Clear form data after successful submission
         $_POST = [];
         
         // Redirect after 2 seconds
-        echo '<meta http-equiv="refresh" content="2;url=index.php' . ($selected_branch > 0 ? '?branch=' . $selected_branch : '') . '">';
+        echo '<meta http-equiv="refresh" content="2;url=index.php">';
         
     } catch (Exception $e) {
         $error_message = $e->getMessage();
         $show_error = true;
-    }
-}
-
-// ============================================================
-// GET BRANCH NAME
-// ============================================================
-$branch_name = '';
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
-            break;
-        }
     }
 }
 
@@ -239,14 +240,61 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Current Filter</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                    <?php if ($branch_code): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php if ($branch_location): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($branch_location); ?></span>
+                    </div>
+                <?php endif; ?>
+                <div class="branch-report-count">
+                    <i class="fas fa-sun"></i>
+                    <span>New Morning Report</span>
+                </div>
+                <?php if ($selected_branch > 0): ?>
+                    <a href="add.php?branch=0" class="branch-filter-clear">
+                        <i class="fas fa-times"></i> Show All Branches
+                    </a>
+                <?php endif; ?>
+            </div>
+            <div class="branch-indicator-right">
+                <div class="branch-select-wrapper">
+                    <select id="branchFilter" class="branch-filter-select" onchange="window.location.href='?branch='+this.value">
+                        <option value="0">All Branches</option>
+                        <?php foreach ($branches as $b): ?>
+                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($b['branch_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <span class="date-display">
+                    <i class="far fa-calendar-alt"></i> 
+                    <?php echo date('d M Y'); ?>
+                </span>
+            </div>
+        </div>
+
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
                 <h2><i class="fas fa-sun"></i> Add Morning Report</h2>
-                <span class="page-subtitle">Create a new morning report</span>
+                <span class="page-subtitle">Create a new morning report<?php if ($selected_branch > 0): ?> for <?php echo htmlspecialchars($branch_name); ?><?php endif; ?></span>
             </div>
             <div class="page-header-right">
-                <a href="index.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn btn-back">
+                <a href="index.php" class="btn btn-back">
                     <i class="fas fa-arrow-left"></i> Back to List
                 </a>
             </div>
@@ -298,8 +346,8 @@ DASHBOARD CONTENT
                             <label for="branch_id">Branch <span class="required">*</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <select id="branch_id" name="branch_id" class="form-control" required onchange="window.location.href='?branch='+this.value">
-                                    <option value="">Select Branch</option>
+                                <select id="branch_id" name="branch_id" class="form-control" required>
+                                    <option value="0">Select Branch</option>
                                     <?php foreach ($branches as $b): ?>
                                         <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($b['branch_name']); ?>
@@ -394,7 +442,7 @@ DASHBOARD CONTENT
                     <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
                         <i class="fas fa-undo"></i> Reset Form
                     </button>
-                    <a href="index.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn btn-cancel">
+                    <a href="index.php" class="btn btn-cancel">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                 </div>
@@ -413,6 +461,224 @@ DASHBOARD CONTENT
 DASHBOARD STYLES - WITH DARK MODE SUPPORT
 ============================================================ -->
 <style>
+/* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    padding: 14px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.35);
+    border: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.branch-indicator::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 200px;
+    height: 200px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator::after {
+    content: '';
+    position: absolute;
+    bottom: -60%;
+    left: 30%;
+    width: 150px;
+    height: 150px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: #FFFFFF;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+
+.branch-icon-wrapper {
+    width: 44px;
+    height: 44px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.branch-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.branch-indicator-label {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 16px;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+
+.branch-indicator-code {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+    color: #FFFFFF;
+    padding: 2px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location i {
+    font-size: 12px;
+}
+
+.branch-report-count {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    padding: 4px 14px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.branch-report-count i {
+    font-size: 13px;
+}
+
+.branch-filter-clear {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #FFFFFF;
+    padding: 4px 14px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+.branch-filter-clear:hover {
+    background: rgba(255, 255, 255, 0.25);
+    color: #FFFFFF;
+}
+
+.branch-indicator-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+    z-index: 1;
+}
+
+.branch-select-wrapper {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 2px 4px;
+}
+
+.branch-filter-select {
+    background: transparent;
+    border: none;
+    color: #FFFFFF;
+    padding: 6px 30px 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23FFFFFF' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+}
+
+.branch-filter-select option {
+    background: #1F2937;
+    color: #FFFFFF;
+}
+
+html.dark-mode .branch-filter-select option {
+    background: #1E293B;
+    color: #F1F5F9;
+}
+
+.branch-filter-select:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.branch-indicator-right .date-display i {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
 /* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
@@ -443,19 +709,19 @@ DASHBOARD STYLES - WITH DARK MODE SUPPORT
 }
 
 html.dark-mode {
-    --form-bg: #1F2937;
-    --form-text: #F9FAFB;
-    --form-text-secondary: #9CA3AF;
-    --form-text-light: #6B7280;
-    --form-border: #374151;
-    --form-card-bg: #1F2937;
-    --form-card-header: #374151;
-    --form-input-bg: #374151;
-    --form-hover: #374151;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.4);
-    --form-dropdown-bg: #1F2937;
-    --form-dropdown-border: #374151;
+    --form-bg: #0f172a;
+    --form-text: #F1F5F9;
+    --form-text-secondary: #94A3B8;
+    --form-text-light: #64748B;
+    --form-border: #334155;
+    --form-card-bg: #1E293B;
+    --form-card-header: #2D3A4F;
+    --form-input-bg: #334155;
+    --form-hover: #2D3A4F;
+    --form-shadow: rgba(0,0,0,0.4);
+    --form-shadow-lg: rgba(0,0,0,0.6);
+    --form-dropdown-bg: #1E293B;
+    --form-dropdown-border: #334155;
     --form-success-bg: #065F46;
     --form-success-text: #D1FAE5;
     --form-success-border: #047857;
@@ -468,7 +734,6 @@ html.dark-mode {
     --provider-text: #A5D6A7;
 }
 
-/* Apply Dark Mode to Full Page */
 body {
     background: var(--form-bg) !important;
     color: var(--form-text);
@@ -477,12 +742,10 @@ body {
 
 .main-wrapper {
     background: var(--form-bg) !important;
-    transition: background 0.3s ease;
 }
 
 .main-content {
     background: var(--form-bg) !important;
-    transition: background 0.3s ease;
 }
 
 /* ============================================================
@@ -705,18 +968,9 @@ body {
     width: 100%;
 }
 
-.input-group .form-control::placeholder {
-    color: var(--form-text-light);
-}
-
 .input-group .form-control:focus {
     border-color: #F59E0B;
     box-shadow: 0 0 0 3px rgba(245,158,11,0.1);
-}
-
-.input-group .form-control:focus + .input-icon,
-.input-group .form-control:focus ~ .input-icon {
-    color: #F59E0B;
 }
 
 .input-group select.form-control {
@@ -745,7 +999,7 @@ html.dark-mode .input-group select.form-control {
 }
 
 /* ============================================================
-   PROVIDERS GRID - LIGHT GREEN BACKGROUND
+   PROVIDERS GRID
    ============================================================ */
 .providers-grid {
     display: grid;
@@ -832,21 +1086,9 @@ html.dark-mode .provider-input .form-control {
     box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
 }
 
-.provider-input .form-control::placeholder {
-    color: var(--form-text-light);
-}
-
-/* ============================================================
-   MONEY INPUT STYLES
-   ============================================================ */
 .money-input {
     font-weight: 600;
     letter-spacing: 0.5px;
-}
-
-.money-input:focus {
-    border-color: #4CAF50 !important;
-    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2) !important;
 }
 
 /* ============================================================
@@ -1016,6 +1258,37 @@ html.dark-mode .provider-input .form-control {
         padding-left: 0;
         padding-top: 8px;
     }
+    
+    .branch-indicator {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 16px 18px;
+    }
+    
+    .branch-indicator-left {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    
+    .branch-indicator-right {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    
+    .branch-indicator-right .date-display {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .branch-select-wrapper {
+        width: 100%;
+    }
+    
+    .branch-filter-select {
+        width: 100%;
+        padding: 8px 30px 8px 12px;
+    }
 }
 
 @media (max-width: 480px) {
@@ -1036,46 +1309,52 @@ html.dark-mode .provider-input .form-control {
     .provider-item {
         padding: 6px 8px;
     }
+    
+    .branch-indicator-name {
+        font-size: 14px;
+    }
+    
+    .branch-location {
+        font-size: 11px;
+        padding: 3px 10px;
+    }
+    
+    .branch-indicator-code {
+        font-size: 10px;
+    }
+    
+    .branch-icon-wrapper {
+        width: 38px;
+        height: 38px;
+        font-size: 17px;
+    }
 }
 </style>
 
 <script>
 // ============================================================
-// FORMAT MONEY INPUT - 1,000,000 format
+// FORMAT MONEY INPUT
 // ============================================================
 function formatMoneyInput(input) {
-    // Remove all non-digit characters except decimal point
     var value = input.value.replace(/[^0-9.]/g, '');
-    
-    // Split by decimal point
     var parts = value.split('.');
     var integerPart = parts[0] || '';
     var decimalPart = parts[1] || '';
     
-    // Format integer part with commas
     if (integerPart.length > 0) {
         integerPart = parseInt(integerPart).toLocaleString('en-US');
     }
     
-    // Limit decimal to 2 places
     if (decimalPart.length > 2) {
         decimalPart = decimalPart.substring(0, 2);
     }
     
-    // Reconstruct the value
     var formatted = integerPart;
     if (decimalPart.length > 0) {
         formatted += '.' + decimalPart;
     }
     
     input.value = formatted;
-}
-
-// ============================================================
-// GET RAW NUMBER FROM FORMATTED INPUT
-// ============================================================
-function getRawNumber(input) {
-    return parseFloat(input.value.replace(/,/g, '')) || 0;
 }
 
 // ============================================================
@@ -1105,9 +1384,6 @@ function calculateTotals() {
     if (grandTotalDisplay) grandTotalDisplay.textContent = 'TSh ' + formatNumberDisplay(grandTotal);
 }
 
-// ============================================================
-// FORMAT NUMBER FOR DISPLAY
-// ============================================================
 function formatNumberDisplay(num) {
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -1117,7 +1393,7 @@ function formatNumberDisplay(num) {
 // ============================================================
 function validateForm() {
     var branch = document.getElementById('branch_id');
-    if (!branch || branch.value === '') {
+    if (!branch || branch.value === '0' || branch.value === '') {
         alert('Please select a branch.');
         if (branch) branch.focus();
         return false;
@@ -1156,10 +1432,8 @@ function confirmReset() {
 // DARK MODE SYNC
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Calculate initial totals
     calculateTotals();
     
-    // Listen for cash balance changes
     var cashBalance = document.getElementById('cash_balance');
     if (cashBalance) {
         cashBalance.addEventListener('input', function() {
@@ -1168,9 +1442,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1187,9 +1458,6 @@ document.addEventListener('DOMContentLoaded', function() {
         syncDarkMode();
     });
     
-    // ============================================================
-    // AUTO-HIDE MESSAGES
-    // ============================================================
     var successAlert = document.getElementById('successAlert');
     if (successAlert) {
         setTimeout(function() {
@@ -1203,16 +1471,6 @@ document.addEventListener('DOMContentLoaded', function() {
             errorAlert.style.display = 'none';
         }, 8000);
     }
-    
-    // ============================================================
-    // CLOSE ALERT
-    // ============================================================
-    var closeBtns = document.querySelectorAll('.alert-close');
-    closeBtns.forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            this.parentElement.style.display = 'none';
-        });
-    });
 });
 </script>
 

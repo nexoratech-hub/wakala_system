@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/morning_report/view.php
 // WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT
-// WITH FULL DARK MODE SUPPORT
+// WITH BRANCH INDICATOR CARD
 // ================================================================
 
 // ============================================================
@@ -38,6 +38,42 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 // ============================================================
+// GET USER'S BRANCH
+// ============================================================
+$selected_branch = isset($_SESSION['user_branch_id']) ? intval($_SESSION['user_branch_id']) : 0;
+if ($selected_branch == 0) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp && $emp['branch_id'] > 0) {
+        $selected_branch = intval($emp['branch_id']);
+        $_SESSION['user_branch_id'] = $selected_branch;
+    }
+}
+
+// ============================================================
+// GET BRANCHES FOR FILTER
+// ============================================================
+$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+$stmt->execute();
+$branches = $stmt->fetchAll();
+
+// Get branch name for display
+$branch_name = 'All Branches';
+$branch_code = '';
+$branch_location = '';
+if ($selected_branch > 0) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch) {
+            $branch_name = $b['branch_name'];
+            $branch_code = $b['branch_code'] ?? '';
+            $branch_location = $b['location'] ?? '';
+            break;
+        }
+    }
+}
+
+// ============================================================
 // GET REPORT ID
 // ============================================================
 $report_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
@@ -53,7 +89,9 @@ if ($report_id <= 0) {
 $sql = "SELECT 
             mr.*,
             e.full_name as employee_name,
-            b.branch_name as branch_name
+            b.branch_name as branch_name,
+            b.branch_code,
+            b.location as branch_location
         FROM morning_reports mr
         LEFT JOIN employees e ON mr.employee_id = e.id
         LEFT JOIN branches b ON mr.branch_id = b.id
@@ -111,6 +149,38 @@ DASHBOARD CONTENT
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ===== BRANCH INDICATOR CARD - RED ===== -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Current Branch</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                    <?php if ($branch_code): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php if ($branch_location): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($branch_location); ?></span>
+                    </div>
+                <?php endif; ?>
+                <div class="branch-report-count">
+                    <i class="fas fa-sun"></i>
+                    <span><?php echo htmlspecialchars($report['report_number']); ?></span>
+                </div>
+            </div>
+            <div class="branch-indicator-right">
+                <span class="date-display">
+                    <i class="far fa-calendar-alt"></i> 
+                    <?php echo date('d M Y'); ?>
+                </span>
+            </div>
+        </div>
+
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
@@ -256,10 +326,167 @@ DASHBOARD STYLES
 ============================================================ -->
 <style>
 /* ============================================================
+   BRANCH INDICATOR CARD - RED
+   ============================================================ */
+.branch-indicator {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    padding: 14px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.35);
+    border: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.branch-indicator::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 200px;
+    height: 200px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator::after {
+    content: '';
+    position: absolute;
+    bottom: -60%;
+    left: 30%;
+    width: 150px;
+    height: 150px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-indicator-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: #FFFFFF;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+
+.branch-icon-wrapper {
+    width: 44px;
+    height: 44px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.branch-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.branch-indicator-label {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.branch-indicator-name {
+    font-weight: 700;
+    font-size: 16px;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+
+.branch-indicator-code {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+    color: #FFFFFF;
+    padding: 2px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    color: #FFFFFF;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.branch-location i {
+    font-size: 12px;
+}
+
+.branch-report-count {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    padding: 4px 14px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.branch-report-count i {
+    font-size: 13px;
+}
+
+.branch-indicator-right {
+    position: relative;
+    z-index: 1;
+}
+
+.branch-indicator-right .date-display {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.branch-indicator-right .date-display i {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* ============================================================
    DARK MODE VARIABLES
    ============================================================ */
 :root {
-    --view-bg: #FFFFFF;
+    --view-bg: #f3f4f6;
     --view-text: #1F2937;
     --view-text-secondary: #6B7280;
     --view-text-light: #9CA3AF;
@@ -271,21 +498,25 @@ DASHBOARD STYLES
     --view-shadow-lg: rgba(0,0,0,0.12);
     --view-success: #D1FAE5;
     --view-success-text: #065F46;
+    --view-scrollbar: #DC2626;
+    --view-scrollbar-track: #F3F4F6;
 }
 
 html.dark-mode {
-    --view-bg: #1F2937;
-    --view-text: #F9FAFB;
-    --view-text-secondary: #9CA3AF;
-    --view-text-light: #6B7280;
-    --view-border: #374151;
-    --view-card-bg: #1F2937;
-    --view-card-header: #374151;
-    --view-hover: #374151;
-    --view-shadow: rgba(0,0,0,0.3);
-    --view-shadow-lg: rgba(0,0,0,0.4);
+    --view-bg: #0f172a;
+    --view-text: #F1F5F9;
+    --view-text-secondary: #94A3B8;
+    --view-text-light: #64748B;
+    --view-border: #334155;
+    --view-card-bg: #1E293B;
+    --view-card-header: #2D3A4F;
+    --view-hover: #2D3A4F;
+    --view-shadow: rgba(0,0,0,0.4);
+    --view-shadow-lg: rgba(0,0,0,0.6);
     --view-success: #065F46;
     --view-success-text: #D1FAE5;
+    --view-scrollbar: #DC2626;
+    --view-scrollbar-track: #1E293B;
 }
 
 body {
@@ -302,6 +533,24 @@ body {
 .main-content {
     background: var(--view-bg) !important;
     transition: background 0.3s ease;
+}
+
+/* Scrollbar */
+.main-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.main-content::-webkit-scrollbar-track {
+    background: var(--view-scrollbar-track);
+}
+
+.main-content::-webkit-scrollbar-thumb {
+    background: var(--view-scrollbar);
+    border-radius: 4px;
+}
+
+.main-content::-webkit-scrollbar-thumb:hover {
+    background: #8B0000;
 }
 
 /* ============================================================
@@ -678,6 +927,27 @@ body {
         width: 100%;
         justify-content: center;
     }
+    
+    .branch-indicator {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 16px 18px;
+    }
+    
+    .branch-indicator-left {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    
+    .branch-indicator-right {
+        width: 100%;
+    }
+    
+    .branch-indicator-right .date-display {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 @media (max-width: 480px) {
@@ -703,6 +973,25 @@ body {
     
     .report-actions {
         padding: 14px 16px;
+    }
+    
+    .branch-indicator-name {
+        font-size: 14px;
+    }
+    
+    .branch-location {
+        font-size: 11px;
+        padding: 3px 10px;
+    }
+    
+    .branch-indicator-code {
+        font-size: 10px;
+    }
+    
+    .branch-icon-wrapper {
+        width: 38px;
+        height: 38px;
+        font-size: 17px;
     }
 }
 </style>
