@@ -2,17 +2,26 @@
 // ================================================================
 // FILE: includes/employee_header.php
 // WAKALA SYSTEM - EMPLOYEE HEADER
-// WITH FIXED TOPBAR SUPPORT
+// WITH FAVICON - FIXED
 // ================================================================
 
 $page_title = $page_title ?? 'Dashboard';
+
+// Get user data from session
+$full_name = $_SESSION['full_name'] ?? 'Employee';
+$role = $_SESSION['role'] ?? 'employee';
+$user_id = $_SESSION['user_id'] ?? 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wakala System - <?php echo $page_title; ?></title>
+    <title>Wakala System - <?php echo htmlspecialchars($page_title); ?></title>
+    
+    <!-- FAVICON -->
+    <link rel="icon" type="image/png" href="../../assets/images/logo.PNG">
+    <link rel="shortcut icon" type="image/png" href="../../assets/images/logo.PNG">
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -41,10 +50,9 @@ $page_title = $page_title ?? 'Dashboard';
             display: flex;
             min-height: 100vh;
             transition: background 0.3s ease, color 0.3s ease;
-            padding-top: 56px; /* Space for fixed topbar */
+            padding-top: 56px;
         }
         
-        /* Dark Mode */
         body.dark-mode {
             background: #0f172a;
             color: #f1f5f9;
@@ -88,6 +96,31 @@ $page_title = $page_title ?? 'Dashboard';
             body {
                 padding-top: 44px;
             }
+        }
+        
+        body.dark-mode .employee-content {
+            background: #0f172a;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #bb0404;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #8a0303;
+        }
+        body.dark-mode ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        body.dark-mode ::-webkit-scrollbar-thumb {
+            background: #bb0404;
         }
     </style>
 </head>

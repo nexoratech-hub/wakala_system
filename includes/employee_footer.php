@@ -2,8 +2,11 @@
 // ================================================================
 // FILE: includes/employee_footer.php
 // WAKALA SYSTEM - EMPLOYEE FOOTER
+// COMPLETE DARK MODE SUPPORT
 // ================================================================
 ?>
+</body>
+</html>
 
 <!-- ============================================================
 EMPLOYEE FOOTER
@@ -61,6 +64,3 @@ body.dark-mode .employee-footer .footer-content {
     }
 }
 </style>
-
-</body>
-</html>

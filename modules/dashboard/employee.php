@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: modules/dashboard/employee.php
 // WAKALA SYSTEM - EMPLOYEE DASHBOARD
+// WITH DAILY REPORT DATA - FIXED
 // ================================================================
 
 // ============================================================
@@ -47,35 +48,73 @@ $today = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
 
-// Morning Reports count this month
+// ============================================================
+// 1. MORNING REPORTS - Count this month
+// ============================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM morning_reports WHERE employee_id = ? AND MONTH(report_date) = ? AND YEAR(report_date) = ?");
 $stmt->execute([$user_id, $month, $year]);
 $morning_count = $stmt->fetch()['count'] ?? 0;
 
-// Evening Stocks count this month
+// ============================================================
+// 2. EVENING STOCKS - Count this month
+// ============================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM evening_stocks WHERE employee_id = ? AND MONTH(stock_date) = ? AND YEAR(stock_date) = ?");
 $stmt->execute([$user_id, $month, $year]);
 $evening_count = $stmt->fetch()['count'] ?? 0;
 
-// Commissions total this month
+// ============================================================
+// 3. COMMISSIONS - Total this month
+// ============================================================
 $stmt = $db->prepare("SELECT SUM(total_commission) as total FROM commissions WHERE employee_id = ? AND MONTH(commission_date) = ? AND YEAR(commission_date) = ?");
 $stmt->execute([$user_id, $month, $year]);
 $commission_total = $stmt->fetch()['total'] ?? 0;
 
-// Expenses total this month
+// ============================================================
+// 4. EXPENSES - Total this month
+// ============================================================
 $stmt = $db->prepare("SELECT SUM(amount) as total FROM expenses WHERE employee_id = ? AND MONTH(expense_date) = ? AND YEAR(expense_date) = ?");
 $stmt->execute([$user_id, $month, $year]);
 $expense_total = $stmt->fetch()['total'] ?? 0;
 
-// Today's Morning Report
+// ============================================================
+// 5. DAILY REPORT - GET TODAY'S FLOAT AND CASH
+// ============================================================
+$daily_float = 0;
+$daily_cash = 0;
+$daily_report = null;
+
+$stmt = $db->prepare("SELECT * FROM daily_reports WHERE employee_id = ? AND report_date = ?");
+$stmt->execute([$user_id, $today]);
+$daily_report = $stmt->fetch();
+
+if ($daily_report) {
+    $daily_float = $daily_report['current_float'] ?? 0;
+    $daily_cash = $daily_report['current_cash'] ?? 0;
+}
+
+// ============================================================
+// 6. TODAY'S MORNING REPORT
+// ============================================================
 $stmt = $db->prepare("SELECT * FROM morning_reports WHERE employee_id = ? AND report_date = ?");
 $stmt->execute([$user_id, $today]);
 $today_morning = $stmt->fetch();
 
-// Today's Evening Stock
+// ============================================================
+// 7. TODAY'S EVENING STOCK
+// ============================================================
 $stmt = $db->prepare("SELECT * FROM evening_stocks WHERE employee_id = ? AND stock_date = ?");
 $stmt->execute([$user_id, $today]);
 $today_evening = $stmt->fetch();
+
+// ============================================================
+// 8. TODAY'S DAILY REPORT STATUS
+// ============================================================
+$has_daily_report = ($daily_report !== false);
+
+// ============================================================
+// PAGE TITLE
+// ============================================================
+$page_title = 'Dashboard';
 
 // ============================================================
 // INCLUDE EMPLOYEE HEADER, SIDEBAR & TOPBAR
@@ -91,7 +130,7 @@ DASHBOARD CONTENT
 <div class="employee-wrapper">
     <div class="employee-content">
         
-        <!-- Welcome Section -->
+        <!-- ===== WELCOME CARD - RED BACKGROUND ===== -->
         <div class="welcome-card">
             <div class="welcome-text">
                 <h2>Welcome back, <?php echo htmlspecialchars($user['full_name']); ?>! 👋</h2>
@@ -103,33 +142,43 @@ DASHBOARD CONTENT
             </div>
         </div>
 
-        <!-- Quick Actions -->
+        <!-- ===== QUICK ACTIONS ===== -->
         <div class="quick-actions">
             <a href="../morning_report/add.php" class="btn btn-morning"><i class="fas fa-sun"></i> Morning Report</a>
             <a href="../evening_stock/add.php" class="btn btn-evening"><i class="fas fa-moon"></i> Evening Stock</a>
+            <a href="../daily_report/add.php" class="btn btn-daily"><i class="fas fa-file-alt"></i> Daily Report</a>
             <a href="../commissions/add.php" class="btn btn-commission"><i class="fas fa-hand-holding-usd"></i> Commission</a>
             <a href="../expenses/add.php" class="btn btn-expense"><i class="fas fa-receipt"></i> Expense</a>
             <a href="../store_cash_out/add.php" class="btn btn-cashout"><i class="fas fa-money-bill-wave"></i> Cash Out</a>
         </div>
 
-        <!-- Summary Cards -->
+        <!-- ===== SUMMARY CARDS ===== -->
         <div class="summary-cards">
-            <div class="summary-card card-morning">
-                <div class="card-icon"><i class="fas fa-sun"></i></div>
+            <!-- Float Card - From Daily Report -->
+            <div class="summary-card card-float">
+                <div class="card-icon"><i class="fas fa-coins"></i></div>
                 <div class="card-info">
-                    <span class="card-label">Morning Reports</span>
-                    <span class="card-value"><?php echo $morning_count; ?></span>
-                    <span class="card-sub">This month</span>
+                    <span class="card-label">Today's Float</span>
+                    <span class="card-value"><?php echo formatCurrency($daily_float); ?></span>
+                    <span class="card-sub">
+                        <?php echo $has_daily_report ? 'From Daily Report' : 'No daily report yet'; ?>
+                    </span>
                 </div>
             </div>
-            <div class="summary-card card-evening">
-                <div class="card-icon"><i class="fas fa-moon"></i></div>
+            
+            <!-- Cash Card - From Daily Report -->
+            <div class="summary-card card-cash">
+                <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
                 <div class="card-info">
-                    <span class="card-label">Evening Stocks</span>
-                    <span class="card-value"><?php echo $evening_count; ?></span>
-                    <span class="card-sub">This month</span>
+                    <span class="card-label">Today's Cash</span>
+                    <span class="card-value"><?php echo formatCurrency($daily_cash); ?></span>
+                    <span class="card-sub">
+                        <?php echo $has_daily_report ? 'From Daily Report' : 'No daily report yet'; ?>
+                    </span>
                 </div>
             </div>
+            
+            <!-- Commissions Card -->
             <div class="summary-card card-commission">
                 <div class="card-icon"><i class="fas fa-hand-holding-usd"></i></div>
                 <div class="card-info">
@@ -138,6 +187,8 @@ DASHBOARD CONTENT
                     <span class="card-sub">This month</span>
                 </div>
             </div>
+            
+            <!-- Expenses Card -->
             <div class="summary-card card-expense">
                 <div class="card-icon"><i class="fas fa-receipt"></i></div>
                 <div class="card-info">
@@ -148,8 +199,9 @@ DASHBOARD CONTENT
             </div>
         </div>
 
-        <!-- Today's Reports -->
+        <!-- ===== TODAY'S REPORTS ===== -->
         <div class="today-reports">
+            <!-- Morning Report -->
             <div class="report-card morning">
                 <div class="report-header">
                     <h4><i class="fas fa-sun" style="color:#F59E0B;"></i> Today's Morning Report</h4>
@@ -171,6 +223,7 @@ DASHBOARD CONTENT
                 <?php endif; ?>
             </div>
 
+            <!-- Evening Stock -->
             <div class="report-card evening">
                 <div class="report-header">
                     <h4><i class="fas fa-moon" style="color:#3B82F6;"></i> Today's Evening Stock</h4>
@@ -193,6 +246,33 @@ DASHBOARD CONTENT
             </div>
         </div>
 
+        <!-- ===== DAILY REPORT STATUS ===== -->
+        <div class="daily-report-status">
+            <div class="report-card daily">
+                <div class="report-header">
+                    <h4><i class="fas fa-file-alt" style="color:#10B981;"></i> Today's Daily Report</h4>
+                    <span class="status <?php echo $has_daily_report ? 'submitted' : 'pending'; ?>">
+                        <?php echo $has_daily_report ? '✅ Submitted' : '⏳ Pending'; ?>
+                    </span>
+                </div>
+                <?php if ($has_daily_report): ?>
+                    <div class="report-body">
+                        <div><span>Report No.</span> <strong><?php echo htmlspecialchars($daily_report['report_number']); ?></strong></div>
+                        <div><span>Float</span> <strong><?php echo formatCurrency($daily_report['current_float'] ?? 0); ?></strong></div>
+                        <div><span>Cash</span> <strong><?php echo formatCurrency($daily_report['current_cash'] ?? 0); ?></strong></div>
+                        <div><span>Total Commission</span> <strong><?php echo formatCurrency($daily_report['total_commission'] ?? 0); ?></strong></div>
+                        <div><span>Total Deposits</span> <strong><?php echo formatCurrency($daily_report['total_deposits'] ?? 0); ?></strong></div>
+                        <div><span>Total Withdrawals</span> <strong><?php echo formatCurrency($daily_report['total_withdrawals'] ?? 0); ?></strong></div>
+                    </div>
+                <?php else: ?>
+                    <div class="report-empty">
+                        <p>No daily report submitted today</p>
+                        <a href="../daily_report/add.php" class="btn btn-daily btn-sm">Submit Now</a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
     </div>
     
     <!-- Footer -->
@@ -200,87 +280,85 @@ DASHBOARD CONTENT
 </div>
 
 <!-- ============================================================
-STYLES
+STYLES - COMPLETE DARK MODE SUPPORT
 ============================================================ -->
 <style>
 /* ============================================================
    EMPLOYEE DASHBOARD STYLES
    ============================================================ */
 
-/* Welcome Card */
+/* ============================================================
+   WELCOME CARD - RED BACKGROUND
+   ============================================================ */
 .welcome-card {
-    background: #ffffff;
-    border-radius: 10px;
-    padding: 14px 20px;
-    margin-bottom: 14px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    padding: 18px 24px;
+    margin-bottom: 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border: 1px solid #e5e7eb;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    transition: background 0.3s ease, border-color 0.3s ease;
+    border: none;
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.35);
+    transition: all 0.3s ease;
 }
 
 body.dark-mode .welcome-card {
-    background: #1e293b;
-    border-color: #334155;
+    background: linear-gradient(135deg, #DC2626 0%, #8A0303 100%);
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.2);
 }
 
 .welcome-text h2 {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
-    color: #1f2937;
+    color: #ffffff;
     margin: 0;
 }
 
-body.dark-mode .welcome-text h2 {
-    color: #f1f5f9;
-}
-
 .welcome-text p {
-    font-size: 12px;
-    color: #6b7280;
-    margin: 2px 0 0 0;
-}
-
-body.dark-mode .welcome-text p {
-    color: #94a3b8;
+    font-size: 13px;
+    color: rgba(255,255,255,0.8);
+    margin: 4px 0 0 0;
 }
 
 .welcome-date {
     text-align: center;
-    background: #bb0404;
+    background: rgba(255,255,255,0.15);
     color: white;
-    padding: 4px 12px;
-    border-radius: 8px;
-    min-width: 50px;
+    padding: 6px 16px;
+    border-radius: 10px;
+    min-width: 60px;
+    border: 1px solid rgba(255,255,255,0.1);
 }
 
 .welcome-date .day {
     display: block;
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 700;
     line-height: 1;
 }
 
 .welcome-date .month {
-    font-size: 9px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    opacity: 0.8;
 }
 
-/* Quick Actions */
+/* ============================================================
+   QUICK ACTIONS
+   ============================================================ */
 .quick-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
 }
 
 .btn {
-    padding: 7px 14px;
+    padding: 8px 16px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     font-weight: 600;
     cursor: pointer;
     font-size: 12px;
@@ -293,28 +371,33 @@ body.dark-mode .welcome-text p {
 }
 
 .btn-morning { background: #F59E0B; color: white; }
-.btn-morning:hover { background: #D97706; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
+.btn-morning:hover { background: #D97706; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
 
 .btn-evening { background: #3B82F6; color: white; }
-.btn-evening:hover { background: #2563EB; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
+.btn-evening:hover { background: #2563EB; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
 
-.btn-commission { background: #10B981; color: white; }
-.btn-commission:hover { background: #059669; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+.btn-daily { background: #10B981; color: white; }
+.btn-daily:hover { background: #059669; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+
+.btn-commission { background: #8B5CF6; color: white; }
+.btn-commission:hover { background: #7C3AED; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(139,92,246,0.3); }
 
 .btn-expense { background: #DC2626; color: white; }
-.btn-expense:hover { background: #B91C1C; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
+.btn-expense:hover { background: #B91C1C; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
 
-.btn-cashout { background: #7F1D1D; color: white; }
-.btn-cashout:hover { background: #5C1313; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(127,29,29,0.3); }
+.btn-cashout { background: #78716C; color: white; }
+.btn-cashout:hover { background: #57534E; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(120,113,108,0.3); }
 
-.btn-sm { padding: 4px 10px; font-size: 10px; }
+.btn-sm { padding: 4px 12px; font-size: 10px; }
 
-/* Summary Cards */
+/* ============================================================
+   SUMMARY CARDS
+   ============================================================ */
 .summary-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 12px;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
 }
 
 .summary-card {
@@ -326,7 +409,7 @@ body.dark-mode .welcome-text p {
     gap: 12px;
     border: 1px solid #e5e7eb;
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    transition: background 0.3s ease, border-color 0.3s ease;
+    transition: all 0.3s ease;
 }
 
 body.dark-mode .summary-card {
@@ -334,26 +417,35 @@ body.dark-mode .summary-card {
     border-color: #334155;
 }
 
+.summary-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
 .summary-card .card-icon {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
+    font-size: 18px;
     flex-shrink: 0;
 }
 
-.card-morning .card-icon { background: #FEF3C7; color: #D97706; }
-.card-morning { border-left: 4px solid #F59E0B; }
+/* Float Card */
+.card-float .card-icon { background: #DBEAFE; color: #1D4ED8; }
+.card-float { border-left: 4px solid #3B82F6; }
 
-.card-evening .card-icon { background: #DBEAFE; color: #1D4ED8; }
-.card-evening { border-left: 4px solid #3B82F6; }
+/* Cash Card */
+.card-cash .card-icon { background: #D1FAE5; color: #065F46; }
+.card-cash { border-left: 4px solid #10B981; }
 
-.card-commission .card-icon { background: #D1FAE5; color: #065F46; }
-.card-commission { border-left: 4px solid #10B981; }
+/* Commission Card */
+.card-commission .card-icon { background: #EDE9FE; color: #5B21B6; }
+.card-commission { border-left: 4px solid #8B5CF6; }
 
+/* Expense Card */
 .card-expense .card-icon { background: #FEE2E2; color: #991B1B; }
 .card-expense { border-left: 4px solid #DC2626; }
 
@@ -392,11 +484,19 @@ body.dark-mode .summary-card .card-sub {
     color: #64748b;
 }
 
-/* Today's Reports */
+/* ============================================================
+   TODAY'S REPORTS
+   ============================================================ */
 .today-reports {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
+    margin-bottom: 12px;
+}
+
+/* Daily Report Status */
+.daily-report-status {
+    margin-top: 0;
 }
 
 .report-card {
@@ -405,12 +505,16 @@ body.dark-mode .summary-card .card-sub {
     padding: 14px 16px;
     border: 1px solid #e5e7eb;
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    transition: background 0.3s ease, border-color 0.3s ease;
+    transition: all 0.3s ease;
 }
 
 body.dark-mode .report-card {
     background: #1e293b;
     border-color: #334155;
+}
+
+.report-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 
 .report-header {
@@ -434,8 +538,8 @@ body.dark-mode .report-header h4 {
 .report-header .status {
     font-size: 10px;
     font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: 2px 10px;
+    border-radius: 12px;
 }
 
 .report-header .status.submitted {
@@ -448,10 +552,24 @@ body.dark-mode .report-header h4 {
     color: #92400E;
 }
 
+body.dark-mode .report-header .status.submitted {
+    background: #065F46;
+    color: #D1FAE5;
+}
+
+body.dark-mode .report-header .status.pending {
+    background: #92400E;
+    color: #FEF3C7;
+}
+
 .report-body {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 4px;
+}
+
+.report-body.daily-grid {
+    grid-template-columns: 1fr 1fr 1fr;
 }
 
 .report-body div {
@@ -488,14 +606,40 @@ body.dark-mode .report-empty p {
     color: #94a3b8;
 }
 
-/* Responsive */
+/* Daily report specific */
+.report-card.daily .report-body {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 1024px) {
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 @media (max-width: 768px) {
+    .welcome-card {
+        flex-direction: column;
+        text-align: center;
+        gap: 8px;
+        padding: 16px 18px;
+    }
+    
+    .welcome-text h2 {
+        font-size: 17px;
+    }
+    
     .summary-cards {
         grid-template-columns: 1fr 1fr;
+        gap: 10px;
     }
     
     .today-reports {
         grid-template-columns: 1fr;
+        gap: 10px;
     }
     
     .quick-actions {
@@ -507,10 +651,12 @@ body.dark-mode .report-empty p {
         justify-content: center;
     }
     
-    .welcome-card {
-        flex-direction: column;
-        text-align: center;
-        gap: 8px;
+    .report-body {
+        grid-template-columns: 1fr 1fr;
+    }
+    
+    .report-card.daily .report-body {
+        grid-template-columns: 1fr 1fr;
     }
 }
 
@@ -519,7 +665,19 @@ body.dark-mode .report-empty p {
         grid-template-columns: 1fr;
     }
     
+    .welcome-text h2 {
+        font-size: 15px;
+    }
+    
+    .welcome-date .day {
+        font-size: 18px;
+    }
+    
     .report-body {
+        grid-template-columns: 1fr;
+    }
+    
+    .report-card.daily .report-body {
         grid-template-columns: 1fr;
     }
 }
@@ -527,11 +685,11 @@ body.dark-mode .report-empty p {
 
 <script>
 // ============================================================
-// AUTO-REFRESH TODAY'S REPORTS (Every 30 seconds)
+// AUTO-REFRESH TODAY'S REPORTS (Every 60 seconds)
 // ============================================================
-setInterval(function() {
-    location.reload();
-}, 30000);
+// setInterval(function() {
+//     location.reload();
+// }, 60000);
 </script>
 
 </body>

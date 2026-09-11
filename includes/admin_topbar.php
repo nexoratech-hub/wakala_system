@@ -2,7 +2,8 @@
 // ================================================================
 // FILE: includes/admin_topbar.php
 // WAKALA FINANCIAL SYSTEM - SHARED ADMIN TOP BAR
-// WITH COMPLETE DARK MODE SUPPORT - FIXED
+// WITH COMPLETE DARK MODE SUPPORT
+// FIXED: Uses 'branch_id' consistently + no variable collision
 // ================================================================
 
 // ============================================================
@@ -27,36 +28,33 @@ try {
 // ============================================================
 // GET BRANCHES FOR DROPDOWN
 // ============================================================
-$branches = [];
+$topbar_branches = [];
 try {
     global $db;
     if (isset($db)) {
         $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
         $stmt->execute();
-        $branches = $stmt->fetchAll();
+        $topbar_branches = $stmt->fetchAll();
     }
 } catch (Exception $e) {
-    $branches = [];
+    $topbar_branches = [];
 }
 
 // ============================================================
-// GET CURRENT BRANCH - FIXED
+// GET CURRENT BRANCH - FROM URL ONLY (USES branch_id)
 // ============================================================
+// Read from 'branch_id' first, then fallback to 'branch' for compatibility
 $current_branch = 0;
 
-// First check GET parameters - supports both 'branch' and 'branch_id'
-if (isset($_GET['branch']) && intval($_GET['branch']) > 0) {
-    $current_branch = intval($_GET['branch']);
-} elseif (isset($_GET['branch_id']) && intval($_GET['branch_id']) > 0) {
+if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
     $current_branch = intval($_GET['branch_id']);
-} elseif (isset($_SESSION['selected_branch']) && intval($_SESSION['selected_branch']) > 0) {
-    $current_branch = intval($_SESSION['selected_branch']);
+} 
+elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0' && intval($_GET['branch']) > 0) {
+    $current_branch = intval($_GET['branch']);
 }
 
-// Store in session for consistency
-if ($current_branch > 0) {
-    $_SESSION['selected_branch'] = $current_branch;
-}
+// Always clear old session memory
+unset($_SESSION['selected_branch']);
 
 // ============================================================
 // GET USER DATA - INCLUDING PROFILE PICTURE
@@ -77,7 +75,6 @@ if ($user_id > 0) {
             $user_data = $stmt->fetch();
             
             if ($user_data && !empty($user_data['profile_pic'])) {
-                // Check if file exists
                 $pic_path = '../../' . $user_data['profile_pic'];
                 if (file_exists($pic_path)) {
                     $profile_image = $pic_path;
@@ -85,15 +82,16 @@ if ($user_id > 0) {
             }
         }
     } catch (Exception $e) {
-        // Use default if there's an error
         $profile_image = '../../assets/images/logo.PNG';
     }
 }
 
 // ============================================================
-// GET CURRENT PAGE
+// GET CURRENT PAGE INFO
 // ============================================================
 $current_dir = basename(dirname($_SERVER['PHP_SELF']));
+$current_page_name = basename($_SERVER['PHP_SELF']);
+
 $page_titles = [
     'dashboard' => 'Dashboard',
     'morning_report' => 'Morning Report',
@@ -135,31 +133,16 @@ $page_icons = [
 $page_icon = $page_icons[$current_dir] ?? 'fa-chart-pie';
 
 // ============================================================
-// GET BRANCH NAME
+// GET BRANCH NAME FOR DISPLAY (using $br - NOT $branch)
 // ============================================================
-$branch_name = 'All Branches';
+$topbar_branch_name = 'All Branches';
 if ($current_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $current_branch) {
-            $branch_name = $b['branch_name'];
+    foreach ($topbar_branches as $br) {
+        if ($br['id'] == $current_branch) {
+            $topbar_branch_name = $br['branch_name'];
             break;
         }
     }
-}
-
-// ============================================================
-// GET CURRENT PAGE URL FOR BRANCH PARAMETER
-// ============================================================
-$current_page_path = $_SERVER['PHP_SELF'];
-$current_page_name = basename($current_page_path);
-
-// Determine which parameter to use based on current page
-$branch_param = 'branch'; // Default
-
-// For pages that use 'branch_id' parameter
-$pages_using_branch_id = ['add.php', 'edit.php', 'view.php'];
-if (in_array($current_page_name, $pages_using_branch_id)) {
-    $branch_param = 'branch_id';
 }
 ?>
 
@@ -181,14 +164,17 @@ ADMIN TOP BAR
     </div>
     
     <div class="topbar-right">
-        <!-- Branch Selector -->
+        <!-- Branch Selector - USES branch_id, uses $br (NOT $branch) -->
         <div class="branch-selector">
             <i class="fas fa-store branch-icon"></i>
-            <select id="branchFilter" onchange="window.location.href='?<?php echo $branch_param; ?>='+this.value">
-                <option value="0">All Branches</option>
-                <?php foreach ($branches as $branch): ?>
-                    <option value="<?php echo $branch['id']; ?>" <?php echo $current_branch == $branch['id'] ? 'selected' : ''; ?>>
-                        <?php echo htmlspecialchars($branch['branch_name']); ?>
+            <select id="branchFilter" onchange="switchBranch(this.value)">
+                <option value="0" <?php echo ($current_branch == 0) ? 'selected' : ''; ?>>All Branches</option>
+                <?php foreach ($topbar_branches as $br): ?>
+                    <option value="<?php echo $br['id']; ?>" <?php echo ($current_branch == $br['id']) ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($br['branch_name']); ?>
+                        <?php if ($br['branch_code']): ?>
+                            (<?php echo htmlspecialchars($br['branch_code']); ?>)
+                        <?php endif; ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -264,13 +250,9 @@ ADMIN TOP BAR
 </header>
 
 <!-- ============================================================
-TOPBAR STYLES - WITH COMPLETE DARK MODE
+TOPBAR STYLES
 ============================================================ -->
 <style>
-/* ============================================================
-   TOPBAR - COMPLETE DARK MODE SUPPORT - FIXED WIDTH & HEIGHT
-   ============================================================ */
-
 :root {
     --topbar-bg: #FFFFFF;
     --topbar-text: #1F2937;
@@ -346,9 +328,6 @@ html.dark-mode {
     background: var(--topbar-hover);
 }
 
-/* ============================================================
-   TOPBAR BRAND - COMPANY NAME REMOVED
-   ============================================================ */
 .topbar-brand {
     display: flex;
     align-items: center;
@@ -377,9 +356,6 @@ html.dark-mode {
     font-size: 14px;
 }
 
-/* ============================================================
-   TOPBAR RIGHT - FIXED OVERFLOW
-   ============================================================ */
 .topbar-right {
     display: flex;
     align-items: center;
@@ -391,9 +367,6 @@ html.dark-mode {
     overflow: hidden;
 }
 
-/* ============================================================
-   BRANCH SELECTOR - FIXED
-   ============================================================ */
 .branch-selector {
     display: flex;
     align-items: center;
@@ -452,9 +425,6 @@ html.dark-mode {
     display: inline-block;
 }
 
-/* ============================================================
-   SEARCH - FIXED
-   ============================================================ */
 .global-search {
     position: relative;
     display: flex;
@@ -469,7 +439,6 @@ html.dark-mode {
     left: 10px;
     color: var(--topbar-text-light);
     font-size: 12px;
-    transition: color 0.3s ease;
 }
 
 .global-search input {
@@ -505,12 +474,54 @@ html.dark-mode {
     padding: 1px 6px;
     border-radius: 4px;
     font-weight: 600;
-    transition: background 0.3s ease, color 0.3s ease;
 }
 
-/* ============================================================
-   DARK MODE TOGGLE
-   ============================================================ */
+.search-results {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    background: var(--topbar-dropdown-bg);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px var(--topbar-shadow-lg);
+    border: 1px solid var(--topbar-dropdown-border);
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1001;
+}
+
+.search-results.active {
+    display: block;
+}
+
+.result-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    color: var(--topbar-text);
+    text-decoration: none;
+    font-size: 12px;
+    transition: background 0.2s ease;
+}
+
+.result-item:hover {
+    background: var(--topbar-hover);
+}
+
+.result-item i {
+    width: 16px;
+    color: #DC2626;
+}
+
+.result-empty {
+    padding: 16px;
+    text-align: center;
+    color: var(--topbar-text-light);
+    font-size: 12px;
+}
+
 .dark-mode-toggle {
     background: none;
     border: none;
@@ -528,9 +539,6 @@ html.dark-mode {
     color: var(--topbar-text);
 }
 
-/* ============================================================
-   LIVE DATE/TIME - FIXED
-   ============================================================ */
 .live-datetime {
     display: flex;
     align-items: center;
@@ -544,7 +552,6 @@ html.dark-mode {
     border: 1px solid var(--topbar-border);
     white-space: nowrap;
     flex-shrink: 0;
-    transition: all 0.3s ease;
 }
 
 .live-datetime i {
@@ -557,9 +564,6 @@ html.dark-mode {
     margin: 0 1px;
 }
 
-/* ============================================================
-   NOTIFICATIONS
-   ============================================================ */
 .notification-wrapper {
     position: relative;
     flex-shrink: 0;
@@ -648,58 +652,6 @@ html.dark-mode {
     overflow-y: auto;
 }
 
-.notification-item {
-    display: flex;
-    gap: 8px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--topbar-border);
-    transition: background 0.2s ease;
-    cursor: pointer;
-}
-
-.notification-item:hover {
-    background: var(--topbar-hover);
-}
-
-.notification-item .notif-icon {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    flex-shrink: 0;
-}
-
-.notification-item .notif-icon.info { background: #DBEAFE; color: #2563EB; }
-.notification-item .notif-icon.success { background: #D1FAE5; color: #059669; }
-.notification-item .notif-icon.warning { background: #FEF3C7; color: #D97706; }
-.notification-item .notif-icon.danger { background: #FEE2E2; color: #DC2626; }
-
-.notification-item .notif-content {
-    flex: 1;
-}
-
-.notification-item .notif-title {
-    font-weight: 500;
-    font-size: 11px;
-    color: var(--topbar-text);
-}
-
-.notification-item .notif-message {
-    font-size: 10px;
-    color: var(--topbar-text-secondary);
-}
-
-.notification-item .notif-time {
-    font-size: 9px;
-    color: var(--topbar-text-light);
-}
-
-/* ============================================================
-   USER PROFILE
-   ============================================================ */
 .user-profile {
     display: flex;
     align-items: center;
@@ -734,7 +686,6 @@ html.dark-mode {
     font-weight: 600;
     font-size: 11px;
     color: var(--topbar-text);
-    transition: color 0.3s ease;
 }
 
 .user-profile .user-role {
@@ -812,9 +763,6 @@ html.dark-mode {
     color: #DC2626;
 }
 
-/* ============================================================
-   MAIN WRAPPER COMPENSATION
-   ============================================================ */
 .main-wrapper {
     margin-left: 260px;
     padding-top: 72px;
@@ -823,9 +771,6 @@ html.dark-mode {
     flex-direction: column;
 }
 
-/* ============================================================
-   RESPONSIVE - FIXED
-   ============================================================ */
 @media (max-width: 1200px) {
     .global-search { min-width: 80px; max-width: 140px; }
     .branch-selector select { min-width: 50px; max-width: 80px; font-size: 11px; }
@@ -906,6 +851,26 @@ html.dark-mode {
 document.addEventListener('DOMContentLoaded', function() {
     
     // ============================================================
+    // BRANCH SWITCH FUNCTION - USES branch_id CONSISTENTLY
+    // ============================================================
+    window.switchBranch = function(branchId) {
+        var currentUrl = window.location.href;
+        var url = new URL(currentUrl);
+        
+        // Always remove both params first - clean slate
+        url.searchParams.delete('branch');
+        url.searchParams.delete('branch_id');
+        
+        // Add branch_id only if not 0 (All Branches)
+        if (branchId != 0) {
+            url.searchParams.set('branch_id', branchId);
+        }
+        
+        // Navigate
+        window.location.href = url.toString();
+    };
+    
+    // ============================================================
     // SIDEBAR TOGGLE
     // ============================================================
     const topbarToggle = document.getElementById('topbarToggle');
@@ -924,7 +889,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // DARK MODE - COMPLETE
+    // DARK MODE
     // ============================================================
     const darkToggle = document.getElementById('darkModeToggle');
     const darkIcon = document.getElementById('darkModeIcon');
@@ -952,9 +917,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             localStorage.setItem('darkMode', isDark);
-            console.log('🌙 Dark Mode:', isDark ? 'ON' : 'OFF');
-            
-            // Dispatch event for other pages to sync
             document.dispatchEvent(new CustomEvent('darkModeChanged', { detail: { isDark: isDark } }));
         });
     }
@@ -1082,10 +1044,5 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     updateLiveDateTime();
     setInterval(updateLiveDateTime, 1000);
-    
-    console.log('%c 🏪 Wakala System v2.0 (DARK MODE READY)',
-        'background:#8B0000; color:white; padding:8px 16px; border-radius:4px; font-size:14px; font-weight:bold;');
-    console.log('%c 🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'),
-        'color:#6B7280; font-size:12px;');
 });
 </script>

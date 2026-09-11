@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/branches/edit.php
-// WAKALA FINANCIAL SYSTEM - EDIT BRANCH
-// FIXED: No variable collision with topbar
+// FILE: modules/branches/providers_edit.php
+// WAKALA FINANCIAL SYSTEM - EDIT BRANCH PROVIDER
+// FIXED: Uses 'branch_id', no variable collision with topbar
 // ================================================================
 
 require_once '../../config/config.php';
@@ -19,21 +19,30 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
 }
 
 $role = $_SESSION['role'] ?? 'employee';
-$user_id = $_SESSION['user_id'];
-
-// Check permission - Only admin and super_admin can access
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
 
-// ============================================================
-// GET BRANCH ID
-// ============================================================
-$branch_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+$user_id = $_SESSION['user_id'];
 
-if ($branch_id <= 0) {
-    $_SESSION['error_message'] = 'Invalid branch selected.';
+// ============================================================
+// GET IDs - USES branch_id FIRST (MATCHES TOPBAR)
+// ============================================================
+$provider_link_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+$branch_id = 0;
+
+// Primary: branch_id
+if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
+    $branch_id = intval($_GET['branch_id']);
+}
+// Fallback: branch (for backward compatibility)
+elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0' && intval($_GET['branch']) > 0) {
+    $branch_id = intval($_GET['branch']);
+}
+
+if ($provider_link_id <= 0 || $branch_id <= 0) {
+    $_SESSION['error_message'] = 'Invalid provider or branch selected.';
     header('Location: index.php');
     exit();
 }
@@ -42,33 +51,43 @@ if ($branch_id <= 0) {
 // NO SESSION FORCING - URL IS SOURCE OF TRUTH
 // ============================================================
 unset($_SESSION['selected_branch']);
+unset($_SESSION['providers_branch_id']);
 
 // ============================================================
-// GET BRANCH DATA (uses $edit_branch to avoid collision)
+// GET BRANCH DETAILS (uses $edit_branch to avoid collision)
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+$stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
 $stmt->execute([$branch_id]);
 $edit_branch = $stmt->fetch();
 
 if (!$edit_branch) {
-    $_SESSION['error_message'] = 'Branch not found.';
+    $_SESSION['error_message'] = 'Branch not found or inactive.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET EMPLOYEES FOR MANAGER DROPDOWN
+// GET BRANCH PROVIDER DETAILS
 // ============================================================
-$stmt = $db->prepare("SELECT id, full_name FROM employees WHERE is_active = 1 ORDER BY full_name");
-$stmt->execute();
-$edit_employees = $stmt->fetchAll();
+$stmt = $db->prepare("SELECT bp.*, p.provider_name, p.provider_type, p.icon_class, p.color_code 
+                      FROM branch_providers bp 
+                      JOIN providers p ON bp.provider_id = p.id 
+                      WHERE bp.id = ? AND bp.branch_id = ?");
+$stmt->execute([$provider_link_id, $branch_id]);
+$provider_link = $stmt->fetch();
+
+if (!$provider_link) {
+    $_SESSION['error_message'] = 'Provider not found in this branch.';
+    header('Location: providers.php?branch_id=' . $branch_id);
+    exit();
+}
 
 // ============================================================
-// GET BRANCH PROVIDERS COUNT
+// GET ALL ACTIVE PROVIDERS (for reference)
 // ============================================================
-$stmt = $db->prepare("SELECT COUNT(*) FROM branch_providers WHERE branch_id = ?");
-$stmt->execute([$branch_id]);
-$provider_count = $stmt->fetchColumn();
+$stmt = $db->prepare("SELECT * FROM providers WHERE is_active = 1 ORDER BY provider_name");
+$stmt->execute();
+$all_providers = $stmt->fetchAll();
 
 // ============================================================
 // HANDLE FORM SUBMISSION
@@ -78,69 +97,37 @@ $show_error = false;
 $success_message = '';
 $show_success = false;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'edit_branch') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'edit_provider') {
     try {
-        $branch_code = strtoupper(trim($_POST['branch_code'] ?? ''));
-        $branch_name = trim($_POST['branch_name'] ?? '');
-        $location = trim($_POST['location'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $email = trim($_POST['email'] ?? '');
-        $manager_id = intval($_POST['manager_id'] ?? 0);
+        $provider_code = strtoupper(trim($_POST['provider_code'] ?? ''));
         $is_active = intval($_POST['is_active'] ?? 1);
         
-        // Validate
-        if (empty($branch_code)) {
-            throw new Exception('Please enter a branch code.');
-        }
-        if (empty($branch_name)) {
-            throw new Exception('Please enter a branch name.');
+        if (empty($provider_code)) {
+            throw new Exception('Please enter a provider code.');
         }
         
-        // Check if branch code already exists (excluding current)
-        $check_stmt = $db->prepare("SELECT id FROM branches WHERE branch_code = ? AND id != ?");
-        $check_stmt->execute([$branch_code, $branch_id]);
+        // Check if same code exists for same provider (duplicate code check) - excluding current
+        $check_stmt = $db->prepare("SELECT id FROM branch_providers WHERE branch_id = ? AND provider_code = ? AND id != ?");
+        $check_stmt->execute([$branch_id, $provider_code, $provider_link_id]);
         if ($check_stmt->fetch()) {
-            throw new Exception('Branch code "' . $branch_code . '" already exists. Please use a different code.');
+            throw new Exception('Provider code "' . $provider_code . '" is already in use in this branch. Please use a different code.');
         }
         
-        // Check if branch name already exists (excluding current)
-        $check_stmt = $db->prepare("SELECT id FROM branches WHERE branch_name = ? AND id != ?");
-        $check_stmt->execute([$branch_name, $branch_id]);
-        if ($check_stmt->fetch()) {
-            throw new Exception('Branch name "' . $branch_name . '" already exists. Please use a different name.');
-        }
-        
-        // Update branch
-        $update_stmt = $db->prepare("UPDATE branches 
-            SET branch_code = ?, branch_name = ?, location = ?, phone = ?, email = ?, manager_id = ?, is_active = ? 
-            WHERE id = ?");
-        
-        $update_stmt->execute([
-            $branch_code,
-            $branch_name,
-            $location,
-            $phone,
-            $email,
-            $manager_id > 0 ? $manager_id : null,
-            $is_active,
-            $branch_id
-        ]);
+        // Update branch provider
+        $update_stmt = $db->prepare("UPDATE branch_providers SET provider_code = ?, is_active = ? WHERE id = ?");
+        $update_stmt->execute([$provider_code, $is_active, $provider_link_id]);
         
         // Log activity
-        logActivity($user_id, 'Edit Branch', 'Branches', $branch_id, '', 'Updated branch: ' . $branch_name);
+        logActivity($user_id, 'Edit Branch Provider', 'Branch Providers', $branch_id, '', 
+                    "Updated provider code to $provider_code for {$edit_branch['branch_name']}");
         
-        $_SESSION['success_message'] = 'Branch "' . $branch_name . '" updated successfully!';
-        header('Location: view.php?id=' . $branch_id);
+        $_SESSION['success_message'] = 'Provider updated successfully!';
+        header('Location: providers.php?branch_id=' . $branch_id);
         exit();
         
     } catch (Exception $e) {
         $error_message = $e->getMessage();
         $show_error = true;
-        
-        // Refresh branch data after error
-        $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-        $stmt->execute([$branch_id]);
-        $edit_branch = $stmt->fetch();
     }
 }
 
@@ -153,14 +140,14 @@ include_once '../../includes/admin_topbar.php';
     <div class="main-content">
         
         <!-- ============================================================
-        PERSISTENT RED BRANCH STATUS CARD
+        PERSISTENT RED BRANCH CARD
         ============================================================ -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
                 <i class="fas fa-edit"></i>
             </div>
             <div class="branch-status-info">
-                <span class="branch-status-label">Editing Branch</span>
+                <span class="branch-status-label">Editing Provider For</span>
                 <span class="branch-status-name"><?php echo htmlspecialchars($edit_branch['branch_name']); ?></span>
                 <span class="branch-status-code"><?php echo htmlspecialchars($edit_branch['branch_code']); ?></span>
                 <?php if (!empty($edit_branch['location'])): ?>
@@ -170,28 +157,17 @@ include_once '../../includes/admin_topbar.php';
                     </span>
                 <?php endif; ?>
             </div>
-            <div class="branch-status-stats">
-                <div class="status-stat-item">
-                    <span class="status-stat-number"><?php echo $provider_count; ?></span>
-                    <span class="status-stat-label">Providers</span>
-                </div>
-            </div>
-            <a href="view.php?id=<?php echo $branch_id; ?>" class="btn-back-card">
+            <a href="providers.php?branch_id=<?php echo $branch_id; ?>" class="btn-back-card">
                 <i class="fas fa-arrow-left"></i>
-                <span>Back to View</span>
+                <span>Back to Providers</span>
             </a>
         </div>
 
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-edit"></i> Edit Branch</h2>
-                <span class="page-subtitle">ID: #<?php echo $branch_id; ?></span>
-            </div>
-            <div class="page-header-right">
-                <a href="view.php?id=<?php echo $branch_id; ?>" class="btn btn-view">
-                    <i class="fas fa-eye"></i> View
-                </a>
+                <h2><i class="fas fa-edit"></i> Edit Provider</h2>
+                <span class="page-subtitle"><?php echo htmlspecialchars($provider_link['provider_name']); ?></span>
             </div>
         </div>
 
@@ -210,145 +186,75 @@ include_once '../../includes/admin_topbar.php';
         FORM
         ============================================================ -->
         <div class="form-container">
-            <form method="POST" action="" class="main-form" id="branchForm" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="edit_branch">
+            <form method="POST" action="" class="main-form" onsubmit="return validateForm()">
+                <input type="hidden" name="action" value="edit_provider">
                 
-                <!-- ===== BASIC INFORMATION ===== -->
                 <div class="form-section">
                     <div class="section-header">
-                        <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
+                        <h3><i class="fas fa-info-circle"></i> Provider Information</h3>
                         <span class="section-badge">Required fields marked with *</span>
                     </div>
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="branch_code">Branch Code <span class="required">*</span></label>
+                            <label>Provider</label>
+                            <div class="display-group">
+                                <div class="display-icon" style="background: <?php echo $provider_link['color_code'] ?? '#0B5ED7'; ?>;">
+                                    <i class="<?php echo $provider_link['icon_class'] ?? 'fas fa-university'; ?>"></i>
+                                </div>
+                                <span class="display-value"><?php echo htmlspecialchars($provider_link['provider_name']); ?></span>
+                                <span class="display-type"><?php echo ucfirst(str_replace('_', ' ', $provider_link['provider_type'] ?? 'Bank')); ?></span>
+                            </div>
+                            <small>Provider cannot be changed. Delete and re-add if needed.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="provider_code">Provider Code <span class="required">*</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-tag"></i></span>
-                                <input type="text" id="branch_code" name="branch_code" 
-                                       value="<?php echo htmlspecialchars($edit_branch['branch_code']); ?>" 
-                                       class="form-control" placeholder="e.g., DSM" required>
+                                <input type="text" id="provider_code" name="provider_code" 
+                                       value="<?php echo htmlspecialchars($provider_link['provider_code']); ?>" 
+                                       class="form-control" placeholder="e.g., MPESA001" required>
                             </div>
-                            <small>Unique code for the branch (e.g., DSM, KND, MBZ)</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="branch_name">Branch Name <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <input type="text" id="branch_name" name="branch_name" 
-                                       value="<?php echo htmlspecialchars($edit_branch['branch_name']); ?>" 
-                                       class="form-control" placeholder="e.g., Dar es Salaam Branch" required>
-                            </div>
-                            <small>Full name of the branch</small>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ===== CONTACT INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-address-card"></i> Contact Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="location">Location</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-map-marker-alt"></i></span>
-                                <input type="text" id="location" name="location" 
-                                       value="<?php echo htmlspecialchars($edit_branch['location'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., Dar es Salaam, Tanzania">
-                            </div>
-                            <small>Physical address of the branch</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="phone">Phone Number</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-phone"></i></span>
-                                <input type="text" id="phone" name="phone" 
-                                       value="<?php echo htmlspecialchars($edit_branch['phone'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., +255 700 000 000">
-                            </div>
-                            <small>Contact phone number</small>
+                            <small>
+                                <strong>Note:</strong> Code must be unique within this branch.
+                                <br>Current code: <strong><?php echo htmlspecialchars($provider_link['provider_code']); ?></strong>
+                            </small>
                         </div>
                     </div>
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="email">Email Address</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-envelope"></i></span>
-                                <input type="email" id="email" name="email" 
-                                       value="<?php echo htmlspecialchars($edit_branch['email'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., branch@wakala.com">
-                            </div>
-                            <small>Official email address for the branch</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="manager_id">Branch Manager</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user-tie"></i></span>
-                                <select id="manager_id" name="manager_id" class="form-control">
-                                    <option value="0">Select Manager</option>
-                                    <?php foreach ($edit_employees as $emp): ?>
-                                        <option value="<?php echo $emp['id']; ?>" <?php echo ($edit_branch['manager_id'] == $emp['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($emp['full_name']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <small>Assign a manager to this branch</small>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ===== STATUS & ADDITIONAL ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-cog"></i> Status &amp; Additional</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="is_active">Branch Status</label>
+                            <label for="is_active">Status</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-power-off"></i></span>
                                 <select id="is_active" name="is_active" class="form-control">
-                                    <option value="1" <?php echo ($edit_branch['is_active'] == 1) ? 'selected' : ''; ?>>Active</option>
-                                    <option value="0" <?php echo ($edit_branch['is_active'] == 0) ? 'selected' : ''; ?>>Inactive</option>
+                                    <option value="1" <?php echo ($provider_link['is_active'] == 1) ? 'selected' : ''; ?>>Active</option>
+                                    <option value="0" <?php echo ($provider_link['is_active'] == 0) ? 'selected' : ''; ?>>Inactive</option>
                                 </select>
                             </div>
-                            <small>Active branches are visible and operational</small>
+                            <small>Inactive providers will not be shown in reports</small>
                         </div>
                         <div class="form-group">
                             <label>Branch Info</label>
                             <div class="info-display">
                                 <div class="info-item">
-                                    <span class="info-label">Created:</span>
-                                    <span class="info-value"><?php echo date('d M Y H:i', strtotime($edit_branch['created_at'])); ?></span>
+                                    <span class="info-label">Branch:</span>
+                                    <span class="info-value"><?php echo htmlspecialchars($edit_branch['branch_name']); ?></span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Last Updated:</span>
-                                    <span class="info-value"><?php echo date('d M Y H:i', strtotime($edit_branch['updated_at'])); ?></span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">Providers:</span>
-                                    <span class="info-value"><?php echo $provider_count; ?> assigned</span>
+                                    <span class="info-label">Provider ID:</span>
+                                    <span class="info-value">#<?php echo $provider_link['id']; ?></span>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- ===== FORM ACTIONS ===== -->
                 <div class="form-actions">
                     <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Update Branch
+                        <i class="fas fa-save"></i> Update Provider
                     </button>
-                    <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                        <i class="fas fa-undo"></i> Reset Changes
-                    </button>
-                    <a href="view.php?id=<?php echo $branch_id; ?>" class="btn btn-cancel">
+                    <a href="providers.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-cancel">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                 </div>
@@ -367,51 +273,39 @@ STYLES
    CSS VARIABLES
    ============================================================ */
 :root {
-    --form-bg: #f3f4f6;
-    --form-card-bg: #FFFFFF;
-    --form-text: #1F2937;
-    --form-text-secondary: #6B7280;
-    --form-text-light: #9CA3AF;
-    --form-border: #E5E7EB;
-    --form-input-bg: #F9FAFB;
-    --form-hover: #F3F4F6;
-    --form-shadow: rgba(0,0,0,0.06);
-    --form-shadow-lg: rgba(0,0,0,0.12);
-    --form-success-bg: #D1FAE5;
-    --form-success-text: #065F46;
-    --form-success-border: #A7F3D0;
-    --form-danger-bg: #FEE2E2;
-    --form-danger-text: #991B1B;
-    --form-danger-border: #FECACA;
+    --bp-form-bg: #f3f4f6;
+    --bp-form-card-bg: #FFFFFF;
+    --bp-form-text: #1F2937;
+    --bp-form-text-secondary: #6B7280;
+    --bp-form-text-light: #9CA3AF;
+    --bp-form-border: #E5E7EB;
+    --bp-form-input-bg: #F9FAFB;
+    --bp-form-hover: #F3F4F6;
+    --bp-form-shadow: rgba(0,0,0,0.06);
+    --bp-form-shadow-lg: rgba(0,0,0,0.12);
 }
 
 html.dark-mode {
-    --form-bg: #0f172a;
-    --form-card-bg: #1E293B;
-    --form-text: #F1F5F9;
-    --form-text-secondary: #94A3B8;
-    --form-text-light: #64748B;
-    --form-border: #334155;
-    --form-input-bg: #374151;
-    --form-hover: #2D3A4F;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.5);
-    --form-success-bg: #065F46;
-    --form-success-text: #D1FAE5;
-    --form-success-border: #047857;
-    --form-danger-bg: #7F1D1D;
-    --form-danger-text: #FEE2E2;
-    --form-danger-border: #991B1B;
+    --bp-form-bg: #0f172a;
+    --bp-form-card-bg: #1E293B;
+    --bp-form-text: #F1F5F9;
+    --bp-form-text-secondary: #94A3B8;
+    --bp-form-text-light: #64748B;
+    --bp-form-border: #334155;
+    --bp-form-input-bg: #374151;
+    --bp-form-hover: #2D3A4F;
+    --bp-form-shadow: rgba(0,0,0,0.3);
+    --bp-form-shadow-lg: rgba(0,0,0,0.5);
 }
 
 body {
-    background: var(--form-bg) !important;
-    color: var(--form-text);
+    background: var(--bp-form-bg) !important;
+    color: var(--bp-form-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.main-wrapper { background: var(--form-bg) !important; }
-.main-content { background: var(--form-bg) !important; }
+.main-wrapper { background: var(--bp-form-bg) !important; }
+.main-content { background: var(--bp-form-bg) !important; }
 
 /* ============================================================
    PERSISTENT RED BRANCH STATUS CARD
@@ -516,39 +410,6 @@ body {
     color: rgba(255, 255, 255, 0.7);
 }
 
-.branch-status-stats {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    position: relative;
-    z-index: 1;
-}
-
-.status-stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.status-stat-number {
-    font-size: 20px;
-    font-weight: 700;
-    color: #FFFFFF;
-    line-height: 1.2;
-}
-
-.status-stat-label {
-    font-size: 9px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.6);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
 .btn-back-card {
     display: flex;
     align-items: center;
@@ -591,7 +452,7 @@ body {
 .page-header-left h2 {
     font-size: 20px;
     font-weight: 700;
-    color: var(--form-text);
+    color: var(--bp-form-text);
     margin: 0;
 }
 
@@ -599,39 +460,10 @@ body {
 
 .page-subtitle {
     font-size: 13px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
+    color: var(--bp-form-text-secondary);
+    background: var(--bp-form-hover);
     padding: 3px 12px;
     border-radius: 12px;
-}
-
-.btn-view {
-    background: #DBEAFE;
-    color: #1D4ED8;
-    padding: 9px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-}
-
-.btn-view:hover {
-    background: #BFDBFE;
-    transform: translateY(-1px);
-}
-
-html.dark-mode .btn-view {
-    background: #1E3A5F;
-    color: #60A5FA;
-}
-
-html.dark-mode .btn-view:hover {
-    background: #3B82F6;
-    color: #FFFFFF;
 }
 
 /* ============================================================
@@ -650,20 +482,19 @@ html.dark-mode .btn-view:hover {
 }
 
 .alert-danger {
-    background: var(--form-danger-bg);
-    color: var(--form-danger-text);
-    border: 1px solid var(--form-danger-border);
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
 }
 
-.alert-success {
-    background: var(--form-success-bg);
-    color: var(--form-success-text);
-    border: 1px solid var(--form-success-border);
+html.dark-mode .alert-danger {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border: 1px solid #991B1B;
 }
 
 .alert i { font-size: 20px; flex-shrink: 0; }
 .alert span { flex: 1; }
-
 .alert-close {
     background: transparent;
     border: none;
@@ -674,7 +505,6 @@ html.dark-mode .btn-view:hover {
     opacity: 0.6;
     transition: opacity 0.2s;
 }
-
 .alert-close:hover { opacity: 1; }
 
 @keyframes slideDown {
@@ -686,10 +516,10 @@ html.dark-mode .btn-view:hover {
    FORM CONTAINER
    ============================================================ */
 .form-container {
-    background: var(--form-card-bg);
+    background: var(--bp-form-card-bg);
     border-radius: 12px;
-    box-shadow: 0 1px 3px var(--form-shadow);
-    border: 1px solid var(--form-border);
+    box-shadow: 0 1px 3px var(--bp-form-shadow);
+    border: 1px solid var(--bp-form-border);
     overflow: hidden;
     transition: all 0.3s ease;
     animation: fadeInUp 0.4s ease forwards;
@@ -697,13 +527,10 @@ html.dark-mode .btn-view:hover {
 
 .form-section {
     padding: 20px 24px;
-    border-bottom: 1px solid var(--form-border);
-    transition: all 0.3s ease;
+    border-bottom: 1px solid var(--bp-form-border);
 }
 
-.form-section:last-child {
-    border-bottom: none;
-}
+.form-section:last-child { border-bottom: none; }
 
 .section-header {
     display: flex;
@@ -715,25 +542,22 @@ html.dark-mode .btn-view:hover {
 .section-header h3 {
     font-size: 16px;
     font-weight: 600;
-    color: var(--form-text);
+    color: var(--bp-form-text);
     margin: 0;
 }
 
-.section-header h3 i {
-    color: #DC2626;
-    margin-right: 8px;
-}
+.section-header h3 i { color: #DC2626; margin-right: 8px; }
 
 .section-badge {
     font-size: 11px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
+    color: var(--bp-form-text-secondary);
+    background: var(--bp-form-hover);
     padding: 2px 12px;
     border-radius: 12px;
 }
 
 /* ============================================================
-   FORM ROWS
+   FORM ROWS & GROUPS
    ============================================================ */
 .form-row {
     display: grid;
@@ -750,13 +574,10 @@ html.dark-mode .btn-view:hover {
 .form-group label {
     font-size: 13px;
     font-weight: 600;
-    color: var(--form-text);
+    color: var(--bp-form-text);
 }
 
-.form-group label .required {
-    color: #DC2626;
-    font-weight: 700;
-}
+.form-group label .required { color: #DC2626; font-weight: 700; }
 
 .input-group {
     position: relative;
@@ -767,7 +588,7 @@ html.dark-mode .btn-view:hover {
 .input-icon {
     position: absolute;
     left: 12px;
-    color: var(--form-text-light);
+    color: var(--bp-form-text-light);
     font-size: 14px;
     z-index: 1;
     pointer-events: none;
@@ -776,24 +597,21 @@ html.dark-mode .btn-view:hover {
 .input-group .form-control {
     padding: 10px 14px 10px 40px;
     border-radius: 8px;
-    border: 1px solid var(--form-border);
+    border: 1px solid var(--bp-form-border);
     font-size: 14px;
     outline: none;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
-    background: var(--form-input-bg);
-    color: var(--form-text);
+    background: var(--bp-form-input-bg);
+    color: var(--bp-form-text);
     width: 100%;
 }
 
-.input-group .form-control::placeholder {
-    color: var(--form-text-light);
-}
+.input-group .form-control::placeholder { color: var(--bp-form-text-light); }
 
 .input-group .form-control:focus {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-    background: var(--form-card-bg);
 }
 
 .input-group select.form-control {
@@ -811,30 +629,71 @@ html.dark-mode .input-group select.form-control {
 }
 
 .input-group select.form-control option {
-    background: var(--form-card-bg);
-    color: var(--form-text);
+    background: var(--bp-form-card-bg);
+    color: var(--bp-form-text);
 }
 
 .form-group small {
     font-size: 12px;
-    color: var(--form-text-secondary);
+    color: var(--bp-form-text-secondary);
     margin-top: 2px;
     line-height: 1.5;
+}
+
+.form-group small strong { color: #DC2626; }
+
+/* ============================================================
+   DISPLAY GROUP (Read-only provider info)
+   ============================================================ */
+.display-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bp-form-hover);
+    border-radius: 8px;
+    border: 1px solid var(--bp-form-border);
+}
+
+.display-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.display-value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--bp-form-text);
+}
+
+.display-type {
+    font-size: 11px;
+    color: var(--bp-form-text-secondary);
+    background: var(--bp-form-card-bg);
+    padding: 1px 10px;
+    border-radius: 12px;
 }
 
 /* ============================================================
    INFO DISPLAY
    ============================================================ */
 .info-display {
-    background: var(--form-hover);
+    background: var(--bp-form-hover);
     border-radius: 8px;
     padding: 12px 16px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border: 1px solid var(--form-border);
     height: 100%;
     justify-content: center;
+    border: 1px solid var(--bp-form-border);
 }
 
 .info-item {
@@ -846,13 +705,13 @@ html.dark-mode .input-group select.form-control {
 
 .info-label {
     font-size: 12px;
-    color: var(--form-text-secondary);
+    color: var(--bp-form-text-secondary);
 }
 
 .info-value {
     font-size: 13px;
     font-weight: 500;
-    color: var(--form-text);
+    color: var(--bp-form-text);
 }
 
 /* ============================================================
@@ -862,9 +721,8 @@ html.dark-mode .input-group select.form-control {
     display: flex;
     gap: 12px;
     padding: 16px 24px;
-    border-top: 1px solid var(--form-border);
-    background: var(--form-hover);
-    flex-wrap: wrap;
+    border-top: 1px solid var(--bp-form-border);
+    background: var(--bp-form-hover);
 }
 
 .btn {
@@ -899,21 +757,10 @@ html.dark-mode .input-group select.form-control {
     transform: none;
 }
 
-.btn-reset {
-    background: var(--form-card-bg);
-    color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
-}
-
-.btn-reset:hover {
-    background: var(--form-border);
-    color: var(--form-text);
-}
-
 .btn-cancel {
-    background: var(--form-card-bg);
-    color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
+    background: var(--bp-form-card-bg);
+    color: var(--bp-form-text-secondary);
+    border: 1px solid var(--bp-form-border);
 }
 
 .btn-cancel:hover {
@@ -951,11 +798,6 @@ html.dark-mode .btn-cancel:hover {
         width: 100%;
     }
     
-    .branch-status-stats {
-        width: 100%;
-        justify-content: center;
-    }
-    
     .btn-back-card {
         width: 100%;
         justify-content: center;
@@ -972,17 +814,15 @@ html.dark-mode .btn-cancel:hover {
         gap: 12px;
     }
     
-    .form-section {
-        padding: 16px 14px;
+    .form-section { padding: 16px 14px; }
+    
+    .form-actions { 
+        flex-direction: column; 
     }
     
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        justify-content: center;
-        width: 100%;
+    .form-actions .btn { 
+        justify-content: center; 
+        width: 100%; 
     }
     
     .section-header {
@@ -1029,18 +869,11 @@ html.dark-mode .btn-cancel:hover {
 // VALIDATE FORM
 // ============================================================
 function validateForm() {
-    var branchCode = document.getElementById('branch_code');
-    var branchName = document.getElementById('branch_name');
+    var providerCode = document.getElementById('provider_code');
     
-    if (!branchCode || branchCode.value.trim() === '') {
-        alert('Please enter a branch code.');
-        if (branchCode) branchCode.focus();
-        return false;
-    }
-    
-    if (!branchName || branchName.value.trim() === '') {
-        alert('Please enter a branch name.');
-        if (branchName) branchName.focus();
+    if (!providerCode || providerCode.value.trim() === '') {
+        alert('Please enter a provider code.');
+        if (providerCode) providerCode.focus();
         return false;
     }
     
@@ -1049,13 +882,6 @@ function validateForm() {
     submitBtn.disabled = true;
     
     return true;
-}
-
-// ============================================================
-// CONFIRM RESET
-// ============================================================
-function confirmReset() {
-    return confirm('Are you sure you want to reset the form? All entered data will be lost.');
 }
 
 // ============================================================

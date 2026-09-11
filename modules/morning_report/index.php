@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: modules/morning_report/index.php
 // WAKALA SYSTEM - MORNING REPORT LIST
-// WITH DARK MODE SUPPORT
+// SHOWS ONLY TODAY'S REPORTS BY DEFAULT
 // ================================================================
 
 // ============================================================
@@ -61,10 +61,24 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// DATE FILTER
+// DATE FILTER - DEFAULT TO TODAY ONLY
 // ============================================================
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
-$to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
+$today = date('Y-m-d');
+
+// Check if date filter is applied
+$from_date = isset($_GET['from_date']) && !empty($_GET['from_date']) 
+    ? $_GET['from_date'] 
+    : $today;
+
+$to_date = isset($_GET['to_date']) && !empty($_GET['to_date']) 
+    ? $_GET['to_date'] 
+    : $today;
+
+// Check if this is a filtered view (not default today)
+$is_filtered = isset($_GET['from_date']) || isset($_GET['to_date']) || isset($_GET['branch']);
+
+// Check if from_date and to_date are same (today only)
+$is_today_only = ($from_date === $today && $to_date === $today);
 
 // ============================================================
 // GET MORNING REPORTS WITH FILTERS
@@ -124,6 +138,14 @@ $stmt->execute($params_summary);
 $summary = $stmt->fetch();
 
 // ============================================================
+// CHECK IF THERE'S A REPORT FOR TODAY
+// ============================================================
+$today_report_stmt = $db->prepare("SELECT COUNT(*) FROM morning_reports 
+                                   WHERE report_date = ? AND branch_id = ?");
+$today_report_stmt->execute([$today, $selected_branch > 0 ? $selected_branch : 1]);
+$has_today_report = $today_report_stmt->fetchColumn() > 0;
+
+// ============================================================
 // INCLUDE HEADER, SIDEBAR & TOPBAR
 // ============================================================
 include_once '../../includes/admin_header.php';
@@ -142,18 +164,31 @@ PAGE CONTENT
             <i class="fas fa-building"></i>
             <span class="branch-label">Current Branch:</span>
             <span class="branch-name"><?php echo htmlspecialchars($selected_branch_name); ?></span>
+            <?php if ($is_today_only): ?>
+                <span class="today-badge" style="background:rgba(255,255,255,0.2); padding:2px 12px; border-radius:12px; font-size:12px;">
+                    <i class="fas fa-calendar-day"></i> Today
+                </span>
+            <?php endif; ?>
         </div>
 
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-sun" style="color:#bb0404;"></i> Morning Reports</h2>
-                <p class="text-muted">Manage and view all morning reports</p>
+                <p class="text-muted">
+                    <?php if ($is_today_only): ?>
+                        Showing today's reports (<?php echo date('d M Y'); ?>)
+                    <?php else: ?>
+                        Showing reports from <?php echo date('d M Y', strtotime($from_date)); ?> to <?php echo date('d M Y', strtotime($to_date)); ?>
+                    <?php endif; ?>
+                </p>
             </div>
             <div class="header-right">
-                <a href="add.php" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add Report
-                </a>
+                <?php if (!$has_today_report || $selected_branch == 0): ?>
+                    <a href="add.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add Report
+                    </a>
+                <?php endif; ?>
                 <!-- ===== EXPORT DROPDOWN ===== -->
                 <div class="dropdown export-dropdown">
                     <button class="btn btn-success dropdown-toggle" type="button" id="exportDropdown" onclick="toggleExportDropdown()">
@@ -179,21 +214,23 @@ PAGE CONTENT
             </div>
         </div>
 
-        <!-- ===== FILTERS ===== -->
+        <!-- ===== FILTERS BAR ===== -->
         <div class="filters-bar">
             <form method="GET" action="" class="filters-form" id="filterForm">
                 <div class="filter-group">
                     <label>From</label>
-                    <input type="date" name="from_date" value="<?php echo $from_date; ?>" class="form-control">
+                    <input type="date" name="from_date" value="<?php echo $from_date; ?>" class="form-control" 
+                           onchange="document.getElementById('filterForm').submit();">
                 </div>
                 <div class="filter-group">
                     <label>To</label>
-                    <input type="date" name="to_date" value="<?php echo $to_date; ?>" class="form-control">
+                    <input type="date" name="to_date" value="<?php echo $to_date; ?>" class="form-control"
+                           onchange="document.getElementById('filterForm').submit();">
                 </div>
                 <?php if ($role == 'admin' || $role == 'super_admin'): ?>
                 <div class="filter-group">
                     <label>Branch</label>
-                    <select name="branch" class="form-control">
+                    <select name="branch" class="form-control" onchange="document.getElementById('filterForm').submit();">
                         <option value="0">All Branches</option>
                         <?php foreach ($branches as $b): ?>
                             <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
@@ -204,14 +241,21 @@ PAGE CONTENT
                 </div>
                 <?php endif; ?>
                 <div class="filter-group">
-                    <button type="submit" class="btn btn-filter">
-                        <i class="fas fa-search"></i> Filter
-                    </button>
                     <a href="index.php" class="btn btn-reset">
-                        <i class="fas fa-undo"></i> Reset
+                        <i class="fas fa-undo"></i> Today
                     </a>
                 </div>
             </form>
+            <div class="filter-helper">
+                <span class="helper-text">
+                    <i class="fas fa-info-circle"></i> 
+                    <?php if ($is_today_only): ?>
+                        Showing only today's reports. Use calendar to view past reports.
+                    <?php else: ?>
+                        Showing filtered results. <a href="index.php" style="color:#bb0404; font-weight:600;">Click here</a> to return to today's reports.
+                    <?php endif; ?>
+                </span>
+            </div>
         </div>
 
         <!-- ===== SUMMARY CARDS ===== -->
@@ -265,17 +309,25 @@ PAGE CONTENT
                             <th>Float</th>
                             <th>Cash</th>
                             <th>Total Stock</th>
+                            <th>Source</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (count($reports) > 0): ?>
                             <?php $counter = 1; ?>
-                            <?php foreach ($reports as $report): ?>
-                                <tr>
+                            <?php foreach ($reports as $report): 
+                                $is_editable = ($report['is_locked'] == 0) && ($role == 'super_admin' || $role == 'admin' || ($role == 'employee' && $report['employee_id'] == $user_id));
+                                $is_deletable = ($role == 'super_admin' || $role == 'admin' || ($role == 'employee' && $report['employee_id'] == $user_id));
+                                $is_today_report = ($report['report_date'] === $today);
+                            ?>
+                                <tr class="<?php echo $is_today_report ? 'today-report' : 'past-report'; ?>">
                                     <td><?php echo $counter++; ?></td>
                                     <td>
                                         <span class="report-number"><?php echo htmlspecialchars($report['report_number']); ?></span>
+                                        <?php if ($is_today_report): ?>
+                                            <span class="today-badge-small" style="background:#bb0404; color:white; font-size:9px; padding:1px 6px; border-radius:8px; margin-left:4px;">Today</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td><?php echo date('d M Y', strtotime($report['report_date'])); ?></td>
                                     <td>
@@ -288,31 +340,67 @@ PAGE CONTENT
                                     <td class="text-success"><?php echo formatCurrency($report['cash_balance'] ?? 0); ?></td>
                                     <td class="text-info font-bold"><?php echo formatCurrency(($report['cumm_total'] ?? 0) + ($report['cash_balance'] ?? 0)); ?></td>
                                     <td>
+                                        <?php if ($report['source_type'] == 'auto_from_evening'): ?>
+                                            <span class="badge-auto" style="background:#F59E0B; color:#FFFFFF; padding:2px 10px; border-radius:12px; font-size:11px; display:inline-block;">
+                                                <i class="fas fa-sync-alt"></i> Auto
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="badge-manual" style="background:#9CA3AF; color:#FFFFFF; padding:2px 10px; border-radius:12px; font-size:11px; display:inline-block;">
+                                                <i class="fas fa-pen"></i> Manual
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
                                         <div class="action-buttons">
                                             <a href="view.php?id=<?php echo $report['id']; ?>" class="btn-action view" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit.php?id=<?php echo $report['id']; ?>" class="btn-action edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
+                                            <?php if ($is_editable && $is_today_report): ?>
+                                                <a href="edit.php?id=<?php echo $report['id']; ?>" class="btn-action edit" title="Edit">
+                                                    <i class="fas fa-edit"></i>
+                                                </a>
+                                            <?php elseif ($is_editable && !$is_today_report): ?>
+                                                <span class="btn-action disabled" title="Cannot edit past reports" style="opacity:0.4; cursor:not-allowed;">
+                                                    <i class="fas fa-edit"></i>
+                                                </span>
+                                            <?php endif; ?>
                                             <a href="print.php?id=<?php echo $report['id']; ?>" class="btn-action print" title="Print" target="_blank">
                                                 <i class="fas fa-print"></i>
                                             </a>
-                                            <button onclick="deleteReport(<?php echo $report['id']; ?>)" class="btn-action delete" title="Delete">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
+                                            <?php if ($is_deletable && $is_today_report): ?>
+                                                <button onclick="deleteReport(<?php echo $report['id']; ?>)" class="btn-action delete" title="Delete">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            <?php elseif ($is_deletable && !$is_today_report): ?>
+                                                <span class="btn-action disabled" title="Cannot delete past reports" style="opacity:0.4; cursor:not-allowed;">
+                                                    <i class="fas fa-trash"></i>
+                                                </span>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="9" class="text-center no-data">
+                                <td colspan="10" class="text-center no-data">
                                     <i class="fas fa-inbox" style="font-size:48px;color:var(--text-light);display:block;margin:20px 0;"></i>
-                                    <p style="color:var(--text-muted);">No morning reports found for the selected filters</p>
-                                    <a href="add.php" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-plus"></i> Add First Report
-                                    </a>
+                                    <p style="color:var(--text-muted);">
+                                        <?php if ($is_today_only): ?>
+                                            No morning report found for today (<?php echo date('d M Y'); ?>)
+                                        <?php else: ?>
+                                            No morning reports found for the selected filters
+                                        <?php endif; ?>
+                                    </p>
+                                    <?php if ($is_today_only || $is_filtered): ?>
+                                        <a href="add.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn btn-primary btn-sm">
+                                            <i class="fas fa-plus"></i> Add Report
+                                        </a>
+                                    <?php endif; ?>
+                                    <?php if (!$is_today_only): ?>
+                                        <a href="index.php" class="btn btn-secondary btn-sm" style="margin-left:8px;">
+                                            <i class="fas fa-calendar-day"></i> View Today
+                                        </a>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endif; ?>
@@ -405,6 +493,7 @@ body {
     align-items: center;
     gap: 12px;
     box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    flex-wrap: wrap;
 }
 
 .branch-card i {
@@ -423,9 +512,114 @@ body {
 }
 
 /* ============================================================
-   DARK MODE TOGGLE - IN HEADER ONLY
+   FILTERS BAR
    ============================================================ */
-/* Dark mode toggle is now in the header (admin_topbar.php) */
+.filters-bar {
+    background: var(--bg-card);
+    padding: 16px 20px;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px var(--shadow-color);
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.filters-form {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.filter-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.filter-helper {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.filter-helper .helper-text {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.filter-helper .helper-text a {
+    color: #bb0404;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.filter-helper .helper-text a:hover {
+    text-decoration: underline;
+}
+
+.form-control {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    transition: all 0.3s ease;
+    min-width: 150px;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #bb0404;
+    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
+}
+
+.btn-filter {
+    background: #bb0404;
+    color: #ffffff;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+}
+
+.btn-filter:hover {
+    background: #8a0303;
+}
+
+.btn-reset {
+    background: var(--bg-table-even);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 500;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s ease;
+}
+
+.btn-reset:hover {
+    background: var(--bg-table-hover);
+}
 
 /* ============================================================
    PAGE HEADER
@@ -609,95 +803,6 @@ body {
 }
 
 /* ============================================================
-   FILTERS BAR
-   ============================================================ */
-.filters-bar {
-    background: var(--bg-card);
-    padding: 16px 20px;
-    border-radius: 10px;
-    box-shadow: 0 1px 3px var(--shadow-color);
-    border: 1px solid var(--border-color);
-    margin-bottom: 20px;
-}
-
-.filters-form {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-}
-
-.filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.filter-group label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.form-control {
-    padding: 8px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-input);
-    transition: all 0.3s ease;
-    min-width: 150px;
-}
-
-.form-control:focus {
-    outline: none;
-    border-color: #bb0404;
-    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
-}
-
-.btn-filter {
-    background: #bb0404;
-    color: #ffffff;
-    border: none;
-    padding: 8px 20px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-}
-
-.btn-filter:hover {
-    background: #8a0303;
-}
-
-.btn-reset {
-    background: var(--bg-table-even);
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-weight: 500;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-}
-
-.btn-reset:hover {
-    background: var(--bg-table-hover);
-}
-
-/* ============================================================
    SUMMARY CARDS
    ============================================================ */
 .summary-cards {
@@ -822,9 +927,6 @@ body {
     font-size: 13px;
 }
 
-/* ============================================================
-   TABLE HEADER - RED BACKGROUND
-   ============================================================ */
 .table thead th {
     background: #bb0404 !important;
     color: #ffffff !important;
@@ -859,6 +961,19 @@ body {
 
 .table tbody tr:nth-child(even):hover {
     background: var(--bg-table-hover);
+}
+
+/* Today vs Past Reports */
+.table tbody tr.today-report {
+    border-left: 3px solid #bb0404;
+}
+
+.table tbody tr.past-report {
+    opacity: 0.85;
+}
+
+.table tbody tr.past-report:hover {
+    opacity: 1;
 }
 
 .table tbody .no-data {
@@ -959,6 +1074,11 @@ body {
 .btn-action.delete:hover {
     background: #991B1B;
     color: #ffffff;
+}
+
+.btn-action.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* ============================================================
@@ -1113,12 +1233,8 @@ JAVASCRIPT
 ============================================================ -->
 <script>
 // ============================================================
-// DARK MODE TOGGLE - Now handled by header
+// DARK MODE TOGGLE
 // ============================================================
-// Dark mode toggle is now in admin_topbar.php
-// The localStorage check below will still work for saved preference
-
-// Check for saved dark mode preference
 document.addEventListener('DOMContentLoaded', function() {
     const darkMode = localStorage.getItem('darkMode');
     if (darkMode === 'enabled') {
@@ -1165,12 +1281,10 @@ function exportData(format) {
 }
 
 function printData() {
-    // Get the table content
     const table = document.getElementById('dataTable');
     const title = 'Morning Reports List';
     const dateRange = document.querySelector('input[name="from_date"]')?.value + ' to ' + document.querySelector('input[name="to_date"]')?.value || '';
     
-    // Create print window
     const printWindow = window.open('', '_blank', 'width=1000,height=600');
     printWindow.document.write('<html><head><title>Morning Reports</title>');
     printWindow.document.write('<style>');
@@ -1188,6 +1302,7 @@ function printData() {
         .text-info { color: #3B82F6; }
         .footer { margin-top: 20px; font-size: 11px; color: #9CA3AF; text-align: center; border-top: 1px solid #E5E7EB; padding-top: 10px; }
         .print-date { float: right; color: #6B7280; font-size: 12px; }
+        .today-badge-small { background: #bb0404; color: white; padding: 1px 6px; border-radius: 8px; font-size: 9px; }
     `);
     printWindow.document.write('</style>');
     printWindow.document.write('</head><body>');
@@ -1199,7 +1314,6 @@ function printData() {
     printWindow.document.write('</body></html>');
     printWindow.document.close();
     
-    // Wait for content to load then print
     printWindow.onload = function() {
         printWindow.print();
         printWindow.close();
@@ -1214,6 +1328,23 @@ function deleteReport(id) {
         window.location.href = 'delete.php?id=' + id;
     }
 }
+
+// Auto-submit form when date changes
+document.addEventListener('DOMContentLoaded', function() {
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    dateInputs.forEach(function(input) {
+        input.addEventListener('change', function() {
+            document.getElementById('filterForm').submit();
+        });
+    });
+    
+    const selectInputs = document.querySelectorAll('select');
+    selectInputs.forEach(function(input) {
+        input.addEventListener('change', function() {
+            document.getElementById('filterForm').submit();
+        });
+    });
+});
 </script>
 
 </body>

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 06, 2026 at 11:57 AM
+-- Generation Time: Sep 09, 2026 at 08:53 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -72,7 +72,21 @@ INSERT INTO `activity_logs` (`id`, `employee_id`, `action`, `module`, `record_id
 (24, 2, 'Add Morning Report', 'Morning Report', 9, '', 'New morning report added for branch: Dar es Salaam Branch', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-22 15:36:19'),
 (25, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-23 02:24:08'),
 (27, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', NULL, '2026-08-23 02:56:11'),
-(29, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-06 12:56:29');
+(29, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-06 12:56:29'),
+(30, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-06 20:18:47'),
+(31, 2, 'Add Morning Report', 'Morning Report', 10, NULL, 'New morning report added for branch: Kinondoni B', NULL, NULL, 1, '2026-09-07 12:41:34'),
+(32, 2, 'Update General Settings', 'Settings', NULL, NULL, '{\"company_name\":\"Mbembati Kelvin L, T\\/A Wakala\",\"company_address\":\"Dodoma, Tanzania\",\"company_phone\":\"+255 795100777\",\"company_email\":\"info@wakala.com\",\"timezone\":\"Africa\\/Dar_es_Salaam\",\"date_format\":\"d-m-Y\"}', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-07 12:44:40'),
+(33, 2, 'Add Morning Report', 'Morning Report', 11, NULL, 'New morning report added for branch: Kariakoo', NULL, NULL, 2, '2026-09-07 12:51:34'),
+(34, 2, 'Add Morning Report', 'Morning Report', 12, NULL, 'New morning report added for branch: Mbezi Beach', NULL, NULL, 3, '2026-09-07 12:52:14'),
+(35, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-07 17:27:52'),
+(36, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-08 23:14:29'),
+(37, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 00:20:55'),
+(38, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 00:21:37'),
+(39, 2, 'Add Morning Report', 'Morning Report', 13, NULL, 'New morning report added for branch: Mbezi Beach', NULL, NULL, 3, '2026-09-09 00:26:27'),
+(40, 2, 'Add Branch Providers', 'Branch Providers', 1, '', 'Added Airtel Money to Kinondoni B', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 01:58:30'),
+(41, 2, 'Delete Branch Provider', 'Branch Providers', 1, '', 'Removed Airtel Money (123421) from Kinondoni B', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 01:58:43'),
+(42, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 02:16:05'),
+(43, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-09 12:40:57');
 
 -- --------------------------------------------------------
 
@@ -112,10 +126,44 @@ CREATE TABLE `branch_providers` (
   `id` int(11) NOT NULL,
   `branch_id` int(11) NOT NULL,
   `provider_id` int(11) NOT NULL,
+  `provider_code` varchar(50) NOT NULL COMMENT 'Unique code for this provider in this branch',
   `is_active` tinyint(4) DEFAULT 1,
   `created_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `branch_providers`
+--
+
+INSERT INTO `branch_providers` (`id`, `branch_id`, `provider_id`, `provider_code`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 'NMB001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(2, 1, 2, 'CRDB001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(3, 1, 3, 'NBC001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(4, 1, 4, 'TPB001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(5, 1, 5, 'SELCOM001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(6, 1, 6, 'MPESA001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(7, 1, 7, 'YAS001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(8, 1, 8, 'AIRTEL001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(9, 1, 9, 'HALOPESA001', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(10, 2, 1, 'NMB002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(11, 2, 2, 'CRDB002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(12, 2, 3, 'NBC002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(13, 2, 4, 'TPB002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(14, 2, 5, 'SELCOM002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(15, 2, 6, 'MPESA002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(16, 2, 7, 'YAS002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(17, 2, 8, 'AIRTEL002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(18, 2, 9, 'HALOPESA002', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(19, 3, 1, 'NMB003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(20, 3, 2, 'CRDB003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(21, 3, 3, 'NBC003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(22, 3, 4, 'TPB003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(23, 3, 5, 'SELCOM003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(24, 3, 6, 'MPESA003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(25, 3, 7, 'YAS003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(26, 3, 8, 'AIRTEL003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(27, 3, 9, 'HALOPESA003', 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36');
 
 -- --------------------------------------------------------
 
@@ -210,13 +258,6 @@ CREATE TABLE `daily_reports` (
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `daily_reports`
---
-
-INSERT INTO `daily_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `provider_id`, `provider_code`, `provider_float`, `provider_cash`, `provider_deposits`, `provider_withdrawals`, `report_date`, `morning_report_id`, `evening_stock_id`, `commission_id`, `morning_total`, `evening_total`, `float_difference`, `total_commission`, `total_deposits`, `total_withdrawals`, `current_float`, `current_cash`, `other_income`, `total_business_income`, `total_expenses`, `total_cash_out`, `total_salaries`, `net_profit`, `net_profit_after_salaries`, `opening_capital`, `additional_capital`, `profit_allocated`, `current_capital`, `created_at`, `updated_at`, `notes`) VALUES
-(3, 'DR-20260822-0001', 2, 'Dar es Salaam Branch', NULL, 1, 'NMB', 5000000.00, 0.00, 0.00, 0.00, '2026-08-22', NULL, NULL, NULL, 54000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, '2026-08-22 15:46:10', '2026-08-22 15:46:10', NULL);
-
 -- --------------------------------------------------------
 
 --
@@ -296,8 +337,8 @@ CREATE TABLE `employees` (
 --
 
 INSERT INTO `employees` (`id`, `employee_id`, `full_name`, `email`, `phone`, `username`, `password_hash`, `role`, `branch`, `branch_id`, `profile_pic`, `base_salary`, `salary_currency`, `hire_date`, `employment_status`, `emergency_contact`, `emergency_phone`, `address`, `is_active`, `last_login`, `created_at`, `updated_at`) VALUES
-(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', 'Main', NULL, 'uploads/profiles/profile_2_1787442383.png', 0.00, 'TSh', NULL, 'active', '', '', '', 1, '2026-09-06 12:56:29', '2026-08-20 14:49:00', '2026-09-06 12:56:29'),
-(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'Main Branch', NULL, NULL, 0.00, 'TSh', NULL, 'active', NULL, NULL, NULL, 1, '2026-08-23 02:56:11', '2026-08-23 02:43:37', '2026-08-23 02:56:11');
+(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', 'Main', NULL, 'uploads/profiles/profile_2_1788773725.png', 0.00, 'TSh', NULL, 'active', '', '', 'TANZANIA', 1, '2026-09-09 12:40:57', '2026-08-20 14:49:00', '2026-09-09 12:40:57'),
+(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'Main Branch', NULL, 'uploads/profiles/profile_3_1788903196.png', 0.00, 'TSh', NULL, 'active', NULL, NULL, '', 1, '2026-09-09 00:21:37', '2026-08-23 02:43:37', '2026-09-09 00:33:18');
 
 -- --------------------------------------------------------
 
@@ -412,6 +453,28 @@ CREATE TABLE `evening_stocks` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `evening_stock_providers`
+--
+
+CREATE TABLE `evening_stock_providers` (
+  `id` int(11) NOT NULL,
+  `evening_stock_id` int(11) NOT NULL,
+  `provider_id` int(11) NOT NULL,
+  `provider_code` varchar(50) NOT NULL,
+  `provider_name` varchar(100) NOT NULL,
+  `opening_float` decimal(15,2) DEFAULT 0.00,
+  `opening_cash` decimal(15,2) DEFAULT 0.00,
+  `closing_float` decimal(15,2) DEFAULT 0.00,
+  `closing_cash` decimal(15,2) DEFAULT 0.00,
+  `total_deposits` decimal(15,2) DEFAULT 0.00,
+  `total_withdrawals` decimal(15,2) DEFAULT 0.00,
+  `created_at` datetime DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `expenses`
 --
 
@@ -485,15 +548,11 @@ CREATE TABLE `morning_reports` (
   `cumm_total` decimal(15,2) DEFAULT 0.00,
   `submitted_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  `notes` text DEFAULT NULL
+  `notes` text DEFAULT NULL,
+  `source_type` enum('manual','auto_from_evening') DEFAULT 'manual',
+  `source_evening_stock_id` int(11) DEFAULT NULL,
+  `is_locked` tinyint(1) DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `morning_reports`
---
-
-INSERT INTO `morning_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `report_date`, `provider_data`, `cash_balance`, `cumm_total`, `submitted_at`, `updated_at`, `notes`) VALUES
-(9, 'MR-20260822-5033', 2, 'Dar es Salaam Branch', NULL, '2026-08-22', '{\"NMB\":5000000,\"CRDB\":5000000,\"NBC\":5000000,\"TPB\":5000000,\"SELCOM\":5000000,\"MPESA\":5000000,\"YAS\":5000000,\"AIRTEL\":5000000,\"HALOPESA\":5000000}', 9000000.00, 54000000.00, '2026-08-22 15:36:19', '2026-08-22 15:36:19', '');
 
 -- --------------------------------------------------------
 
@@ -505,8 +564,13 @@ CREATE TABLE `morning_report_providers` (
   `id` int(11) NOT NULL,
   `report_id` int(11) NOT NULL,
   `provider_id` int(11) NOT NULL,
-  `amount` decimal(15,2) DEFAULT 0.00
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+  `provider_code` varchar(50) NOT NULL,
+  `provider_name` varchar(100) NOT NULL,
+  `float_balance` decimal(15,2) DEFAULT 0.00,
+  `cash_balance` decimal(15,2) DEFAULT 0.00,
+  `created_at` datetime DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -596,7 +660,7 @@ CREATE TABLE `system_settings` (
 INSERT INTO `system_settings` (`id`, `setting_key`, `setting_value`, `setting_group`, `description`, `updated_at`) VALUES
 (1, 'company_name', 'Mbembati Kelvin L, T/A Wakala', 'general', 'Company/Business Name', '2026-08-20 00:21:10'),
 (2, 'company_address', 'Dodoma, Tanzania', 'general', 'Company Address', '2026-08-20 00:21:10'),
-(3, 'company_phone', '+255 700 000 000', 'general', 'Company Phone', '2026-08-20 00:21:10'),
+(3, 'company_phone', '+255 795100777', 'general', 'Company Phone', '2026-09-07 12:44:40'),
 (4, 'company_email', 'info@wakala.com', 'general', 'Company Email', '2026-08-20 00:21:10'),
 (5, 'currency', 'TSh', 'general', 'Default Currency', '2026-08-20 00:21:10'),
 (6, 'timezone', 'Africa/Dar_es_Salaam', 'general', 'System Timezone', '2026-08-20 00:21:10'),
@@ -695,6 +759,55 @@ INSERT INTO `user_permissions` (`id`, `role`, `module`, `can_view`, `can_add`, `
 (38, 'employee', 'profile', 1, 1, 1, 0, 0),
 (39, 'employee', 'salaries', 1, 0, 0, 0, 0);
 
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `user_providers`
+--
+
+CREATE TABLE `user_providers` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `provider_id` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `is_active` tinyint(4) DEFAULT 1,
+  `created_at` datetime DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `user_providers`
+--
+
+INSERT INTO `user_providers` (`id`, `user_id`, `provider_id`, `branch_id`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 2, 1, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(2, 2, 2, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(3, 2, 3, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(4, 2, 4, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(5, 2, 5, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(6, 2, 6, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(7, 2, 7, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(8, 2, 8, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(9, 2, 9, 1, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(10, 2, 1, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(11, 2, 2, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(12, 2, 3, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(13, 2, 4, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(14, 2, 5, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(15, 2, 6, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(16, 2, 7, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(17, 2, 8, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(18, 2, 9, 2, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(19, 2, 1, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(20, 2, 2, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(21, 2, 3, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(22, 2, 4, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(23, 2, 5, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(24, 2, 6, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(25, 2, 7, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(26, 2, 8, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36'),
+(27, 2, 9, 3, 1, '2026-09-08 23:17:36', '2026-09-08 23:17:36');
+
 --
 -- Indexes for dumped tables
 --
@@ -724,9 +837,10 @@ ALTER TABLE `branches`
 --
 ALTER TABLE `branch_providers`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `unique_branch_provider` (`branch_id`,`provider_id`),
+  ADD UNIQUE KEY `unique_branch_provider_code` (`branch_id`,`provider_code`),
   ADD KEY `idx_branch` (`branch_id`),
-  ADD KEY `idx_provider` (`provider_id`);
+  ADD KEY `idx_provider` (`provider_id`),
+  ADD KEY `idx_active` (`is_active`);
 
 --
 -- Indexes for table `capital_management`
@@ -831,6 +945,14 @@ ALTER TABLE `evening_stocks`
   ADD KEY `idx_status` (`status`);
 
 --
+-- Indexes for table `evening_stock_providers`
+--
+ALTER TABLE `evening_stock_providers`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_evening_stock_id` (`evening_stock_id`),
+  ADD KEY `idx_provider_id` (`provider_id`);
+
+--
 -- Indexes for table `expenses`
 --
 ALTER TABLE `expenses`
@@ -862,15 +984,16 @@ ALTER TABLE `morning_reports`
   ADD KEY `idx_employee` (`employee_id`),
   ADD KEY `idx_date` (`report_date`),
   ADD KEY `idx_morning_date_employee` (`report_date`,`employee_id`),
-  ADD KEY `fk_morning_reports_branch` (`branch_id`);
+  ADD KEY `fk_morning_reports_branch` (`branch_id`),
+  ADD KEY `idx_source_evening` (`source_evening_stock_id`);
 
 --
 -- Indexes for table `morning_report_providers`
 --
 ALTER TABLE `morning_report_providers`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `report_id` (`report_id`),
-  ADD KEY `provider_id` (`provider_id`);
+  ADD KEY `idx_report_id` (`report_id`),
+  ADD KEY `idx_provider_id` (`provider_id`);
 
 --
 -- Indexes for table `providers`
@@ -928,6 +1051,16 @@ ALTER TABLE `user_permissions`
   ADD UNIQUE KEY `unique_role_module` (`role`,`module`);
 
 --
+-- Indexes for table `user_providers`
+--
+ALTER TABLE `user_providers`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_user_provider` (`user_id`,`provider_id`,`branch_id`),
+  ADD KEY `idx_user_id` (`user_id`),
+  ADD KEY `idx_provider_id` (`provider_id`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
 -- AUTO_INCREMENT for dumped tables
 --
 
@@ -935,7 +1068,7 @@ ALTER TABLE `user_permissions`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=44;
 
 --
 -- AUTO_INCREMENT for table `branches`
@@ -947,7 +1080,7 @@ ALTER TABLE `branches`
 -- AUTO_INCREMENT for table `branch_providers`
 --
 ALTER TABLE `branch_providers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=61;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
 
 --
 -- AUTO_INCREMENT for table `capital_management`
@@ -998,6 +1131,12 @@ ALTER TABLE `evening_stocks`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
+-- AUTO_INCREMENT for table `evening_stock_providers`
+--
+ALTER TABLE `evening_stock_providers`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `expenses`
 --
 ALTER TABLE `expenses`
@@ -1013,7 +1152,7 @@ ALTER TABLE `expense_categories`
 -- AUTO_INCREMENT for table `morning_reports`
 --
 ALTER TABLE `morning_reports`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `morning_report_providers`
@@ -1050,6 +1189,12 @@ ALTER TABLE `transactions`
 --
 ALTER TABLE `user_permissions`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=40;
+
+--
+-- AUTO_INCREMENT for table `user_providers`
+--
+ALTER TABLE `user_providers`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
 
 --
 -- Constraints for dumped tables
@@ -1138,6 +1283,13 @@ ALTER TABLE `evening_stocks`
   ADD CONSTRAINT `fk_evening_stocks_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
 
 --
+-- Constraints for table `evening_stock_providers`
+--
+ALTER TABLE `evening_stock_providers`
+  ADD CONSTRAINT `fk_esp_evening_stock` FOREIGN KEY (`evening_stock_id`) REFERENCES `evening_stocks` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_esp_provider` FOREIGN KEY (`provider_id`) REFERENCES `providers` (`id`) ON DELETE CASCADE;
+
+--
 -- Constraints for table `expenses`
 --
 ALTER TABLE `expenses`
@@ -1156,8 +1308,8 @@ ALTER TABLE `morning_reports`
 -- Constraints for table `morning_report_providers`
 --
 ALTER TABLE `morning_report_providers`
-  ADD CONSTRAINT `morning_report_providers_ibfk_1` FOREIGN KEY (`report_id`) REFERENCES `morning_reports` (`id`),
-  ADD CONSTRAINT `morning_report_providers_ibfk_2` FOREIGN KEY (`provider_id`) REFERENCES `providers` (`id`);
+  ADD CONSTRAINT `fk_mrp_provider` FOREIGN KEY (`provider_id`) REFERENCES `providers` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_mrp_report` FOREIGN KEY (`report_id`) REFERENCES `morning_reports` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `providers`
@@ -1181,6 +1333,14 @@ ALTER TABLE `transactions`
   ADD CONSTRAINT `fk_transactions_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_transactions_provider` FOREIGN KEY (`provider_id`) REFERENCES `providers` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `transactions_ibfk_1` FOREIGN KEY (`employee_id`) REFERENCES `employees` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `user_providers`
+--
+ALTER TABLE `user_providers`
+  ADD CONSTRAINT `fk_up_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_up_provider` FOREIGN KEY (`provider_id`) REFERENCES `providers` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_up_user` FOREIGN KEY (`user_id`) REFERENCES `employees` (`id`) ON DELETE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
