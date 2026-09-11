@@ -1,9 +1,12 @@
 <?php
 // ================================================================
-// FILE: modules/commissions/add.php
-// WAKALA FINANCIAL SYSTEM - ADD COMMISSION
-// FIXED: Uses branch_id from URL/topbar, no variable collision
+// FILE: modules/commissions/add_other_income.php
+// WAKALA FINANCIAL SYSTEM - ADD OTHER INCOME
+// FULL VERSION with optional Income Source (dropdown OR manual)
 // ================================================================
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
@@ -66,31 +69,49 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// GET PROVIDERS
+// COMMON INCOME SOURCES (for dropdown suggestions)
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM providers WHERE is_active = 1 ORDER BY display_order, provider_name");
-$stmt->execute();
-$all_providers = $stmt->fetchAll();
+$common_sources = [
+    'Service Fee',
+    'Bank Interest',
+    'Cashback',
+    'Refund',
+    'Commission Bonus',
+    'Airtime Bonus',
+    'Agent Bonus',
+    'Late Fee',
+    'Transaction Fee',
+    'Other'
+];
 
 // ============================================================
 // HANDLE FORM SUBMISSION
 // ============================================================
-$success_message = '';
 $error_message = '';
-$show_success = false;
 $show_error = false;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_commission') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_other_income') {
     try {
-        $commission_date = $_POST['commission_date'] ?? date('Y-m-d');
+        $income_date = $_POST['income_date'] ?? date('Y-m-d');
         $branch_id = intval($_POST['branch_id'] ?? 0);
-        $other_income = floatval(str_replace(',', '', $_POST['other_income'] ?? 0));
+        $amount = floatval(str_replace(',', '', $_POST['amount'] ?? 0));
+        $income_source = trim($_POST['income_source'] ?? '');
+        $description = trim($_POST['description'] ?? '');
         $allocate_to_capital = $_POST['allocate_to_capital'] ?? 'yes';
-        $notes = $_POST['notes'] ?? '';
+        $notes = trim($_POST['notes'] ?? '');
         
         // Validate
         if ($branch_id <= 0) {
             throw new Exception('Please select a branch.');
+        }
+        
+        if ($amount <= 0) {
+            throw new Exception('Please enter a valid amount greater than zero.');
+        }
+        
+        // Income source is OPTIONAL - default to 'Other Income' if empty
+        if (empty($income_source)) {
+            $income_source = 'Other Income';
         }
         
         // Get branch name
@@ -102,34 +123,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        // Build provider data from POST
-        $provider_data = [];
-        $total_commission = 0;
+        // Generate reference number
+        $commission_number = 'OI-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
         
-        foreach ($_POST as $key => $value) {
-            if (strpos($key, 'provider_') === 0 && !empty($value)) {
-                $provider_id = str_replace('provider_', '', $key);
-                $amount = floatval(str_replace(',', '', $value));
-                if ($amount > 0) {
-                    $provider_data[$provider_id] = $amount;
-                    $total_commission += $amount;
-                }
-            }
+        // Build notes combining source + description
+        $combined_notes = $income_source;
+        if (!empty($description)) {
+            $combined_notes .= ' - ' . $description;
+        }
+        if (!empty($notes)) {
+            $combined_notes .= "\n\n" . $notes;
         }
         
-        if (empty($provider_data)) {
-            throw new Exception('Please enter at least one provider amount.');
-        }
-        
-        // Generate commission number
-        $commission_number = 'COM-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-        
-        // Calculate totals
-        $total_business_income = $total_commission + $other_income;
-        $allocated_amount = ($allocate_to_capital == 'yes') ? $total_business_income : 0;
-        
-        // Insert data
-        $provider_json = json_encode($provider_data);
+        // Insert into commissions table with only other_income
+        $provider_json = json_encode([]);
+        $allocated_amount = ($allocate_to_capital == 'yes') ? $amount : 0;
         
         $insert_stmt = $db->prepare("INSERT INTO commissions 
             (commission_number, employee_id, branch, branch_id, commission_date, provider_data, 
@@ -141,22 +149,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $user_id,
             $branch_name,
             $branch_id,
-            $commission_date,
+            $income_date,
             $provider_json,
-            $total_commission,
-            $other_income,
-            $total_business_income,
+            0,
+            $amount,
+            $amount,
             $allocate_to_capital,
             $allocated_amount,
-            $notes
+            $combined_notes
         ]);
         
-        $commission_id = $db->lastInsertId();
+        $income_id = $db->lastInsertId();
         
         // Log activity
-        logActivity($user_id, 'Add Commission', 'Commissions', $commission_id, '', 'Added commission: ' . $commission_number);
+        logActivity($user_id, 'Add Other Income', 'Commissions', $income_id, '', 'Added other income: ' . $commission_number . ' - ' . formatCurrency($amount));
         
-        $_SESSION['success_message'] = 'Commission added successfully! Number: ' . $commission_number;
+        $_SESSION['success_message'] = 'Other income of ' . formatCurrency($amount) . ' added successfully! Reference: ' . $commission_number;
         header('Location: index.php' . ($branch_id > 0 ? '?branch_id=' . $branch_id : ''));
         exit();
         
@@ -183,7 +191,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
             <div class="branch-status-info">
                 <span class="branch-status-label">
-                    <?php echo $selected_branch > 0 ? 'Adding Commission For' : 'Adding Commission (All Branches)'; ?>
+                    <?php echo $selected_branch > 0 ? 'Adding Other Income For' : 'Adding Other Income (All Branches)'; ?>
                 </span>
                 <span class="branch-status-name"><?php echo htmlspecialchars($add_branch_name); ?></span>
                 <?php if ($selected_branch > 0 && !empty($add_branch_code)): ?>
@@ -205,22 +213,14 @@ include_once '../../includes/admin_topbar.php';
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-hand-holding-usd"></i> Add Commission</h2>
-                <span class="page-subtitle">Create a new commission record</span>
+                <h2><i class="fas fa-coins"></i> Add Other Income</h2>
+                <span class="page-subtitle">Record additional income (not commissions)</span>
             </div>
         </div>
 
         <!-- ============================================================
         SUCCESS/ERROR MESSAGES
         ============================================================ -->
-        <?php if ($show_success && !empty($success_message)): ?>
-            <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i> 
-                <span><?php echo $success_message; ?></span>
-                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
-            </div>
-        <?php endif; ?>
-        
         <?php if ($show_error && !empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i> 
@@ -230,37 +230,40 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-        IF NO BRANCH SELECTED - SHOW WARNING
+        INFO NOTE
         ============================================================ -->
-        <?php if ($selected_branch == 0): ?>
-            <div class="no-branch-warning">
-                <i class="fas fa-info-circle"></i>
-                <div>
-                    <strong>No branch filter selected</strong>
-                    <p>Please select a branch from the dropdown in the topbar before adding a commission. Or select a branch below to continue.</p>
-                </div>
+        <div class="info-note">
+            <i class="fas fa-info-circle"></i>
+            <div>
+                <strong>Other Income</strong>
+                <p>Use this form to record income that is NOT from provider commissions. Examples: service fees, bank interest, cashback, refunds, or any other business income.</p>
             </div>
-        <?php endif; ?>
+        </div>
 
+        <!-- ============================================================
+        FORM
+        ============================================================ -->
         <div class="form-container">
-            <form method="POST" action="" class="main-form" id="commissionForm" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="add_commission">
+            <form method="POST" action="" class="main-form" id="incomeForm" onsubmit="return validateForm()">
+                <input type="hidden" name="action" value="add_other_income">
                 
-                <!-- ===== BASIC INFORMATION ===== -->
+                <!-- ===== INCOME INFORMATION ===== -->
                 <div class="form-section">
                     <div class="section-header">
-                        <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
+                        <h3><i class="fas fa-info-circle"></i> Income Information</h3>
+                        <span class="section-badge">Required fields marked with *</span>
                     </div>
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="commission_date">Commission Date <span class="required">*</span></label>
+                            <label for="income_date">Income Date <span class="required">*</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
-                                <input type="date" id="commission_date" name="commission_date" 
+                                <input type="date" id="income_date" name="income_date" 
                                        value="<?php echo date('Y-m-d'); ?>" 
                                        class="form-control" required>
                             </div>
+                            <small>Date when the income was received</small>
                         </div>
                         <div class="form-group">
                             <label for="branch_id">Branch <span class="required">*</span></label>
@@ -283,33 +286,60 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
 
-                <!-- ===== PROVIDER COMMISSIONS ===== -->
+                <!-- ===== INCOME DETAILS ===== -->
                 <div class="form-section">
                     <div class="section-header">
-                        <h3><i class="fas fa-university"></i> Provider Commissions</h3>
-                        <span class="section-sub">Enter commission amount for each provider</span>
+                        <h3><i class="fas fa-money-bill-wave"></i> Income Details</h3>
                     </div>
                     
-                    <div class="providers-grid">
-                        <?php foreach ($all_providers as $provider): ?>
-                            <div class="provider-item">
-                                <div class="provider-icon" style="background: <?php echo $provider['color_code'] ?? '#0B5ED7'; ?>;">
-                                    <i class="<?php echo $provider['icon_class'] ?? 'fas fa-university'; ?>"></i>
-                                </div>
-                                <div class="provider-info">
-                                    <span class="provider-name"><?php echo htmlspecialchars($provider['provider_name']); ?></span>
-                                    <span class="provider-code"><?php echo htmlspecialchars($provider['provider_code']); ?></span>
-                                </div>
-                                <div class="provider-input">
-                                    <input type="text" 
-                                           id="provider_<?php echo $provider['id']; ?>" 
-                                           name="provider_<?php echo $provider['id']; ?>" 
-                                           class="form-control provider-amount money-input" 
-                                           placeholder="0.00" 
-                                           oninput="formatMoneyInput(this); calculateTotals();">
-                                </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="amount">Amount <span class="required">*</span></label>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-money-bill-wave"></i></span>
+                                <input type="text" id="amount" name="amount" 
+                                       class="form-control money-input" 
+                                       placeholder="0.00"
+                                       oninput="formatMoneyInput(this)" 
+                                       required>
                             </div>
-                        <?php endforeach; ?>
+                            <small>Enter amount in TSh</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="income_source">
+                                Income Source 
+                                <span class="optional-badge">Optional</span>
+                            </label>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-tag"></i></span>
+                                <input type="text" 
+                                       id="income_source" 
+                                       name="income_source" 
+                                       class="form-control" 
+                                       list="incomeSourceList"
+                                       placeholder="Select or type your own..." 
+                                       autocomplete="off">
+                            </div>
+                            <datalist id="incomeSourceList">
+                                <?php foreach ($common_sources as $src): ?>
+                                    <option value="<?php echo htmlspecialchars($src); ?>">
+                                <?php endforeach; ?>
+                            </datalist>
+                            <small>Chagua kutoka orodha au andika mwenyewe (si lazima)</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group full-width">
+                            <label for="description">Description <span class="optional-badge">Optional</span></label>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-align-left"></i></span>
+                                <input type="text" id="description" name="description" 
+                                       class="form-control" 
+                                       placeholder="Brief description of the income">
+                            </div>
+                            <small>Provide more details about this income (optional)</small>
+                        </div>
                     </div>
                 </div>
 
@@ -321,18 +351,6 @@ include_once '../../includes/admin_topbar.php';
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="other_income">Other Income</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-coins"></i></span>
-                                <input type="text" id="other_income" name="other_income" 
-                                       value="0" 
-                                       class="form-control money-input" 
-                                       placeholder="0.00"
-                                       oninput="formatMoneyInput(this); calculateTotals();">
-                            </div>
-                            <small>Any additional income besides commissions</small>
-                        </div>
-                        <div class="form-group">
                             <label for="allocate_to_capital">Allocate to Capital</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-building"></i></span>
@@ -341,38 +359,44 @@ include_once '../../includes/admin_topbar.php';
                                     <option value="no">No - Keep as Profit</option>
                                 </select>
                             </div>
-                            <small>Should this income be added to capital?</small>
+                            <small>Should this income be added to branch capital?</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Branch Info</label>
+                            <div class="info-display">
+                                <div class="info-item">
+                                    <span class="info-label">Branch:</span>
+                                    <span class="info-value" id="branchInfoName"><?php echo htmlspecialchars($add_branch_name); ?></span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Date:</span>
+                                    <span class="info-value"><?php echo date('d M Y'); ?></span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
                     <div class="form-row">
                         <div class="form-group full-width">
-                            <label for="notes">Notes</label>
+                            <label for="notes">Additional Notes <span class="optional-badge">Optional</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-sticky-note"></i></span>
-                                <textarea id="notes" name="notes" class="form-control" rows="3" placeholder="Any additional notes..."></textarea>
+                                <textarea id="notes" name="notes" class="form-control" rows="3" placeholder="Any additional notes about this income..."></textarea>
                             </div>
+                            <small>Extra notes for record keeping (optional)</small>
                         </div>
                     </div>
                 </div>
 
-                <!-- ===== SUMMARY ===== -->
+                <!-- ===== SUMMARY PREVIEW ===== -->
                 <div class="form-section summary-section">
                     <div class="section-header">
                         <h3><i class="fas fa-calculator"></i> Summary</h3>
                     </div>
                     
                     <div class="summary-grid">
-                        <div class="summary-item">
-                            <span class="summary-label">Total Commission:</span>
-                            <span class="summary-value" id="totalCommissionDisplay">TSh 0</span>
-                        </div>
-                        <div class="summary-item">
-                            <span class="summary-label">Other Income:</span>
-                            <span class="summary-value" id="otherIncomeDisplay">TSh 0</span>
-                        </div>
                         <div class="summary-item total">
-                            <span class="summary-label">Total Business Income:</span>
+                            <span class="summary-label">Total Income:</span>
                             <span class="summary-value" id="totalIncomeDisplay">TSh 0</span>
                         </div>
                     </div>
@@ -381,7 +405,7 @@ include_once '../../includes/admin_topbar.php';
                 <!-- ===== FORM ACTIONS ===== -->
                 <div class="form-actions">
                     <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Save Commission
+                        <i class="fas fa-save"></i> Save Other Income
                     </button>
                     <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
                         <i class="fas fa-undo"></i> Reset Form
@@ -423,10 +447,9 @@ STYLES
     --form-danger-bg: #FEE2E2;
     --form-danger-text: #991B1B;
     --form-danger-border: #FECACA;
-    --provider-bg: #ECFDF5;
-    --provider-bg-hover: #D1FAE5;
-    --provider-border: #A7F3D0;
-    --provider-text: #065F46;
+    --form-info-bg: #EDE9FE;
+    --form-info-text: #5B21B6;
+    --form-info-border: #C4B5FD;
 }
 
 html.dark-mode {
@@ -448,10 +471,9 @@ html.dark-mode {
     --form-danger-bg: #7F1D1D;
     --form-danger-text: #FEE2E2;
     --form-danger-border: #991B1B;
-    --provider-bg: #1B3A2B;
-    --provider-bg-hover: #1F4B2F;
-    --provider-border: #2E7D32;
-    --provider-text: #A5D6A7;
+    --form-info-bg: #4C1D95;
+    --form-info-text: #DDD6FE;
+    --form-info-border: #6D28D9;
 }
 
 body {
@@ -589,47 +611,6 @@ body {
 }
 
 /* ============================================================
-   NO BRANCH WARNING
-   ============================================================ */
-.no-branch-warning {
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
-    padding: 16px 20px;
-    background: #FEF3C7;
-    border: 2px solid #FDE68A;
-    border-radius: 10px;
-    margin-bottom: 16px;
-    color: #92400E;
-    animation: slideDown 0.3s ease forwards;
-}
-
-.no-branch-warning i {
-    font-size: 22px;
-    flex-shrink: 0;
-    margin-top: 2px;
-}
-
-.no-branch-warning strong {
-    font-weight: 700;
-    font-size: 14px;
-    display: block;
-    margin-bottom: 4px;
-}
-
-.no-branch-warning p {
-    font-size: 13px;
-    margin: 0;
-    line-height: 1.5;
-}
-
-html.dark-mode .no-branch-warning {
-    background: #5F3A1E;
-    border-color: #92400E;
-    color: #FBBF24;
-}
-
-/* ============================================================
    PAGE HEADER
    ============================================================ */
 .page-header {
@@ -654,7 +635,7 @@ html.dark-mode .no-branch-warning {
 }
 
 .page-header-left h2 i {
-    color: #10B981;
+    color: #7C3AED;
     margin-right: 8px;
 }
 
@@ -664,6 +645,42 @@ html.dark-mode .no-branch-warning {
     background: var(--form-hover);
     padding: 3px 12px;
     border-radius: 12px;
+}
+
+/* ============================================================
+   INFO NOTE
+   ============================================================ */
+.info-note {
+    background: var(--form-info-bg);
+    border: 1px solid var(--form-info-border);
+    border-left: 4px solid #7C3AED;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    color: var(--form-info-text);
+    animation: slideDown 0.3s ease forwards;
+}
+
+.info-note > i {
+    font-size: 20px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.info-note strong {
+    font-weight: 700;
+    font-size: 14px;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.info-note p {
+    font-size: 13px;
+    margin: 0;
+    line-height: 1.5;
 }
 
 /* ============================================================
@@ -750,17 +767,42 @@ html.dark-mode .no-branch-warning {
 }
 
 .section-header h3 i {
-    color: #10B981;
+    color: #7C3AED;
     margin-right: 8px;
 }
 
-.section-sub {
-    font-size: 13px;
+.section-badge {
+    font-size: 11px;
     color: var(--form-text-secondary);
+    background: var(--form-hover);
+    padding: 2px 12px;
+    border-radius: 12px;
 }
 
 /* ============================================================
-   FORM ROWS & GROUPS
+   OPTIONAL BADGE
+   ============================================================ */
+.optional-badge {
+    font-size: 9px;
+    font-weight: 700;
+    color: #7C3AED;
+    background: rgba(124, 58, 237, 0.12);
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 6px;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+html.dark-mode .optional-badge {
+    background: rgba(167, 139, 250, 0.2);
+    color: #A78BFA;
+}
+
+/* ============================================================
+   FORM ROWS
    ============================================================ */
 .form-row {
     display: grid;
@@ -822,8 +864,8 @@ html.dark-mode .no-branch-warning {
 }
 
 .input-group .form-control:focus {
-    border-color: #10B981;
-    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+    border-color: #7C3AED;
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
 }
 
 .input-group select.form-control {
@@ -858,93 +900,48 @@ html.dark-mode .input-group select.form-control {
 }
 
 /* ============================================================
-   PROVIDERS GRID
+   DATALIST INPUT (Income Source)
    ============================================================ */
-.providers-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+input[list] {
+    cursor: text;
 }
 
-.provider-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    background: var(--provider-bg);
+input[list]::-webkit-calendar-picker-indicator {
+    display: none;
+}
+
+/* ============================================================
+   INFO DISPLAY (Right side)
+   ============================================================ */
+.info-display {
+    background: var(--form-hover);
     border-radius: 8px;
-    border: 2px solid var(--provider-border);
-    transition: all 0.3s ease;
-}
-
-.provider-item:hover {
-    background: var(--provider-bg-hover);
-    border-color: #34D399;
-    transform: translateY(-1px);
-}
-
-.provider-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
+    padding: 10px 16px;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--form-border);
+    height: 100%;
     justify-content: center;
-    color: white;
-    font-size: 14px;
-    flex-shrink: 0;
+    min-height: 42px;
 }
 
-.provider-info {
-    flex: 1;
-    min-width: 0;
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
 }
 
-.provider-name {
+.info-label {
+    font-size: 12px;
+    color: var(--form-text-secondary);
+}
+
+.info-value {
     font-size: 13px;
     font-weight: 500;
-    color: var(--provider-text);
-    display: block;
-}
-
-.provider-code {
-    font-size: 10px;
-    color: var(--form-text-light);
-    text-transform: uppercase;
-}
-
-.provider-input {
-    width: 100px;
-    flex-shrink: 0;
-}
-
-.provider-input .form-control {
-    padding: 6px 10px;
-    border-radius: 6px;
-    border: 2px solid var(--provider-border);
-    font-size: 13px;
-    outline: none;
-    transition: all 0.3s ease;
-    background: #FFFFFF;
     color: var(--form-text);
-    width: 100%;
-    text-align: right;
-    font-weight: 600;
-}
-
-html.dark-mode .provider-input .form-control {
-    background: #1A3A2A;
-    color: #D1FAE5;
-}
-
-.provider-input .form-control:focus {
-    border-color: #10B981;
-    box-shadow: 0 0 0 3px rgba(16,185,129,0.2);
-}
-
-.money-input {
-    font-weight: 600;
-    letter-spacing: 0.5px;
 }
 
 /* ============================================================
@@ -956,8 +953,8 @@ html.dark-mode .provider-input .form-control {
 
 .summary-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+    grid-template-columns: 1fr;
+    gap: 12px;
 }
 
 .summary-item {
@@ -965,19 +962,15 @@ html.dark-mode .provider-input .form-control {
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 12px;
+    padding: 14px;
     border-radius: 8px;
     background: var(--form-card-bg);
     border: 1px solid var(--form-border);
 }
 
 .summary-item.total {
-    background: var(--form-success-bg);
-    border-color: var(--form-success-border);
-}
-
-html.dark-mode .summary-item.total {
-    background: #065F46;
+    background: var(--form-info-bg);
+    border-color: var(--form-info-border);
 }
 
 .summary-label {
@@ -988,13 +981,13 @@ html.dark-mode .summary-item.total {
 }
 
 .summary-value {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
-    color: var(--form-text);
+    color: #7C3AED;
 }
 
-.summary-item.total .summary-value {
-    color: #10B981;
+html.dark-mode .summary-item.total .summary-value {
+    color: #A78BFA;
 }
 
 /* ============================================================
@@ -1025,14 +1018,14 @@ html.dark-mode .summary-item.total {
 }
 
 .btn-submit {
-    background: #10B981;
+    background: #7C3AED;
     color: white;
 }
 
 .btn-submit:hover {
-    background: #059669;
+    background: #6D28D9;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4);
 }
 
 .btn-submit:disabled {
@@ -1081,12 +1074,6 @@ html.dark-mode .btn-cancel:hover {
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-@media (max-width: 1024px) {
-    .providers-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
 @media (max-width: 768px) {
     .branch-status-card {
         flex-direction: column;
@@ -1123,24 +1110,6 @@ html.dark-mode .btn-cancel:hover {
         padding: 16px 14px;
     }
     
-    .providers-grid {
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-    }
-    
-    .provider-item {
-        flex-wrap: wrap;
-        padding: 8px 10px;
-    }
-    
-    .provider-input {
-        width: 100%;
-    }
-    
-    .summary-grid {
-        grid-template-columns: 1fr;
-    }
-    
     .form-actions {
         flex-direction: column;
     }
@@ -1157,10 +1126,6 @@ html.dark-mode .btn-cancel:hover {
 }
 
 @media (max-width: 480px) {
-    .providers-grid {
-        grid-template-columns: 1fr;
-    }
-    
     .branch-status-name {
         font-size: 16px;
     }
@@ -1189,6 +1154,10 @@ html.dark-mode .btn-cancel:hover {
         padding: 8px 16px;
         font-size: 13px;
     }
+    
+    .summary-value {
+        font-size: 17px;
+    }
 }
 </style>
 
@@ -1216,33 +1185,30 @@ function formatMoneyInput(input) {
     }
     
     input.value = formatted;
+    
+    // Update summary
+    updateSummary();
 }
 
 // ============================================================
-// CALCULATE TOTALS
+// UPDATE SUMMARY DISPLAY
 // ============================================================
-function calculateTotals() {
-    var providerInputs = document.querySelectorAll('.provider-amount');
-    var totalCommission = 0;
+function updateSummary() {
+    var amountInput = document.getElementById('amount');
+    var amount = 0;
     
-    providerInputs.forEach(function(input) {
-        var rawValue = input.value.replace(/,/g, '');
-        var value = parseFloat(rawValue) || 0;
-        totalCommission += value;
-    });
+    if (amountInput) {
+        var raw = amountInput.value.replace(/,/g, '');
+        amount = parseFloat(raw) || 0;
+    }
     
-    var otherIncomeInput = document.getElementById('other_income');
-    var rawOther = otherIncomeInput ? otherIncomeInput.value.replace(/,/g, '') : '0';
-    var otherIncome = parseFloat(rawOther) || 0;
-    var totalIncome = totalCommission + otherIncome;
-    
-    document.getElementById('totalCommissionDisplay').textContent = 'TSh ' + formatNumber(totalCommission);
-    document.getElementById('otherIncomeDisplay').textContent = 'TSh ' + formatNumber(otherIncome);
-    document.getElementById('totalIncomeDisplay').textContent = 'TSh ' + formatNumber(totalIncome);
-}
-
-function formatNumber(num) {
-    return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    var display = document.getElementById('totalIncomeDisplay');
+    if (display) {
+        display.textContent = 'TSh ' + amount.toLocaleString('en-US', { 
+            minimumFractionDigits: 0, 
+            maximumFractionDigits: 0 
+        });
+    }
 }
 
 // ============================================================
@@ -1256,20 +1222,17 @@ function validateForm() {
         return false;
     }
     
-    var hasProvider = false;
-    var providerInputs = document.querySelectorAll('.provider-amount');
-    providerInputs.forEach(function(input) {
-        var rawValue = input.value.replace(/,/g, '');
-        var value = parseFloat(rawValue) || 0;
-        if (value > 0) {
-            hasProvider = true;
-        }
-    });
+    var amountInput = document.getElementById('amount');
+    var rawAmount = amountInput.value.replace(/,/g, '');
+    var amount = parseFloat(rawAmount) || 0;
     
-    if (!hasProvider) {
-        alert('Please enter at least one provider amount.');
+    if (amount <= 0) {
+        alert('Please enter a valid amount greater than zero.');
+        amountInput.focus();
         return false;
     }
+    
+    // Income source is OPTIONAL - no validation required
     
     var submitBtn = document.getElementById('submitBtn');
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
@@ -1289,13 +1252,19 @@ function confirmReset() {
 // INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    calculateTotals();
+    // Update summary on load
+    updateSummary();
     
-    var otherIncome = document.getElementById('other_income');
-    if (otherIncome) {
-        otherIncome.addEventListener('input', function() {
-            formatMoneyInput(this);
-            calculateTotals();
+    // Update branch info display when branch changes
+    var branchSelect = document.getElementById('branch_id');
+    if (branchSelect) {
+        branchSelect.addEventListener('change', function() {
+            var selectedOption = this.options[this.selectedIndex];
+            var branchText = selectedOption.textContent.trim();
+            var branchInfo = document.getElementById('branchInfoName');
+            if (branchInfo) {
+                branchInfo.textContent = branchText;
+            }
         });
     }
     

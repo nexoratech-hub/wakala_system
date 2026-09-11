@@ -2,26 +2,20 @@
 // ================================================================
 // FILE: modules/commissions/edit.php
 // WAKALA FINANCIAL SYSTEM - EDIT COMMISSION
-// WITH FULL DARK MODE SUPPORT
+// FIXED: No variable collision + branch context card
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
 if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
@@ -44,24 +38,27 @@ if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
 $commission_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
 if ($commission_id <= 0) {
+    $_SESSION['error_message'] = 'Invalid commission selected.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET COMMISSION DATA
+// GET COMMISSION DATA (uses $edit_commission)
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM commissions WHERE id = ?");
 $stmt->execute([$commission_id]);
-$commission = $stmt->fetch();
+$edit_commission = $stmt->fetch();
 
-if (!$commission) {
+if (!$edit_commission) {
+    $_SESSION['error_message'] = 'Commission not found.';
     header('Location: index.php');
     exit();
 }
 
 // Check permission - employee can only edit their own commissions
-if ($role == 'employee' && $commission['employee_id'] != $user_id) {
+if ($role == 'employee' && $edit_commission['employee_id'] != $user_id) {
+    $_SESSION['error_message'] = 'You do not have permission to edit this commission.';
     header('Location: index.php');
     exit();
 }
@@ -71,22 +68,43 @@ if ($role == 'employee' && $commission['employee_id'] != $user_id) {
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
-$branches = $stmt->fetchAll();
+$edit_branches = $stmt->fetchAll();
 
 // ============================================================
 // GET PROVIDERS
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM providers WHERE is_active = 1 ORDER BY display_order, provider_name");
 $stmt->execute();
-$providers = $stmt->fetchAll();
+$edit_providers = $stmt->fetchAll();
 
 // ============================================================
 // PARSE PROVIDER DATA
 // ============================================================
-$provider_data = json_decode($commission['provider_data'] ?? '{}', true);
-$total_commission = $commission['total_commission'] ?? 0;
-$other_income = $commission['other_income'] ?? 0;
-$total_business_income = $commission['total_business_income'] ?? 0;
+$provider_data = json_decode($edit_commission['provider_data'] ?? '{}', true);
+$total_commission = floatval($edit_commission['total_commission'] ?? 0);
+$other_income = floatval($edit_commission['other_income'] ?? 0);
+$total_business_income = floatval($edit_commission['total_business_income'] ?? 0);
+
+// Determine commission type
+$is_other_income_only = (empty($provider_data) && $other_income > 0);
+
+// ============================================================
+// DETERMINE BRANCH NAME FOR RED CARD
+// ============================================================
+$edit_branch_name = $edit_commission['branch'] ?? 'Main';
+$edit_branch_code = '';
+$edit_branch_location = '';
+
+if ($edit_commission['branch_id'] > 0) {
+    foreach ($edit_branches as $br) {
+        if ($br['id'] == $edit_commission['branch_id']) {
+            $edit_branch_name = $br['branch_name'];
+            $edit_branch_code = $br['branch_code'];
+            $edit_branch_location = $br['location'] ?? '';
+            break;
+        }
+    }
+}
 
 // ============================================================
 // HANDLE FORM SUBMISSION
@@ -100,7 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $commission_date = $_POST['commission_date'] ?? date('Y-m-d');
         $branch_id = intval($_POST['branch_id'] ?? 0);
-        $other_income = floatval(str_replace(',', '', $_POST['other_income'] ?? 0));
+        $other_income_new = floatval(str_replace(',', '', $_POST['other_income'] ?? 0));
         $allocate_to_capital = $_POST['allocate_to_capital'] ?? 'yes';
         $notes = $_POST['notes'] ?? '';
         
@@ -108,14 +126,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Please select a branch.');
         }
         
+        // Get branch name
         $branch_name = '';
-        foreach ($branches as $b) {
-            if ($b['id'] == $branch_id) {
-                $branch_name = $b['branch_name'];
+        foreach ($edit_branches as $br) {
+            if ($br['id'] == $branch_id) {
+                $branch_name = $br['branch_name'];
                 break;
             }
         }
         
+        // Build provider data from POST
         $provider_data_new = [];
         $total_commission_new = 0;
         
@@ -130,11 +150,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        if (empty($provider_data_new)) {
-            throw new Exception('Please enter at least one provider amount.');
+        // Allow submission even without provider amounts IF other income > 0
+        if (empty($provider_data_new) && $other_income_new <= 0) {
+            throw new Exception('Please enter at least one provider amount or other income.');
         }
         
-        $total_business_income_new = $total_commission_new + $other_income;
+        $total_business_income_new = $total_commission_new + $other_income_new;
         $allocated_amount = ($allocate_to_capital == 'yes') ? $total_business_income_new : 0;
         
         $provider_json = json_encode($provider_data_new);
@@ -151,7 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $commission_date,
             $provider_json,
             $total_commission_new,
-            $other_income,
+            $other_income_new,
             $total_business_income_new,
             $allocate_to_capital,
             $allocated_amount,
@@ -159,51 +180,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $commission_id
         ]);
         
-        logActivity($user_id, 'Edit Commission', 'Commissions', $commission_id, '', 'Updated commission: ' . $commission['commission_number']);
+        logActivity($user_id, 'Edit Commission', 'Commissions', $commission_id, '', 'Updated commission: ' . $edit_commission['commission_number']);
         
-        $success_message = 'Commission updated successfully!';
-        $show_success = true;
-        
-        // Refresh data
-        $stmt = $db->prepare("SELECT * FROM commissions WHERE id = ?");
-        $stmt->execute([$commission_id]);
-        $commission = $stmt->fetch();
-        $provider_data = json_decode($commission['provider_data'] ?? '{}', true);
-        $total_commission = $commission['total_commission'] ?? 0;
-        $other_income = $commission['other_income'] ?? 0;
-        $total_business_income = $commission['total_business_income'] ?? 0;
+        $_SESSION['success_message'] = 'Commission updated successfully!';
+        header('Location: view.php?id=' . $commission_id);
+        exit();
         
     } catch (Exception $e) {
         $error_message = $e->getMessage();
         $show_error = true;
+        
+        // Refresh data
+        $stmt = $db->prepare("SELECT * FROM commissions WHERE id = ?");
+        $stmt->execute([$commission_id]);
+        $edit_commission = $stmt->fetch();
+        $provider_data = json_decode($edit_commission['provider_data'] ?? '{}', true);
+        $total_commission = floatval($edit_commission['total_commission'] ?? 0);
+        $other_income = floatval($edit_commission['other_income'] ?? 0);
+        $total_business_income = floatval($edit_commission['total_business_income'] ?? 0);
+        $is_other_income_only = (empty($provider_data) && $other_income > 0);
     }
 }
 
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-DASHBOARD CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- ============================================================
+        PERSISTENT RED BRANCH CARD
+        ============================================================ -->
+        <div class="branch-status-card">
+            <div class="branch-status-icon">
+                <i class="fas fa-edit"></i>
+            </div>
+            <div class="branch-status-info">
+                <span class="branch-status-label">
+                    Editing <?php echo $is_other_income_only ? 'Other Income' : 'Commission'; ?>
+                </span>
+                <span class="branch-status-name"><?php echo htmlspecialchars($edit_branch_name); ?></span>
+                <?php if (!empty($edit_branch_code)): ?>
+                    <span class="branch-status-code"><?php echo htmlspecialchars($edit_branch_code); ?></span>
+                <?php endif; ?>
+                <?php if (!empty($edit_branch_location)): ?>
+                    <span class="branch-status-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <?php echo htmlspecialchars($edit_branch_location); ?>
+                    </span>
+                <?php endif; ?>
+            </div>
+            <a href="view.php?id=<?php echo $commission_id; ?>" class="btn-back-card">
+                <i class="fas fa-arrow-left"></i>
+                <span>Back to View</span>
+            </a>
+        </div>
+
         <!-- ===== PAGE HEADER ===== -->
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-edit"></i> Edit Commission</h2>
-                <span class="page-subtitle"><?php echo htmlspecialchars($commission['commission_number']); ?></span>
-                <span class="commission-id-badge">ID: #<?php echo $commission_id; ?></span>
+                <h2>
+                    <i class="fas <?php echo $is_other_income_only ? 'fa-coins' : 'fa-edit'; ?>"></i>
+                    Edit <?php echo $is_other_income_only ? 'Other Income' : 'Commission'; ?>
+                </h2>
+                <span class="page-subtitle"><?php echo htmlspecialchars($edit_commission['commission_number']); ?></span>
             </div>
             <div class="page-header-right">
-                <a href="index.php" class="btn btn-back">
-                    <i class="fas fa-arrow-left"></i> Back to List
-                </a>
                 <a href="view.php?id=<?php echo $commission_id; ?>" class="btn btn-view">
                     <i class="fas fa-eye"></i> View
                 </a>
@@ -214,7 +258,7 @@ DASHBOARD CONTENT
         SUCCESS/ERROR MESSAGES
         ============================================================ -->
         <?php if ($show_success && !empty($success_message)): ?>
-            <div class="alert alert-success" id="successAlert">
+            <div class="alert alert-success">
                 <i class="fas fa-check-circle"></i> 
                 <span><?php echo $success_message; ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
@@ -222,7 +266,7 @@ DASHBOARD CONTENT
         <?php endif; ?>
         
         <?php if ($show_error && !empty($error_message)): ?>
-            <div class="alert alert-danger" id="errorAlert">
+            <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i> 
                 <span><?php echo $error_message; ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
@@ -245,14 +289,13 @@ DASHBOARD CONTENT
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="commission_date">Commission Date <span class="required">*</span></label>
+                            <label for="commission_date">Date <span class="required">*</span></label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
                                 <input type="date" id="commission_date" name="commission_date" 
-                                       value="<?php echo $commission['commission_date']; ?>" 
+                                       value="<?php echo $edit_commission['commission_date']; ?>" 
                                        class="form-control" required>
                             </div>
-                            <small>Select the date for this commission</small>
                         </div>
                         <div class="form-group">
                             <label for="branch_id">Branch <span class="required">*</span></label>
@@ -260,9 +303,12 @@ DASHBOARD CONTENT
                                 <span class="input-icon"><i class="fas fa-store-alt"></i></span>
                                 <select id="branch_id" name="branch_id" class="form-control" required>
                                     <option value="">Select Branch</option>
-                                    <?php foreach ($branches as $b): ?>
-                                        <option value="<?php echo $b['id']; ?>" <?php echo ($commission['branch_id'] == $b['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($b['branch_name']); ?>
+                                    <?php foreach ($edit_branches as $br): ?>
+                                        <option value="<?php echo $br['id']; ?>" <?php echo ($edit_commission['branch_id'] == $br['id']) ? 'selected' : ''; ?>>
+                                            <?php echo htmlspecialchars($br['branch_name']); ?>
+                                            <?php if ($br['branch_code']): ?>
+                                                (<?php echo htmlspecialchars($br['branch_code']); ?>)
+                                            <?php endif; ?>
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
@@ -279,8 +325,8 @@ DASHBOARD CONTENT
                         <span class="section-sub">Enter commission amount for each provider</span>
                     </div>
                     
-                    <div class="providers-grid" id="providersContainer">
-                        <?php foreach ($providers as $provider): 
+                    <div class="providers-grid">
+                        <?php foreach ($edit_providers as $provider): 
                             $provider_value = isset($provider_data[$provider['id']]) ? number_format($provider_data[$provider['id']], 0, '.', ',') : '';
                         ?>
                             <div class="provider-item">
@@ -298,7 +344,6 @@ DASHBOARD CONTENT
                                            class="form-control provider-amount money-input" 
                                            placeholder="0.00" 
                                            value="<?php echo $provider_value; ?>"
-                                           data-provider-id="<?php echo $provider['id']; ?>"
                                            oninput="formatMoneyInput(this); calculateTotals();">
                                 </div>
                             </div>
@@ -306,10 +351,11 @@ DASHBOARD CONTENT
                     </div>
                 </div>
 
-                <!-- ===== ADDITIONAL INFORMATION ===== -->
+                <!-- ===== OTHER INCOME ===== -->
                 <div class="form-section">
                     <div class="section-header">
-                        <h3><i class="fas fa-cog"></i> Additional Information</h3>
+                        <h3><i class="fas fa-coins"></i> Other Income</h3>
+                        <span class="section-sub">Additional income (optional)</span>
                     </div>
                     
                     <div class="form-row">
@@ -323,18 +369,18 @@ DASHBOARD CONTENT
                                        placeholder="0.00"
                                        oninput="formatMoneyInput(this); calculateTotals();">
                             </div>
-                            <small>Any additional income besides commissions (e.g., fees, charges)</small>
+                            <small>Any additional income besides commissions</small>
                         </div>
                         <div class="form-group">
                             <label for="allocate_to_capital">Allocate to Capital</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-building"></i></span>
                                 <select id="allocate_to_capital" name="allocate_to_capital" class="form-control">
-                                    <option value="yes" <?php echo ($commission['allocate_to_capital'] == 'yes') ? 'selected' : ''; ?>>Yes - Add to Capital</option>
-                                    <option value="no" <?php echo ($commission['allocate_to_capital'] == 'no') ? 'selected' : ''; ?>>No - Keep as Profit</option>
+                                    <option value="yes" <?php echo ($edit_commission['allocate_to_capital'] == 'yes') ? 'selected' : ''; ?>>Yes - Add to Capital</option>
+                                    <option value="no" <?php echo ($edit_commission['allocate_to_capital'] == 'no') ? 'selected' : ''; ?>>No - Keep as Profit</option>
                                 </select>
                             </div>
-                            <small>Should this income be added to the branch capital?</small>
+                            <small>Should this income be added to capital?</small>
                         </div>
                     </div>
                     
@@ -343,9 +389,8 @@ DASHBOARD CONTENT
                             <label for="notes">Notes</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-sticky-note"></i></span>
-                                <textarea id="notes" name="notes" class="form-control" rows="3" placeholder="Any additional notes..."><?php echo htmlspecialchars($commission['notes'] ?? ''); ?></textarea>
+                                <textarea id="notes" name="notes" class="form-control" rows="3" placeholder="Any additional notes..."><?php echo htmlspecialchars($edit_commission['notes'] ?? ''); ?></textarea>
                             </div>
-                            <small>Optional notes for this commission record</small>
                         </div>
                     </div>
                 </div>
@@ -371,36 +416,17 @@ DASHBOARD CONTENT
                             <span class="summary-value" id="totalIncomeDisplay">TSh <?php echo number_format($total_business_income, 0, '.', ','); ?></span>
                         </div>
                     </div>
-                    
-                    <div class="allocation-info">
-                        <div class="allocation-row">
-                            <span class="allocation-label">Allocation Status:</span>
-                            <span class="allocation-value <?php echo ($commission['allocate_to_capital'] == 'yes') ? 'allocated' : 'not-allocated'; ?>">
-                                <?php if ($commission['allocate_to_capital'] == 'yes'): ?>
-                                    <i class="fas fa-check-circle"></i> Will be added to Capital
-                                <?php else: ?>
-                                    <i class="fas fa-times-circle"></i> Will be kept as Profit
-                                <?php endif; ?>
-                            </span>
-                        </div>
-                        <?php if ($commission['allocate_to_capital'] == 'yes'): ?>
-                        <div class="allocation-row">
-                            <span class="allocation-label">Amount to Allocate:</span>
-                            <span class="allocation-value allocated"><?php echo formatCurrency($total_business_income); ?></span>
-                        </div>
-                        <?php endif; ?>
-                    </div>
                 </div>
 
                 <!-- ===== FORM ACTIONS ===== -->
                 <div class="form-actions">
                     <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Update Commission
+                        <i class="fas fa-save"></i> Update
                     </button>
                     <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                        <i class="fas fa-undo"></i> Reset Changes
+                        <i class="fas fa-undo"></i> Reset
                     </button>
-                    <a href="index.php" class="btn btn-cancel">
+                    <a href="view.php?id=<?php echo $commission_id; ?>" class="btn btn-cancel">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                 </div>
@@ -409,27 +435,23 @@ DASHBOARD CONTENT
 
     </div>
     
-    <!-- ============================================================
-    FOOTER
-    ============================================================ -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
 <!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
+STYLES
 ============================================================ -->
 <style>
 /* ============================================================
-   DARK MODE VARIABLES
+   CSS VARIABLES
    ============================================================ */
 :root {
-    --form-bg: #FFFFFF;
+    --form-bg: #f3f4f6;
+    --form-card-bg: #FFFFFF;
     --form-text: #1F2937;
     --form-text-secondary: #6B7280;
     --form-text-light: #9CA3AF;
     --form-border: #E5E7EB;
-    --form-card-bg: #FFFFFF;
-    --form-card-header: #FAFBFC;
     --form-input-bg: #F9FAFB;
     --form-hover: #F3F4F6;
     --form-shadow: rgba(0,0,0,0.06);
@@ -449,19 +471,18 @@ DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
 }
 
 html.dark-mode {
-    --form-bg: #1F2937;
-    --form-text: #F9FAFB;
-    --form-text-secondary: #9CA3AF;
-    --form-text-light: #6B7280;
-    --form-border: #374151;
-    --form-card-bg: #1F2937;
-    --form-card-header: #374151;
+    --form-bg: #0f172a;
+    --form-card-bg: #1E293B;
+    --form-text: #F1F5F9;
+    --form-text-secondary: #94A3B8;
+    --form-text-light: #64748B;
+    --form-border: #334155;
     --form-input-bg: #374151;
-    --form-hover: #374151;
+    --form-hover: #2D3A4F;
     --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.4);
-    --form-dropdown-bg: #1F2937;
-    --form-dropdown-border: #374151;
+    --form-shadow-lg: rgba(0,0,0,0.5);
+    --form-dropdown-bg: #1E293B;
+    --form-dropdown-border: #334155;
     --form-success-bg: #065F46;
     --form-success-text: #D1FAE5;
     --form-success-border: #047857;
@@ -474,25 +495,134 @@ html.dark-mode {
     --provider-text: #A5D6A7;
 }
 
-/* Apply Dark Mode to Full Page */
 body {
     background: var(--form-bg) !important;
     color: var(--form-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-.main-wrapper {
-    background: var(--form-bg) !important;
-    transition: background 0.3s ease;
-}
+.main-wrapper { background: var(--form-bg) !important; }
 
 .main-content {
     background: var(--form-bg) !important;
-    transition: background 0.3s ease;
+    padding: 16px 20px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box;
 }
 
 /* ============================================================
-   PAGE HEADER - DARK MODE
+   PERSISTENT RED BRANCH STATUS CARD
+   ============================================================ */
+.branch-status-card {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 16px 22px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.35);
+    position: relative;
+    overflow: hidden;
+    flex-wrap: wrap;
+}
+
+.branch-status-card::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 250px;
+    height: 250px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.branch-status-icon {
+    width: 52px;
+    height: 52px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+
+.branch-status-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+    flex: 1;
+}
+
+.branch-status-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.branch-status-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+
+.branch-status-code {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 3px 12px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.branch-status-location {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.btn-back-card {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #FFFFFF;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    position: relative;
+    z-index: 1;
+}
+
+.btn-back-card:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #FFFFFF;
+}
+
+/* ============================================================
+   PAGE HEADER
    ============================================================ */
 .page-header {
     display: flex;
@@ -500,6 +630,8 @@ body {
     align-items: center;
     margin-bottom: 16px;
     padding: 0 4px;
+    flex-wrap: wrap;
+    gap: 12px;
 }
 
 .page-header-left {
@@ -513,7 +645,6 @@ body {
     font-weight: 700;
     color: var(--form-text);
     margin: 0;
-    transition: color 0.3s ease;
 }
 
 .page-header-left h2 i {
@@ -527,41 +658,18 @@ body {
     background: var(--form-hover);
     padding: 3px 12px;
     border-radius: 12px;
-    transition: all 0.3s ease;
 }
 
-.commission-id-badge {
-    font-size: 12px;
-    font-weight: 600;
-    color: #10B981;
-    background: rgba(16, 185, 129, 0.1);
-    padding: 2px 12px;
-    border-radius: 12px;
-}
-
-.btn-back {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-}
-
-.btn-back:hover {
-    background: var(--form-border);
-    color: var(--form-text);
+.page-header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .btn-view {
     background: #DBEAFE;
     color: #1D4ED8;
-    padding: 8px 18px;
+    padding: 9px 20px;
     border-radius: 8px;
     font-weight: 600;
     font-size: 13px;
@@ -574,23 +682,33 @@ body {
 
 .btn-view:hover {
     background: #BFDBFE;
+    transform: translateY(-1px);
     color: #1E40AF;
 }
 
+html.dark-mode .btn-view {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+html.dark-mode .btn-view:hover {
+    background: #3B82F6;
+    color: #FFFFFF;
+}
+
 /* ============================================================
-   ALERTS - DARK MODE
+   ALERTS
    ============================================================ */
 .alert {
-    padding: 14px 18px;
+    padding: 12px 16px;
     border-radius: 8px;
     margin-bottom: 16px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-weight: 500;
-    position: relative;
+    font-size: 13px;
     animation: slideDown 0.4s ease forwards;
-    transition: all 0.3s ease;
 }
 
 .alert-success {
@@ -605,29 +723,20 @@ body {
     border: 1px solid var(--form-danger-border);
 }
 
-.alert i {
-    font-size: 20px;
-    flex-shrink: 0;
-}
-
-.alert span {
-    flex: 1;
-}
+.alert i { font-size: 18px; flex-shrink: 0; }
+.alert span { flex: 1; }
 
 .alert-close {
     background: transparent;
     border: none;
-    font-size: 22px;
+    font-size: 20px;
     color: inherit;
     cursor: pointer;
     padding: 0 4px;
     opacity: 0.6;
-    transition: opacity 0.2s;
 }
 
-.alert-close:hover {
-    opacity: 1;
-}
+.alert-close:hover { opacity: 1; }
 
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
@@ -635,7 +744,7 @@ body {
 }
 
 /* ============================================================
-   FORM CONTAINER - DARK MODE
+   FORM CONTAINER
    ============================================================ */
 .form-container {
     background: var(--form-card-bg);
@@ -643,31 +752,30 @@ body {
     box-shadow: 0 1px 3px var(--form-shadow);
     border: 1px solid var(--form-border);
     overflow: hidden;
-    transition: all 0.3s ease;
+    animation: fadeInUp 0.4s ease forwards;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
-/* ============================================================
-   FORM SECTIONS - DARK MODE
-   ============================================================ */
 .form-section {
     padding: 20px 24px;
     border-bottom: 1px solid var(--form-border);
-    transition: all 0.3s ease;
 }
 
-.form-section:last-child {
-    border-bottom: none;
-}
+.form-section:last-child { border-bottom: none; }
 
 .section-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .section-header h3 {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     color: var(--form-text);
     margin: 0;
@@ -692,7 +800,7 @@ body {
 }
 
 /* ============================================================
-   FORM ROWS - DARK MODE
+   FORM ROWS
    ============================================================ */
 .form-row {
     display: grid;
@@ -714,7 +822,6 @@ body {
     font-size: 13px;
     font-weight: 600;
     color: var(--form-text);
-    transition: color 0.3s ease;
 }
 
 .form-group label .required {
@@ -735,7 +842,6 @@ body {
     font-size: 14px;
     z-index: 1;
     pointer-events: none;
-    transition: color 0.3s ease;
 }
 
 .input-group .form-control {
@@ -757,12 +863,7 @@ body {
 
 .input-group .form-control:focus {
     border-color: #10B981;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
-}
-
-.input-group .form-control:focus + .input-icon,
-.input-group .form-control:focus ~ .input-icon {
-    color: #10B981;
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
 }
 
 .input-group select.form-control {
@@ -772,6 +873,7 @@ body {
     background-repeat: no-repeat;
     background-position: right 12px center;
     padding-right: 36px;
+    cursor: pointer;
 }
 
 html.dark-mode .input-group select.form-control {
@@ -793,11 +895,10 @@ html.dark-mode .input-group select.form-control {
     font-size: 12px;
     color: var(--form-text-secondary);
     margin-top: 2px;
-    transition: color 0.3s ease;
 }
 
 /* ============================================================
-   PROVIDERS GRID - LIGHT GREEN BACKGROUND
+   PROVIDERS GRID
    ============================================================ */
 .providers-grid {
     display: grid;
@@ -814,12 +915,12 @@ html.dark-mode .input-group select.form-control {
     border-radius: 8px;
     border: 2px solid var(--provider-border);
     transition: all 0.3s ease;
+    min-width: 0;
 }
 
 .provider-item:hover {
     background: var(--provider-bg-hover);
     border-color: #34D399;
-    box-shadow: 0 2px 8px var(--form-shadow);
     transform: translateY(-1px);
 }
 
@@ -845,7 +946,9 @@ html.dark-mode .input-group select.form-control {
     font-weight: 500;
     color: var(--provider-text);
     display: block;
-    transition: color 0.3s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .provider-code {
@@ -880,28 +983,16 @@ html.dark-mode .provider-input .form-control {
 
 .provider-input .form-control:focus {
     border-color: #10B981;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.2);
 }
 
-.provider-input .form-control::placeholder {
-    color: var(--form-text-light);
-}
-
-/* ============================================================
-   MONEY INPUT STYLES
-   ============================================================ */
 .money-input {
     font-weight: 600;
     letter-spacing: 0.5px;
 }
 
-.money-input:focus {
-    border-color: #10B981 !important;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2) !important;
-}
-
 /* ============================================================
-   SUMMARY SECTION - DARK MODE
+   SUMMARY SECTION
    ============================================================ */
 .summary-section {
     background: var(--form-hover);
@@ -911,7 +1002,6 @@ html.dark-mode .provider-input .form-control {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
-    margin-bottom: 16px;
 }
 
 .summary-item {
@@ -919,11 +1009,12 @@ html.dark-mode .provider-input .form-control {
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 14px 16px;
+    padding: 14px;
     border-radius: 8px;
     background: var(--form-card-bg);
     border: 1px solid var(--form-border);
-    transition: all 0.3s ease;
+    text-align: center;
+    min-width: 0;
 }
 
 .summary-item.total {
@@ -940,69 +1031,40 @@ html.dark-mode .summary-item.total {
     text-transform: uppercase;
     color: var(--form-text-secondary);
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
 }
 
 .summary-value {
-    font-size: 20px;
+    font-size: clamp(14px, 1.2vw, 18px);
     font-weight: 700;
     color: var(--form-text);
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+    max-width: 100%;
 }
 
 .summary-item.total .summary-value {
     color: #10B981;
 }
 
-/* ============================================================
-   ALLOCATION INFO
-   ============================================================ */
-.allocation-info {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 12px 16px;
-    background: var(--form-card-bg);
-    border-radius: 8px;
-    border: 1px solid var(--form-border);
-    transition: all 0.3s ease;
-}
-
-.allocation-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.allocation-label {
-    font-size: 13px;
-    color: var(--form-text-secondary);
-}
-
-.allocation-value {
-    font-size: 14px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.allocation-value.allocated {
-    color: #10B981;
-}
-
-.allocation-value.not-allocated {
-    color: #F59E0B;
+html.dark-mode .summary-item.total .summary-value {
+    color: #34D399;
 }
 
 /* ============================================================
-   FORM ACTIONS - DARK MODE
+   FORM ACTIONS
    ============================================================ */
 .form-actions {
     display: flex;
     gap: 12px;
     padding: 16px 24px;
     border-top: 1px solid var(--form-border);
-    background: var(--form-card-header);
-    transition: all 0.3s ease;
+    background: var(--form-hover);
+    flex-wrap: wrap;
 }
 
 .btn {
@@ -1018,6 +1080,7 @@ html.dark-mode .summary-item.total {
     align-items: center;
     gap: 8px;
     text-decoration: none;
+    white-space: nowrap;
 }
 
 .btn-submit {
@@ -1028,7 +1091,7 @@ html.dark-mode .summary-item.total {
 .btn-submit:hover {
     background: #059669;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
 }
 
 .btn-submit:disabled {
@@ -1038,8 +1101,9 @@ html.dark-mode .summary-item.total {
 }
 
 .btn-reset {
-    background: var(--form-hover);
+    background: var(--form-card-bg);
     color: var(--form-text-secondary);
+    border: 1px solid var(--form-border);
 }
 
 .btn-reset:hover {
@@ -1048,37 +1112,84 @@ html.dark-mode .summary-item.total {
 }
 
 .btn-cancel {
-    background: var(--form-hover);
+    background: var(--form-card-bg);
     color: var(--form-text-secondary);
+    border: 1px solid var(--form-border);
 }
 
 .btn-cancel:hover {
     background: #FEE2E2;
     color: #991B1B;
+    border-color: #FECACA;
+}
+
+html.dark-mode .btn-cancel:hover {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border-color: #991B1B;
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1200px) {
+    .summary-value {
+        font-size: clamp(13px, 1.4vw, 16px);
+    }
+}
+
 @media (max-width: 1024px) {
     .providers-grid {
         grid-template-columns: repeat(2, 1fr);
     }
     
     .summary-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(3, 1fr);
     }
 }
 
 @media (max-width: 768px) {
+    .main-content {
+        padding: 12px !important;
+    }
+    
+    .branch-status-card {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+    }
+    
+    .branch-status-info {
+        width: 100%;
+    }
+    
+    .btn-back-card {
+        width: 100%;
+        justify-content: center;
+    }
+    
     .page-header {
         flex-direction: column;
         gap: 12px;
         align-items: flex-start;
     }
     
-    .page-header-left {
-        flex-wrap: wrap;
+    .page-header-right {
+        width: 100%;
+    }
+    
+    .page-header-right .btn {
+        width: 100%;
+        justify-content: center;
     }
     
     .form-row {
@@ -1100,8 +1211,8 @@ html.dark-mode .summary-item.total {
     }
     
     .provider-item {
-        padding: 8px 10px;
         flex-wrap: wrap;
+        padding: 8px 10px;
     }
     
     .provider-input {
@@ -1124,29 +1235,26 @@ html.dark-mode .summary-item.total {
     .section-header {
         flex-direction: column;
         align-items: flex-start;
-        gap: 6px;
-    }
-    
-    .allocation-row {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 2px;
     }
 }
 
 @media (max-width: 480px) {
+    .main-content {
+        padding: 10px !important;
+    }
+    
+    .branch-status-name {
+        font-size: 15px;
+    }
+    
+    .branch-status-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+    }
+    
     .page-header-left h2 {
         font-size: 17px;
-    }
-    
-    .page-subtitle {
-        font-size: 11px;
-        padding: 2px 10px;
-    }
-    
-    .commission-id-badge {
-        font-size: 10px;
-        padding: 1px 10px;
     }
     
     .providers-grid {
@@ -1168,84 +1276,36 @@ html.dark-mode .summary-item.total {
         font-size: 13px;
     }
     
-    .alert {
-        padding: 10px 14px;
-        font-size: 13px;
-    }
-    
     .summary-value {
-        font-size: 17px;
+        font-size: clamp(13px, 4vw, 16px);
     }
 }
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.form-container {
-    animation: fadeInUp 0.4s ease forwards;
-}
-
-.alert {
-    animation: slideDown 0.4s ease forwards;
-}
-
-.provider-item {
-    animation: fadeInUp 0.3s ease forwards;
-}
-
-.provider-item:nth-child(1) { animation-delay: 0.03s; }
-.provider-item:nth-child(2) { animation-delay: 0.06s; }
-.provider-item:nth-child(3) { animation-delay: 0.09s; }
-.provider-item:nth-child(4) { animation-delay: 0.12s; }
-.provider-item:nth-child(5) { animation-delay: 0.15s; }
-.provider-item:nth-child(6) { animation-delay: 0.18s; }
-.provider-item:nth-child(7) { animation-delay: 0.21s; }
-.provider-item:nth-child(8) { animation-delay: 0.24s; }
-.provider-item:nth-child(9) { animation-delay: 0.27s; }
 </style>
 
 <script>
 // ============================================================
-// FORMAT MONEY INPUT - 1,000,000 format
+// FORMAT MONEY INPUT
 // ============================================================
 function formatMoneyInput(input) {
-    // Remove all non-digit characters except decimal point
     var value = input.value.replace(/[^0-9.]/g, '');
-    
-    // Split by decimal point
     var parts = value.split('.');
     var integerPart = parts[0] || '';
     var decimalPart = parts[1] || '';
     
-    // Format integer part with commas
     if (integerPart.length > 0) {
         integerPart = parseInt(integerPart).toLocaleString('en-US');
     }
     
-    // Limit decimal to 2 places
     if (decimalPart.length > 2) {
         decimalPart = decimalPart.substring(0, 2);
     }
     
-    // Reconstruct the value
     var formatted = integerPart;
     if (decimalPart.length > 0) {
         formatted += '.' + decimalPart;
     }
     
     input.value = formatted;
-}
-
-// ============================================================
-// GET RAW NUMBER FROM FORMATTED INPUT
-// ============================================================
-function getRawNumber(input) {
-    return parseFloat(input.value.replace(/,/g, '')) || 0;
 }
 
 // ============================================================
@@ -1266,19 +1326,16 @@ function calculateTotals() {
     var otherIncome = parseFloat(rawOther) || 0;
     var totalIncome = totalCommission + otherIncome;
     
-    var totalCommissionDisplay = document.getElementById('totalCommissionDisplay');
-    var otherIncomeDisplay = document.getElementById('otherIncomeDisplay');
-    var totalIncomeDisplay = document.getElementById('totalIncomeDisplay');
+    var tcDisplay = document.getElementById('totalCommissionDisplay');
+    var oiDisplay = document.getElementById('otherIncomeDisplay');
+    var tiDisplay = document.getElementById('totalIncomeDisplay');
     
-    if (totalCommissionDisplay) totalCommissionDisplay.textContent = 'TSh ' + formatNumberDisplay(totalCommission);
-    if (otherIncomeDisplay) otherIncomeDisplay.textContent = 'TSh ' + formatNumberDisplay(otherIncome);
-    if (totalIncomeDisplay) totalIncomeDisplay.textContent = 'TSh ' + formatNumberDisplay(totalIncome);
+    if (tcDisplay) tcDisplay.textContent = 'TSh ' + formatNumber(totalCommission);
+    if (oiDisplay) oiDisplay.textContent = 'TSh ' + formatNumber(otherIncome);
+    if (tiDisplay) tiDisplay.textContent = 'TSh ' + formatNumber(totalIncome);
 }
 
-// ============================================================
-// FORMAT NUMBER FOR DISPLAY
-// ============================================================
-function formatNumberDisplay(num) {
+function formatNumber(num) {
     return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
@@ -1293,18 +1350,21 @@ function validateForm() {
         return false;
     }
     
-    var hasProvider = false;
+    var hasAmount = false;
     var providerInputs = document.querySelectorAll('.provider-amount');
     providerInputs.forEach(function(input) {
         var rawValue = input.value.replace(/,/g, '');
         var value = parseFloat(rawValue) || 0;
-        if (value > 0) {
-            hasProvider = true;
-        }
+        if (value > 0) hasAmount = true;
     });
     
-    if (!hasProvider) {
-        alert('Please enter at least one provider amount.');
+    var otherIncomeInput = document.getElementById('other_income');
+    var rawOther = otherIncomeInput ? otherIncomeInput.value.replace(/,/g, '') : '0';
+    var otherIncome = parseFloat(rawOther) || 0;
+    if (otherIncome > 0) hasAmount = true;
+    
+    if (!hasAmount) {
+        alert('Please enter at least one provider amount or other income.');
         return false;
     }
     
@@ -1319,17 +1379,15 @@ function validateForm() {
 // CONFIRM RESET
 // ============================================================
 function confirmReset() {
-    return confirm('Are you sure you want to reset the form? All entered data will be lost.');
+    return confirm('Are you sure you want to reset the form? All changes will be lost.');
 }
 
 // ============================================================
-// DARK MODE SYNC
+// INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Calculate initial totals
     calculateTotals();
     
-    // Listen for other income changes
     var otherIncome = document.getElementById('other_income');
     if (otherIncome) {
         otherIncome.addEventListener('input', function() {
@@ -1338,45 +1396,22 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
     }
     
     syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
     
-    // ============================================================
-    // AUTO-HIDE MESSAGES
-    // ============================================================
-    var successAlert = document.getElementById('successAlert');
-    if (successAlert) {
-        setTimeout(function() {
-            successAlert.style.display = 'none';
-        }, 5000);
-    }
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
     
-    var errorAlert = document.getElementById('errorAlert');
-    if (errorAlert) {
-        setTimeout(function() {
-            errorAlert.style.display = 'none';
-        }, 8000);
-    }
-    
-    // ============================================================
-    // CLOSE ALERT
-    // ============================================================
     var closeBtns = document.querySelectorAll('.alert-close');
     closeBtns.forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -1385,6 +1420,5 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 </script>
-
 </body>
 </html>
