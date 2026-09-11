@@ -1,10 +1,11 @@
 <?php
 // ================================================================
-// FILE: modules/daily_report/generate.php
-// GENERATE DAILY REPORT
-// ✅ FIXED: Admin - no employee_id filter (sees all morning reports)
-// ✅ FIXED: Employee - filter by employee_id (sees own only)
-// ✅ FIXED: Employee name saved when generating
+// FILE: modules/daily_report/add_employee.php
+// EMPLOYEE - GENERATE DAILY REPORT
+// ✅ Employee only sees OWN morning reports
+// ✅ Employee name saved when generating
+// ✅ Uses shared employee_sidebar & header
+// ✅ Page takes FULL DEVICE WIDTH
 // ================================================================
 
 require_once '../../config/config.php';
@@ -23,103 +24,70 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
-    header('Location: ../dashboard/employee.php');
+// Employee tu
+if ($role !== 'employee') {
+    header('Location: generate.php');
     exit();
 }
-
-// ============================================================
-// ✅ CHECK IF ADMIN
-// ============================================================
-$is_admin = ($role === 'admin' || $role === 'super_admin');
 
 $error = '';
 $selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
 
 // ============================================================
-// BRANCH FILTER
+// GET EMPLOYEE DATA
 // ============================================================
-$selected_branch = 0;
-if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id'] !== '0') {
-    $selected_branch = intval($_GET['branch_id']);
-} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
-    $selected_branch = intval($_GET['branch']);
+$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$employee = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$employee) {
+    header('Location: ../../login.php');
+    exit();
 }
 
-// If no branch, use user's branch
-if ($selected_branch == 0) {
-    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
-    $stmt->execute([$user_id]);
-    $emp = $stmt->fetch();
-    if ($emp && $emp['branch_id'] > 0) {
-        $selected_branch = intval($emp['branch_id']);
-    }
-}
+$employee_branch_id = $employee['branch_id'] ?? 0;
+$selected_branch = $employee_branch_id;
 
 try {
-    // Get branches
-    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-    $stmt->execute();
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // ============================================================
+    // GET BRANCH INFO
+    // ============================================================
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+    $stmt->execute([$selected_branch]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    $branch_name = 'All Branches';
-    $branch_code = '';
-    if ($selected_branch > 0) {
-        foreach ($branches as $b) {
-            if ($b['id'] == $selected_branch) {
-                $branch_name = $b['branch_name'];
-                $branch_code = $b['branch_code'] ?? '';
-                break;
-            }
-        }
-    }
+    $branch_name = $branch['branch_name'] ?? 'My Branch';
+    $branch_code = $branch['branch_code'] ?? '';
+    $branch_location = $branch['location'] ?? '';
     
     // ============================================================
-    // ✅ CHECK EXISTING REPORT
+    // CHECK EXISTING REPORT - ONLY MY OWN
     // ============================================================
-    $sql = "SELECT id FROM daily_reports WHERE report_date = ?";
-    $params = [$selected_date];
-    
-    if ($selected_branch > 0) {
-        $sql .= " AND branch_id = ?";
-        $params[] = $selected_branch;
-    }
-    
-    // ✅ Employee: only sees own reports
-    if (!$is_admin) {
-        $sql .= " AND employee_id = ?";
-        $params[] = $user_id;
-    }
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    $stmt = $db->prepare("
+        SELECT id FROM daily_reports 
+        WHERE report_date = ? 
+        AND branch_id = ? 
+        AND employee_id = ?
+    ");
+    $stmt->execute([$selected_date, $selected_branch, $user_id]);
     $existing_report = $stmt->fetch(PDO::FETCH_ASSOC);
     
     // ============================================================
-    // ✅ GET MORNING REPORT
+    // GET MORNING REPORT - ONLY MY OWN
     // ============================================================
-    $sql = "SELECT * FROM morning_reports WHERE report_date = ?";
-    $params = [$selected_date];
-    
-    if ($selected_branch > 0) {
-        $sql .= " AND branch_id = ?";
-        $params[] = $selected_branch;
-    }
-    
-    // ✅ Employee: only sees own morning reports
-    if (!$is_admin) {
-        $sql .= " AND employee_id = ?";
-        $params[] = $user_id;
-    }
-    
-    $sql .= " ORDER BY id DESC LIMIT 1";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    $stmt = $db->prepare("
+        SELECT * FROM morning_reports 
+        WHERE report_date = ? 
+        AND branch_id = ? 
+        AND employee_id = ?
+        ORDER BY id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_date, $selected_branch, $user_id]);
     $morning_report = $stmt->fetch(PDO::FETCH_ASSOC);
     
     // ============================================================
-    // ✅ GET ALL PROVIDERS
+    // GET ALL PROVIDERS FROM MORNING REPORT
     // ============================================================
     $providers_data = [];
     if ($morning_report) {
@@ -140,7 +108,6 @@ try {
     
 } catch (PDOException $e) {
     error_log("Error loading data: " . $e->getMessage());
-    $branches = [];
     $existing_report = null;
     $morning_report = null;
     $providers_data = [];
@@ -158,19 +125,18 @@ $providers_count = count($providers_data);
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate'])) {
     try {
         if ($existing_report) {
-            $error = 'A daily report already exists for this date and branch.';
+            $error = 'Tayari unayo daily report kwa tarehe hii.';
         } elseif (!$morning_report) {
-            $error = 'No morning report found for this date. Please submit morning report first.';
+            $error = 'Hakuna morning report kwa tarehe hii. Tafadhali tengeneza morning report kwanza.';
         } elseif (empty($providers_data)) {
-            $error = 'No providers found in the morning report.';
+            $error = 'Hakuna providers kwenye morning report yako.';
         } else {
             $report_number = generateNumber('DR');
             
             $db->beginTransaction();
             
             // ============================================================
-            // STEP 1: INSERT INTO daily_reports (SUMMARY)
-            // ✅ employee_id = logged-in user (the one generating)
+            // STEP 1: INSERT INTO daily_reports
             // ============================================================
             $sql = "INSERT INTO daily_reports (
                 report_number, employee_id, branch_id, branch, report_date,
@@ -214,7 +180,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate'])) {
             $report_id = $db->lastInsertId();
             
             // ============================================================
-            // STEP 2: INSERT INTO daily_report_providers (KILA PROVIDER)
+            // STEP 2: INSERT INTO daily_report_providers
             // ============================================================
             $stmt_provider = $db->prepare("
                 INSERT INTO daily_report_providers (
@@ -252,8 +218,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate'])) {
                 'generated_by' => $user_id
             ]));
             
-            $_SESSION['success_message'] = 'Daily report generated successfully! ' . $providers_count . ' providers included.';
-            header('Location: view.php?id=' . $report_id);
+            $_SESSION['success_message'] = 'Daily report imeundwa successfully! ' . $providers_count . ' providers included.';
+            header('Location: view_employee.php?id=' . $report_id);
             exit();
         }
     } catch (PDOException $e) {
@@ -265,9 +231,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate'])) {
     }
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <div class="main-wrapper">
@@ -280,25 +246,20 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-store-alt"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">
-                        <?php echo $selected_branch > 0 ? 'Current Branch' : 'Showing'; ?>
-                    </span>
+                    <span class="branch-indicator-label">My Branch</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
                     <?php endif; ?>
                 </div>
+                <?php if ($branch_location): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($branch_location); ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <?php if ($is_admin): ?>
-                    <span class="role-badge role-admin">
-                        <i class="fas fa-shield-alt"></i> ADMIN MODE
-                    </span>
-                <?php else: ?>
-                    <span class="role-badge role-employee">
-                        <i class="fas fa-user"></i> EMPLOYEE MODE
-                    </span>
-                <?php endif; ?>
                 <span class="date-display">
                     <i class="far fa-calendar-alt"></i> 
                     <?php echo date('d M Y'); ?>
@@ -311,15 +272,11 @@ include_once '../../includes/admin_topbar.php';
             <div class="header-left">
                 <h2><i class="fas fa-magic" style="color:#7C3AED;"></i> Generate Daily Report</h2>
                 <p class="text-muted">
-                    <?php if ($is_admin): ?>
-                        Admin mode - unaona morning reports zote za branch
-                    <?php else: ?>
-                        Employee mode - unaona morning reports zako tu
-                    <?php endif; ?>
+                    <i class="fas fa-user"></i> Employee mode - unaona morning reports zako tu
                 </p>
             </div>
             <div class="header-right">
-                <a href="index.php?branch_id=<?php echo $selected_branch; ?>" class="btn btn-secondary">
+                <a href="index_employee.php" class="btn btn-secondary">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
@@ -336,12 +293,13 @@ include_once '../../includes/admin_topbar.php';
         <div class="selector-card">
             <h4><i class="fas fa-calendar-check"></i> Select Date</h4>
             <form method="GET" action="" class="date-form">
-                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
                 <div class="form-group">
                     <label>Report Date</label>
-                    <input type="date" name="date" 
+                    <input type="date" 
+                           name="date" 
                            value="<?php echo htmlspecialchars($selected_date); ?>" 
                            class="form-control" 
+                           max="<?php echo date('Y-m-d'); ?>"
                            onchange="this.form.submit()">
                 </div>
             </form>
@@ -354,14 +312,10 @@ include_once '../../includes/admin_topbar.php';
                 <h3>No Morning Report Found</h3>
                 <p>
                     Hakuna morning report kwa <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong>
-                    <?php if ($selected_branch > 0): ?>
-                        kwa branch <strong><?php echo htmlspecialchars($branch_name); ?></strong>
-                    <?php endif; ?>
-                    <?php if (!$is_admin): ?>
-                        <br><small>Employee mode: unaona morning reports zako tu</small>
-                    <?php endif; ?>
+                    kwa branch <strong><?php echo htmlspecialchars($branch_name); ?></strong>
+                    <br><small>Employee mode: unaona morning reports zako tu</small>
                 </p>
-                <a href="../morning_report/add.php?date=<?php echo $selected_date; ?>" class="btn btn-primary">
+                <a href="../morning_report/add_employee.php?date=<?php echo $selected_date; ?>" class="btn btn-primary">
                     <i class="fas fa-plus"></i> Submit Morning Report
                 </a>
             </div>
@@ -373,12 +327,9 @@ include_once '../../includes/admin_topbar.php';
                 <h3>Daily Report Already Exists</h3>
                 <p>
                     Daily report kwa tarehe <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong> 
-                    imekwisha kuwa generated.
-                    <?php if ($selected_branch > 0): ?>
-                        Kwa branch <strong><?php echo htmlspecialchars($branch_name); ?></strong>.
-                    <?php endif; ?>
+                    imekwisha kuwa generated kwa branch <strong><?php echo htmlspecialchars($branch_name); ?></strong>.
                 </p>
-                <a href="view.php?id=<?php echo $existing_report['id']; ?>" class="btn btn-info">
+                <a href="view_employee.php?id=<?php echo $existing_report['id']; ?>" class="btn btn-info">
                     <i class="fas fa-eye"></i> View Existing Report
                 </a>
             </div>
@@ -391,9 +342,7 @@ include_once '../../includes/admin_topbar.php';
                 <i class="fas fa-info-circle"></i>
                 <span>
                     Morning Report: <strong><?php echo htmlspecialchars($morning_report['report_number']); ?></strong>
-                    <?php if ($is_admin): ?>
-                        (Submitted by Employee ID: <?php echo htmlspecialchars($morning_report['employee_id']); ?>)
-                    <?php endif; ?>
+                    <br><small>Submitted by you</small>
                 </span>
             </div>
             
@@ -476,12 +425,10 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-info-circle"></i>
                     <p>
                         Bonyeza <strong>Generate</strong> kwa ku-save providers wote kwenye daily report.
-                        <?php if (!$is_admin): ?>
-                            <br><small>Jina lako litahifadhiwa kama <strong><?php echo htmlspecialchars($_SESSION['full_name'] ?? 'Employee'); ?></strong></small>
-                        <?php endif; ?>
+                        <br><small>Jina lako litahifadhiwa kama <strong><?php echo htmlspecialchars($_SESSION['full_name'] ?? 'Employee'); ?></strong></small>
                     </p>
                 </div>
-                <form method="POST" action="" onsubmit="return confirm('Generate daily report?\n\nThis will save: Summary + ' + <?php echo $providers_count; ?> + ' providers.\n\nContinue?');">
+                <form method="POST" action="" onsubmit="return confirm('Generate daily report?\n\nThis will save: Summary + <?php echo $providers_count; ?> providers.\n\nContinue?');">
                     <button type="submit" name="generate" class="btn btn-generate btn-lg">
                         <i class="fas fa-magic"></i> Generate Daily Report
                         <span class="btn-count">(<?php echo $providers_count; ?> providers)</span>
@@ -491,10 +438,82 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
         
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
+/* ============================================================
+   ✅ PAGE TAKES FULL DEVICE WIDTH
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+    width: 100%;
+    overflow-x: hidden;
+}
+
+body {
+    width: 100%;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+}
+
+/* ✅ MAIN WRAPPER - SHIFTED RIGHT FOR SIDEBAR */
+.main-wrapper {
+    margin-left: 240px;
+    width: calc(100% - 240px);
+    padding-top: 56px;
+    min-height: 100vh;
+    background: var(--bg-body);
+    transition: margin-left 0.3s ease, width 0.3s ease;
+    overflow-x: hidden;
+    position: relative;
+}
+
+.main-content {
+    padding: 20px 24px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    margin: 0;
+}
+
+/* ✅ RESPONSIVE */
+@media (max-width: 1024px) {
+    .main-wrapper {
+        margin-left: 240px;
+        width: calc(100% - 240px);
+        padding-top: 56px;
+    }
+    .main-content {
+        padding: 16px 18px;
+    }
+}
+
+@media (max-width: 768px) {
+    .main-wrapper {
+        margin-left: 0;
+        width: 100%;
+        padding-top: 50px;
+    }
+    .main-content {
+        padding: 16px 14px;
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .main-wrapper {
+        padding-top: 44px;
+        width: 100%;
+    }
+    .main-content {
+        padding: 12px 10px;
+        width: 100%;
+    }
+}
+
 /* ============================================================
    CSS VARIABLES
    ============================================================ */
@@ -533,7 +552,9 @@ body {
 .main-wrapper { background: var(--bg-body) !important; }
 .main-content { background: var(--bg-body) !important; }
 
-/* Branch Card */
+/* ============================================================
+   BRANCH CARD
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 10px;
@@ -545,12 +566,15 @@ body {
     box-shadow: 0 3px 12px rgba(220, 38, 38, 0.3);
     flex-wrap: wrap;
     gap: 10px;
+    width: 100%;
 }
 .branch-indicator-left {
     display: flex;
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+    min-width: 0;
+    flex: 1;
 }
 .branch-icon-wrapper {
     width: 38px;
@@ -562,6 +586,7 @@ body {
     justify-content: center;
     font-size: 16px;
     color: #FFFFFF;
+    flex-shrink: 0;
 }
 .branch-info {
     display: flex;
@@ -590,32 +615,22 @@ body {
     background: rgba(255, 255, 255, 0.15);
     border-radius: 12px;
 }
+.branch-location {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.85);
+    padding: 3px 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    white-space: nowrap;
+}
 .branch-indicator-right {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-}
-.role-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    border-radius: 16px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-.role-admin {
-    background: rgba(252, 211, 77, 0.25);
-    color: #FCD34D;
-    border: 1px solid rgba(252, 211, 77, 0.3);
-}
-.role-employee {
-    background: rgba(96, 165, 250, 0.25);
-    color: #BFDBFE;
-    border: 1px solid rgba(96, 165, 250, 0.3);
 }
 .date-display {
     font-size: 12px;
@@ -628,7 +643,9 @@ body {
     gap: 5px;
 }
 
-/* Page Header */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -636,6 +653,7 @@ body {
     margin-bottom: 16px;
     flex-wrap: wrap;
     gap: 12px;
+    width: 100%;
 }
 .page-header .header-left h2 {
     font-size: 20px;
@@ -648,8 +666,11 @@ body {
     color: var(--text-muted);
     margin: 4px 0 0 0;
 }
+.header-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn {
     padding: 8px 18px;
     border: none;
@@ -696,7 +717,9 @@ body {
     margin-left: 6px;
 }
 
-/* Alerts */
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 18px;
     border-radius: 8px;
@@ -709,7 +732,9 @@ body {
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 
-/* Info Bar */
+/* ============================================================
+   INFO BAR
+   ============================================================ */
 .info-bar {
     background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
     border: 1px solid #93C5FD;
@@ -735,13 +760,16 @@ html.dark-mode .info-bar {
     font-family: 'Courier New', monospace;
 }
 
-/* Selector Card */
+/* ============================================================
+   SELECTOR CARD
+   ============================================================ */
 .selector-card {
     background: var(--bg-card);
     border-radius: 10px;
     padding: 16px 20px;
     border: 1px solid var(--border-color);
     margin-bottom: 16px;
+    width: 100%;
 }
 .selector-card h4 {
     font-size: 14px;
@@ -785,7 +813,9 @@ html.dark-mode .info-bar {
     box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
 }
 
-/* No Data / Existing Cards */
+/* ============================================================
+   NO DATA / EXISTING CARDS
+   ============================================================ */
 .no-data-card,
 .existing-card {
     background: var(--bg-card);
@@ -793,6 +823,7 @@ html.dark-mode .info-bar {
     padding: 48px 24px;
     border: 1px solid var(--border-color);
     text-align: center;
+    width: 100%;
 }
 .no-data-card i { font-size: 56px; color: #F59E0B; display: block; margin-bottom: 16px; }
 .existing-card i { font-size: 56px; color: #3B82F6; display: block; margin-bottom: 16px; }
@@ -812,7 +843,9 @@ html.dark-mode .info-bar {
 }
 .no-data-card p small { font-size: 12px; color: var(--text-light); }
 
-/* Preview Card */
+/* ============================================================
+   PREVIEW CARD
+   ============================================================ */
 .preview-card {
     background: var(--bg-card);
     border-radius: 12px;
@@ -820,6 +853,7 @@ html.dark-mode .info-bar {
     margin-bottom: 16px;
     overflow: hidden;
     box-shadow: 0 1px 3px var(--shadow-color);
+    width: 100%;
 }
 
 .preview-header {
@@ -876,15 +910,13 @@ html.dark-mode .info-bar {
     border: 1px solid rgba(255,255,255,0.15);
 }
 
-/* Preview Summary */
 .preview-summary {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0;
-    background: var(--bg-card-header, #fafbfc);
+    background: var(--bg-table-even);
     border-bottom: 1px solid var(--border-color);
 }
-html.dark-mode .preview-summary { background: var(--bg-table-even); }
 
 .summary-item {
     padding: 16px 20px;
@@ -915,7 +947,6 @@ html.dark-mode .preview-summary { background: var(--bg-table-even); }
 .cash-color { color: #10B981; }
 .capital-color { color: #7C3AED; font-size: 22px; }
 
-/* Providers Section */
 .providers-section {
     padding: 16px 24px;
 }
@@ -930,10 +961,12 @@ html.dark-mode .preview-summary { background: var(--bg-table-even); }
 .providers-table-wrapper {
     max-height: 400px;
     overflow-y: auto;
+    overflow-x: auto;
     border: 1px solid var(--border-color);
     border-radius: 8px;
+    -webkit-overflow-scrolling: touch;
 }
-.providers-table-wrapper::-webkit-scrollbar { width: 6px; }
+.providers-table-wrapper::-webkit-scrollbar { width: 6px; height: 6px; }
 .providers-table-wrapper::-webkit-scrollbar-track { background: var(--bg-table-even); }
 .providers-table-wrapper::-webkit-scrollbar-thumb { background: #7C3AED; border-radius: 3px; }
 
@@ -941,6 +974,7 @@ html.dark-mode .preview-summary { background: var(--bg-table-even); }
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
+    min-width: 600px;
 }
 .providers-preview-table thead {
     background: #7C3AED;
@@ -955,6 +989,7 @@ html.dark-mode .preview-summary { background: var(--bg-table-even); }
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    white-space: nowrap;
 }
 .providers-preview-table tbody td {
     padding: 10px 14px;
@@ -972,6 +1007,7 @@ html.dark-mode .preview-summary { background: var(--bg-table-even); }
     font-size: 10px;
     font-weight: 700;
     font-family: 'Courier New', monospace;
+    white-space: nowrap;
 }
 html.dark-mode .code-badge { background: #1E3A5F; color: #60A5FA; }
 
@@ -988,7 +1024,9 @@ html.dark-mode .totals-row {
 }
 .totals-row td { padding: 12px 14px; font-weight: 700; color: var(--text-primary); }
 
-/* Generate Action Card */
+/* ============================================================
+   GENERATE ACTION CARD
+   ============================================================ */
 .generate-action-card {
     background: linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%);
     border: 2px solid #7C3AED;
@@ -999,6 +1037,7 @@ html.dark-mode .totals-row {
     justify-content: space-between;
     gap: 20px;
     flex-wrap: wrap;
+    width: 100%;
 }
 html.dark-mode .generate-action-card {
     background: linear-gradient(135deg, #2D1B5F 0%, #1E1B4B 100%);
@@ -1014,16 +1053,29 @@ html.dark-mode .generate-action-card {
 .generate-info i {
     font-size: 22px;
     color: #7C3AED;
+    flex-shrink: 0;
 }
 .generate-info p {
     font-size: 13px;
     color: var(--text-primary);
     margin: 0;
+    line-height: 1.5;
 }
 .generate-info p small { font-size: 12px; color: var(--text-muted); display: block; margin-top: 4px; }
 .generate-info strong { color: #7C3AED; }
 
-/* Responsive */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 1024px) {
+    .preview-summary { grid-template-columns: 1fr; }
+    .summary-item {
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+    }
+    .summary-item:last-child { border-bottom: none; }
+}
+
 @media (max-width: 768px) {
     .preview-summary { grid-template-columns: 1fr; }
     .summary-item {
@@ -1045,11 +1097,15 @@ html.dark-mode .generate-action-card {
     .header-right { width: 100%; }
     .header-right .btn { width: 100%; justify-content: center; }
     
-    .form-control { min-width: 100%; }
+    .form-control { min-width: 100%; width: 100%; }
     .date-form { flex-direction: column; }
+    .form-group { width: 100%; }
     
     .branch-indicator { flex-direction: column; gap: 8px; align-items: flex-start; }
     .branch-indicator-right { width: 100%; }
+    
+    .preview-header { flex-direction: column; align-items: flex-start; }
+    .providers-badge { align-self: flex-start; }
 }
 
 @media (max-width: 480px) {
@@ -1061,6 +1117,7 @@ html.dark-mode .generate-action-card {
     .providers-section { padding: 12px 14px; }
     .providers-preview-table thead th,
     .providers-preview-table tbody td { padding: 8px 10px; font-size: 12px; }
+    .btn-lg { padding: 12px 20px; font-size: 13px; }
 }
 </style>
 

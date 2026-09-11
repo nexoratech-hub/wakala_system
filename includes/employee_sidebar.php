@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: includes/employee_sidebar.php
 // WAKALA SYSTEM - EMPLOYEE SIDEBAR
-// WITH BIG LOGO, MINIMAL TOP SPACE
+// ✅ FIXED: Correct paths for all navigation
+// ✅ FIXED: Active state detection for _employee.php files
+// ✅ WITH BIG LOGO, MINIMAL TOP SPACE
 // ================================================================
 
 // Get user data
@@ -11,17 +13,42 @@ $role = $_SESSION['role'] ?? 'employee';
 $user_initial = strtoupper(substr($full_name, 0, 1));
 $employee_id = $_SESSION['employee_id'] ?? 'EMP-001';
 
-// Get current page for active state
+// ============================================================
+// GET CURRENT PATH INFO
+// ============================================================
 $current_page = basename($_SERVER['PHP_SELF']);
 $current_dir = basename(dirname($_SERVER['PHP_SELF']));
 
-// Function to check if nav item is active
-function isActive($dir, $page = null) {
-    global $current_dir, $current_page;
-    if ($page) {
-        return ($current_dir == $dir && $current_page == $page) ? 'active' : '';
-    }
-    return ($current_dir == $dir) ? 'active' : '';
+// ============================================================
+// DETECT CURRENT SECTION (for active state)
+// ============================================================
+$current_section = '';
+
+if ($current_dir === 'morning_report') {
+    $current_section = 'morning_report';
+} elseif ($current_dir === 'evening_stock') {
+    $current_section = 'evening_stock';
+} elseif ($current_dir === 'daily_report') {
+    $current_section = 'daily_report';
+} elseif ($current_dir === 'commissions') {
+    $current_section = 'commissions';
+} elseif ($current_dir === 'expenses') {
+    $current_section = 'expenses';
+} elseif ($current_dir === 'store_cash_out') {
+    $current_section = 'store_cash_out';
+} elseif ($current_dir === 'profile') {
+    $current_section = 'profile';
+} elseif ($current_dir === 'dashboard') {
+    $current_section = 'dashboard';
+} elseif ($current_dir === 'capital_management') {
+    $current_section = 'capital_management';
+}
+
+// ============================================================
+// FUNCTION TO CHECK ACTIVE
+// ============================================================
+function isNavActive($section, $current_section) {
+    return ($section === $current_section) ? 'active' : '';
 }
 ?>
 <style>
@@ -29,7 +56,6 @@ function isActive($dir, $page = null) {
    EMPLOYEE SIDEBAR - FIXED POSITION - NO GAP
    ============================================================ */
 
-/* SIDEBAR CONTAINER */
 .employee-sidebar {
     position: fixed;
     top: 0;
@@ -45,10 +71,9 @@ function isActive($dir, $page = null) {
     display: flex;
     flex-direction: column;
     box-shadow: 2px 0 20px rgba(187, 4, 4, 0.3);
-    padding-top: 56px; /* Space for topbar */
+    padding-top: 56px;
 }
 
-/* SIDEBAR SCROLLBAR */
 .employee-sidebar::-webkit-scrollbar {
     width: 4px;
 }
@@ -61,17 +86,17 @@ function isActive($dir, $page = null) {
 }
 
 /* ============================================================
-   LOGO SECTION - BIG LOGO, MINIMAL PADDING
+   LOGO SECTION
    ============================================================ */
 .employee-sidebar .sidebar-logo {
-    padding: 8px 16px 6px 16px; /* REDUCED PADDING */
+    padding: 8px 16px 6px 16px;
     text-align: center;
     border-bottom: 1px solid rgba(255,255,255,0.1);
     flex-shrink: 0;
 }
 
 .employee-sidebar .sidebar-logo img {
-    width: 70px; /* BIGGER LOGO */
+    width: 70px;
     height: 70px;
     border-radius: 50%;
     object-fit: cover;
@@ -80,7 +105,7 @@ function isActive($dir, $page = null) {
 }
 
 .employee-sidebar .sidebar-logo .logo-text {
-    font-size: 16px; /* BIGGER TEXT */
+    font-size: 16px;
     font-weight: 700;
     color: #ffffff;
     margin-top: 4px;
@@ -133,7 +158,7 @@ function isActive($dir, $page = null) {
 }
 
 /* ============================================================
-   NAVIGATION MENU - WITH PROPER SPACING
+   NAVIGATION MENU
    ============================================================ */
 .employee-sidebar .sidebar-nav {
     flex: 1;
@@ -143,7 +168,7 @@ function isActive($dir, $page = null) {
 
 .employee-sidebar .sidebar-nav .nav-section {
     padding: 0 10px;
-    margin-bottom: 10px; /* SPACE BETWEEN SECTIONS */
+    margin-bottom: 10px;
 }
 
 .employee-sidebar .sidebar-nav .nav-section:last-child {
@@ -305,14 +330,14 @@ EMPLOYEE SIDEBAR HTML
 
 <aside class="employee-sidebar" id="employeeSidebar">
     
-    <!-- Logo - BIGGER -->
+    <!-- Logo -->
     <div class="sidebar-logo">
         <img src="../../assets/images/logo.PNG" alt="Wakala Logo" onerror="this.src='../../assets/images/default-avatar.png'">
         <div class="logo-text">WAKALA</div>
         <div class="logo-sub">Employee Portal</div>
     </div>
     
-    <!-- User Info - IMPROVED -->
+    <!-- User Info -->
     <div class="sidebar-user">
         <div class="user-avatar"><?php echo $user_initial; ?></div>
         <div>
@@ -327,7 +352,8 @@ EMPLOYEE SIDEBAR HTML
         <!-- Main -->
         <div class="nav-section">
             <div class="section-title">Main</div>
-            <a href="../dashboard/employee.php" class="nav-item <?php echo isActive('dashboard', 'employee.php'); ?>">
+            <a href="../dashboard/employee.php" 
+               class="nav-item <?php echo isNavActive('dashboard', $current_section); ?>">
                 <i class="fas fa-home"></i>
                 <span>Dashboard</span>
             </a>
@@ -337,17 +363,20 @@ EMPLOYEE SIDEBAR HTML
         <div class="nav-section">
             <div class="section-title">Reports</div>
             
-            <a href="../morning_report/index.php" class="nav-item <?php echo isActive('morning_report'); ?>">
+            <a href="../morning_report/index_employee.php" 
+               class="nav-item <?php echo isNavActive('morning_report', $current_section); ?>">
                 <i class="fas fa-sun"></i>
                 <span>Morning Report</span>
             </a>
             
-            <a href="../evening_stock/index.php" class="nav-item <?php echo isActive('evening_stock'); ?>">
+            <a href="../evening_stock/index_employee.php" 
+               class="nav-item <?php echo isNavActive('evening_stock', $current_section); ?>">
                 <i class="fas fa-moon"></i>
                 <span>Evening Stock</span>
             </a>
             
-            <a href="../daily_report/index.php" class="nav-item <?php echo isActive('daily_report'); ?>">
+            <a href="../daily_report/index_employee.php" 
+               class="nav-item <?php echo isNavActive('daily_report', $current_section); ?>">
                 <i class="fas fa-file-alt"></i>
                 <span>Daily Report</span>
             </a>
@@ -357,17 +386,20 @@ EMPLOYEE SIDEBAR HTML
         <div class="nav-section">
             <div class="section-title">Financial</div>
             
-            <a href="../commissions/index.php" class="nav-item <?php echo isActive('commissions'); ?>">
+            <a href="../commissions/index_employee.php" 
+               class="nav-item <?php echo isNavActive('commissions', $current_section); ?>">
                 <i class="fas fa-hand-holding-usd"></i>
                 <span>Commissions</span>
             </a>
             
-            <a href="../expenses/index.php" class="nav-item <?php echo isActive('expenses'); ?>">
+            <a href="../expenses/index_employee.php" 
+               class="nav-item <?php echo isNavActive('expenses', $current_section); ?>">
                 <i class="fas fa-receipt"></i>
                 <span>Expenses</span>
             </a>
             
-            <a href="../store_cash_out/index.php" class="nav-item <?php echo isActive('store_cash_out'); ?>">
+            <a href="../store_cash_out/index_employee.php" 
+               class="nav-item <?php echo isNavActive('store_cash_out', $current_section); ?>">
                 <i class="fas fa-money-bill-wave"></i>
                 <span>Cash Out</span>
             </a>
@@ -376,7 +408,8 @@ EMPLOYEE SIDEBAR HTML
         <!-- Account -->
         <div class="nav-section">
             <div class="section-title">Account</div>
-            <a href="../profile/index.php" class="nav-item <?php echo isActive('profile'); ?>">
+            <a href="../profile/index_employee.php" 
+               class="nav-item <?php echo isNavActive('profile', $current_section); ?>">
                 <i class="fas fa-user-circle"></i>
                 <span>Profile</span>
             </a>
@@ -396,26 +429,6 @@ EMPLOYEE SIDEBAR HTML
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    
-    // ============================================================
-    // ACTIVE LINK DETECTION
-    // ============================================================
-    const navItems = document.querySelectorAll('.employee-sidebar .nav-item');
-    const currentPath = window.location.pathname;
-    
-    navItems.forEach(function(item) {
-        item.classList.remove('active');
-        const href = item.getAttribute('href');
-        if (href) {
-            const hrefPath = href.replace('../../', '');
-            if (currentPath.includes(hrefPath) || currentPath.includes(href.replace('../', ''))) {
-                item.classList.add('active');
-            }
-            if (currentPath.includes('employee.php') && href.includes('dashboard/employee.php')) {
-                item.classList.add('active');
-            }
-        }
-    });
     
     // ============================================================
     // MOBILE MENU TOGGLE
