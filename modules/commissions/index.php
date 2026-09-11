@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: modules/commissions/index.php
 // WAKALA FINANCIAL SYSTEM - COMMISSIONS LIST
-// FULL WIDTH + SMALLER FONT + NO OVERFLOW
+// ✅ FIXED: Export button redirects to export.php (server-side)
+// ✅ FIXED: Full width + smaller font + no overflow
+// ✅ FIXED: Support BOTH 'branch' AND 'branch_id'
 // ================================================================
 
 require_once '../../config/config.php';
@@ -29,15 +31,15 @@ $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch
 $stmt->execute();
 $all_branches = $stmt->fetchAll();
 
-// BRANCH FILTER
+// ============================================================
+// ✅ BRANCH FILTER - Support BOTH 'branch' AND 'branch_id'
+// ============================================================
 $selected_branch = 0;
 if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id'] !== '0') {
     $selected_branch = intval($_GET['branch_id']);
-}
-elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
+} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
     $selected_branch = intval($_GET['branch']);
 }
-unset($_SESSION['selected_branch']);
 
 $branch_filter = '';
 $branch_params = [];
@@ -773,7 +775,7 @@ html.dark-mode .alert-danger {
 }
 
 /* ============================================================
-   4 SUMMARY CARDS - 2x2 GRID - SMALLER FONT
+   4 SUMMARY CARDS - 2x2 GRID
    ============================================================ */
 .summaries-grid-2x2 {
     display: grid;
@@ -850,7 +852,6 @@ html.dark-mode .alert-danger {
     text-overflow: ellipsis;
 }
 
-/* FIXED: Font ndogo + inavunjika bila overflow */
 .summary-value {
     font-size: clamp(14px, 1.15vw, 20px);
     font-weight: 800;
@@ -1422,6 +1423,9 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
 </style>
 
 <script>
+// ============================================================
+// DROPDOWN TOGGLE
+// ============================================================
 function toggleDropdown() {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.toggle('show');
@@ -1435,113 +1439,46 @@ document.addEventListener('click', function(event) {
     }
 });
 
+// ============================================================
+// ✅ EXPORT - Redirect to export.php (Server-side)
+// ============================================================
 function exportData(format) {
     var dropdown = document.getElementById('exportDropdown');
     dropdown.classList.remove('show');
     
-    var table = document.getElementById('commissionsTable');
-    if (!table) { alert('No data to export!'); return; }
+    // Build URL with parameters
+    var params = new URLSearchParams();
+    params.set('format', format);
     
-    var rows = table.querySelectorAll('tbody tr');
-    var headers = [];
-    var headerCells = table.querySelectorAll('thead th');
-    
-    for (var i = 0; i < headerCells.length - 1; i++) {
-        headers.push(headerCells[i].textContent.trim());
+    // Add branch filter if set
+    var selectedBranch = '<?php echo $selected_branch; ?>';
+    if (selectedBranch && selectedBranch !== '0' && selectedBranch !== '') {
+        params.set('branch_id', selectedBranch);
     }
     
-    var data = [];
-    rows.forEach(function(row) {
-        var rowData = [];
-        var cells = row.querySelectorAll('td');
-        for (var i = 0; i < cells.length - 1; i++) {
-            rowData.push(cells[i].textContent.trim());
-        }
-        data.push(rowData);
-    });
+    // Add search filter if set
+    var searchInput = document.getElementById('searchInput');
+    if (searchInput && searchInput.value.trim()) {
+        params.set('search', searchInput.value.trim());
+    }
     
-    if (data.length === 0) { alert('No data to export!'); return; }
-    
-    if (format === 'csv') exportCSV(headers, data);
-    else if (format === 'excel') exportExcel(headers, data);
-    else if (format === 'pdf') exportPDF(headers, data);
-    else if (format === 'print') window.print();
+    // ✅ Redirect to export.php
+    window.location.href = 'export.php?' + params.toString();
 }
 
-function exportCSV(headers, data) {
-    var csv = headers.join(',') + '\n';
-    data.forEach(function(row) { csv += row.join(',') + '\n'; });
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'commissions_export_' + new Date().toISOString().slice(0,10) + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-function exportExcel(headers, data) {
-    var html = '<html><head><meta charset="UTF-8"><title>Commissions Export</title>';
-    html += '<style>body { font-family: Arial, sans-serif; padding: 20px; }';
-    html += 'h1 { color: #10B981; }';
-    html += 'table { width: 100%; border-collapse: collapse; }';
-    html += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    html += 'td { padding: 8px 10px; border: 1px solid #E5E7EB; }</style>';
-    html += '</head><body>';
-    html += '<h1>Commissions Report</h1>';
-    html += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    html += '<table><thead><tr>';
-    headers.forEach(function(h) { html += '<th>' + h + '</th>'; });
-    html += '</tr></thead><tbody>';
-    data.forEach(function(row) {
-        html += '<tr>';
-        row.forEach(function(cell) { html += '<td>' + cell + '</td>'; });
-        html += '</tr>';
-    });
-    html += '</tbody></table></body></html>';
-    var blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'commissions_export_' + new Date().toISOString().slice(0,10) + '.xls';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-}
-
-function exportPDF(headers, data) {
-    var printContent = '<html><head><title>Commissions Export</title>';
-    printContent += '<style>body { font-family: Arial, sans-serif; padding: 20px; }';
-    printContent += 'h1 { color: #10B981; }';
-    printContent += 'table { width: 100%; border-collapse: collapse; margin-top: 20px; }';
-    printContent += 'th { background: #DC2626; color: #FFFFFF; padding: 10px; text-align: left; }';
-    printContent += 'td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }</style>';
-    printContent += '</head><body><h1>Commissions Report</h1>';
-    printContent += '<p>Generated: ' + new Date().toLocaleString() + '</p>';
-    printContent += '<table><thead><tr>';
-    headers.forEach(function(h) { printContent += '<th>' + h + '</th>'; });
-    printContent += '</tr></thead><tbody>';
-    data.forEach(function(row) {
-        printContent += '<tr>';
-        row.forEach(function(cell) { printContent += '<td>' + cell + '</td>'; });
-        printContent += '</tr>';
-    });
-    printContent += '</tbody></table></body></html>';
-    var printWindow = window.open('', '_blank');
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-}
-
+// ============================================================
+// CONFIRM DELETE
+// ============================================================
 function confirmDelete(id) {
-    return confirm('Are you sure you want to delete this commission record? This action cannot be undone.');
+    return confirm('Are you sure you want to delete this commission record?\n\nThis action cannot be undone.');
 }
 
+// ============================================================
+// INITIALIZE
+// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
+    
+    // Search filter
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
         searchInput.addEventListener('keyup', function() {
@@ -1554,6 +1491,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // Dark mode sync
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1564,12 +1502,14 @@ document.addEventListener('DOMContentLoaded', function() {
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
+    // Auto-hide alerts
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
     
     var errorAlert = document.querySelector('.alert-danger');
     if (errorAlert) setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
     
+    // Close alert buttons
     var closeBtns = document.querySelectorAll('.alert-close');
     closeBtns.forEach(function(btn) {
         btn.addEventListener('click', function() {
