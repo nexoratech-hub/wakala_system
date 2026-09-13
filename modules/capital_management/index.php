@@ -1,10 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/capital_management/index.php
-// CAPITAL MANAGEMENT
-// ✅ FIXED: Reads BOTH 'branch' AND 'branch_id' from URL
-// ✅ FIXED: Empty branch shows 0 card
-// ✅ FIXED: Table only shows when there are records
+// CAPITAL MANAGEMENT - MAIN INDEX
+// ✅ FIXED: Shows CORRECT current values from daily_reports
+// ✅ Single continuous table with continuous numbering
+// ✅ Red line separator between branches
+// ✅ Beautiful card CSS for capital summary
+// ✅ Scroll buttons <> in header center
 // ================================================================
 
 require_once '../../config/config.php';
@@ -29,21 +31,16 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
-// ✅ FIXED: GET FILTERS - Support BOTH 'branch' AND 'branch_id'
+// GET FILTERS
 // ============================================================
 $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 $type_filter = isset($_GET['type']) ? $_GET['type'] : '';
 
-// ✅ CRITICAL: Support BOTH parameter names
 $selected_branch = 0;
-
-// Priority 1: branch_id (from topbar links)
 if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
     $selected_branch = intval($_GET['branch_id']);
-}
-// Priority 2: branch (from filter form)
-elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
+} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
     $selected_branch = intval($_GET['branch']);
     if ($selected_branch < 0) $selected_branch = 0;
 }
@@ -85,13 +82,82 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// BUILD QUERY - WITH BRANCH FILTER
+// ✅ GET CURRENT CAPITAL (FROM daily_reports - CORRECT VALUES)
+// ============================================================
+$current_cash = 0;
+$current_float = 0;
+$current_capital = 0;
+
+if ($selected_branch > 0) {
+    // SINGLE BRANCH - get from that branch's latest daily_report
+    $stmt = $db->prepare("
+        SELECT current_cash, current_capital 
+        FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch]);
+    $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($dr) {
+        $current_cash = floatval($dr['current_cash'] ?? 0);
+        $current_capital = floatval($dr['current_capital'] ?? 0);
+    }
+    
+    // Get float from latest daily_report_providers
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
+        FROM daily_report_providers drp
+        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+        WHERE dr.branch_id = ?
+        AND dr.id = (SELECT MAX(id) FROM daily_reports WHERE branch_id = ?)
+    ");
+    $stmt->execute([$selected_branch, $selected_branch]);
+    $current_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+    
+} else {
+    // ALL BRANCHES - sum across all branches (from their latest daily reports)
+    // For cash & capital - sum latest per branch
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(current_cash), 0) as total_cash,
+            COALESCE(SUM(current_capital), 0) as total_capital
+        FROM daily_reports dr1
+        WHERE dr1.id = (
+            SELECT MAX(dr2.id) 
+            FROM daily_reports dr2 
+            WHERE dr2.branch_id = dr1.branch_id
+        )
+    ");
+    $stmt->execute();
+    $dr_sum = $stmt->fetch(PDO::FETCH_ASSOC);
+    $current_cash = floatval($dr_sum['total_cash'] ?? 0);
+    $current_capital = floatval($dr_sum['total_capital'] ?? 0);
+    
+    // Get float from all branches latest daily reports
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
+        FROM daily_report_providers drp
+        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+        WHERE dr.id IN (
+            SELECT MAX(dr2.id) 
+            FROM daily_reports dr2 
+            GROUP BY dr2.branch_id
+        )
+    ");
+    $stmt->execute();
+    $current_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+}
+
+// ============================================================
+// BUILD QUERY (Transactions List)
 // ============================================================
 try {
     $sql = "SELECT cm.*, 
             e.full_name as employee_name,
             b.branch_name as branch_name,
             b.branch_code as branch_code,
+            b.location as branch_location,
             p.provider_name,
             p.icon_class as provider_icon,
             p.color_code as provider_color,
@@ -126,9 +192,9 @@ try {
 }
 
 // ============================================================
-// GROUP BY BRANCH
+// BUILD FLAT LIST (with branch transitions)
 // ============================================================
-$grouped_by_branch = [];
+$flat_transactions = [];
 $grand_totals = [
     'total_in' => 0,
     'total_out' => 0,
@@ -138,98 +204,57 @@ $grand_totals = [
     'branches_count' => 0
 ];
 
-// If branch selected, only init that one
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
-            $grouped_by_branch[$b['id']] = [
-                'branch_id' => $b['id'],
-                'branch_name' => $b['branch_name'],
-                'branch_code' => $b['branch_code'] ?? '',
-                'location' => $b['location'] ?? '',
-                'transactions' => [],
-                'total_in' => 0,
-                'total_out' => 0,
-                'float_in' => 0,
-                'cash_in' => 0,
-                'opening' => 0,
-                'additional' => 0,
-                'profit_allocation' => 0,
-                'cash_out_total' => 0,
-                'adjustment' => 0,
-                'count' => 0,
-                'current_capital' => 0
-            ];
-            break;
-        }
-    }
-} else {
-    foreach ($branches as $b) {
-        $grouped_by_branch[$b['id']] = [
-            'branch_id' => $b['id'],
-            'branch_name' => $b['branch_name'],
-            'branch_code' => $b['branch_code'] ?? '',
-            'location' => $b['location'] ?? '',
-            'transactions' => [],
-            'total_in' => 0,
-            'total_out' => 0,
-            'float_in' => 0,
-            'cash_in' => 0,
-            'opening' => 0,
-            'additional' => 0,
-            'profit_allocation' => 0,
-            'cash_out_total' => 0,
-            'adjustment' => 0,
-            'count' => 0,
-            'current_capital' => 0
-        ];
-    }
+$branch_summary = [];
+foreach ($branches as $b) {
+    $branch_summary[$b['id']] = [
+        'branch_id' => $b['id'],
+        'branch_name' => $b['branch_name'],
+        'branch_code' => $b['branch_code'] ?? '',
+        'count' => 0
+    ];
 }
+
+$previous_branch_id = null;
+$branch_ids_seen = [];
 
 foreach ($all_transactions as $t) {
     $b_id = $t['branch_id'] ?? 0;
-    if (!isset($grouped_by_branch[$b_id])) continue;
+    $is_new_branch = ($previous_branch_id !== null && $previous_branch_id != $b_id);
     
-    $grouped_by_branch[$b_id]['transactions'][] = $t;
-    $grouped_by_branch[$b_id]['count']++;
+    // Update branch summary
+    if (isset($branch_summary[$b_id])) {
+        $branch_summary[$b_id]['count']++;
+        if (!in_array($b_id, $branch_ids_seen)) {
+            $branch_ids_seen[] = $b_id;
+        }
+    }
     
+    // Update grand totals
     $is_outgoing = in_array($t['transaction_type'], ['cash_out', 'adjustment']);
     $amount = floatval($t['amount']);
     $is_float = ($t['reference_module'] === 'provider' && !empty($t['provider_name']));
     
-    if (isset($grouped_by_branch[$b_id][$t['transaction_type']])) {
-        $grouped_by_branch[$b_id][$t['transaction_type']] += $amount;
-    }
-    if ($t['transaction_type'] === 'cash_out') {
-        $grouped_by_branch[$b_id]['cash_out_total'] += $amount;
-    }
-    
     if ($is_outgoing) {
-        $grouped_by_branch[$b_id]['total_out'] += $amount;
         $grand_totals['total_out'] += $amount;
     } else {
-        $grouped_by_branch[$b_id]['total_in'] += $amount;
+        $grand_totals['total_in'] += $amount;
         if ($is_float) {
-            $grouped_by_branch[$b_id]['float_in'] += $amount;
             $grand_totals['float_in'] += $amount;
         } else {
-            $grouped_by_branch[$b_id]['cash_in'] += $amount;
             $grand_totals['cash_in'] += $amount;
         }
-        $grand_totals['total_in'] += $amount;
     }
-    
     $grand_totals['count']++;
+    
+    $flat_transactions[] = [
+        'transaction' => $t,
+        'is_new_branch' => $is_new_branch
+    ];
+    
+    $previous_branch_id = $b_id;
 }
 
-foreach ($grouped_by_branch as $b_id => &$branch_data) {
-    if ($branch_data['count'] > 0) {
-        $branch_data['current_capital'] = $branch_data['total_in'] - $branch_data['total_out'];
-        $grand_totals['branches_count']++;
-    }
-}
-unset($branch_data);
-
+$grand_totals['branches_count'] = count($branch_ids_seen);
 $grand_totals['net_capital'] = $grand_totals['total_in'] - $grand_totals['total_out'];
 
 // Type labels
@@ -298,49 +323,178 @@ include_once '../../includes/admin_topbar.php';
                     <?php if ($selected_branch > 0): ?>
                         Capital transactions for <strong><?php echo htmlspecialchars($filter_branch_name); ?></strong>
                     <?php else: ?>
-                        Capital transactions grouped by branch
+                        All capital transactions (continuous view)
                     <?php endif; ?>
                 </p>
             </div>
         </div>
 
         <!-- ============================================================
-        GRAND TOTALS
+        ✅ CURRENT CAPITAL SUMMARY (FROM daily_reports - CORRECT VALUES)
         ============================================================ -->
-        <div class="grand-totals-card">
-            <div class="grand-totals-header">
-                <i class="fas fa-chart-pie"></i>
-                <span>Capital Summary <?php echo $selected_branch > 0 ? '- ' . htmlspecialchars($filter_branch_name) : '(All Branches)'; ?></span>
-                <span class="period-badge">
-                    <?php echo date('d M Y', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
-                </span>
+        <div class="current-capital-wrapper">
+            <div class="current-capital-header">
+                <div class="cch-left">
+                    <div class="cch-icon">
+                        <i class="fas fa-vault"></i>
+                    </div>
+                    <div class="cch-info">
+                        <span class="cch-title">Current Branch Capital</span>
+                        <span class="cch-subtitle">
+                            <?php echo $selected_branch > 0 ? htmlspecialchars($filter_branch_name) : 'All Branches (Latest)'; ?>
+                            • From Reports
+                        </span>
+                    </div>
+                </div>
+                <div class="cch-badge">
+                    <i class="fas fa-check-circle"></i> Live Values
+                </div>
             </div>
-            <div class="grand-totals-grid">
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Total In</span>
-                    <span class="grand-stat-value text-success">+ <?php echo formatCurrency($grand_totals['total_in']); ?></span>
+            
+            <div class="current-capital-grid">
+                <!-- TOTAL FLOAT -->
+                <div class="current-card card-float">
+                    <div class="cc-icon cc-icon-blue">
+                        <i class="fas fa-university"></i>
+                    </div>
+                    <div class="cc-content">
+                        <span class="cc-label">Total Float</span>
+                        <span class="cc-value cc-value-blue"><?php echo formatCurrency($current_float); ?></span>
+                        <span class="cc-sub">Provider floats</span>
+                    </div>
                 </div>
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Total Out</span>
-                    <span class="grand-stat-value text-danger">- <?php echo formatCurrency($grand_totals['total_out']); ?></span>
+                
+                <!-- CASH BALANCE -->
+                <div class="current-card card-cash">
+                    <div class="cc-icon cc-icon-green">
+                        <i class="fas fa-money-bill-wave"></i>
+                    </div>
+                    <div class="cc-content">
+                        <span class="cc-label">Cash Balance</span>
+                        <span class="cc-value cc-value-green"><?php echo formatCurrency($current_cash); ?></span>
+                        <span class="cc-sub">Branch cash</span>
+                    </div>
                 </div>
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Net Capital</span>
-                    <span class="grand-stat-value <?php echo $grand_totals['net_capital'] >= 0 ? 'text-success' : 'text-danger'; ?>">
-                        <?php echo formatCurrency($grand_totals['net_capital']); ?>
-                    </span>
+                
+                <!-- TOTAL CAPITAL -->
+                <div class="current-card card-capital">
+                    <div class="cc-icon cc-icon-purple">
+                        <i class="fas fa-building"></i>
+                    </div>
+                    <div class="cc-content">
+                        <span class="cc-label">Total Capital</span>
+                        <span class="cc-value cc-value-purple"><?php echo formatCurrency($current_capital); ?></span>
+                        <span class="cc-sub">Float + Cash</span>
+                    </div>
                 </div>
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Float In</span>
-                    <span class="grand-stat-value text-blue"><?php echo formatCurrency($grand_totals['float_in']); ?></span>
+            </div>
+        </div>
+
+        <!-- ============================================================
+        PERIOD SUMMARY CARDS (Record-based)
+        ============================================================ -->
+        <div class="period-summary-wrapper">
+            <div class="period-header">
+                <div class="ph-left">
+                    <div class="ph-icon">
+                        <i class="fas fa-chart-pie"></i>
+                    </div>
+                    <div class="ph-info">
+                        <span class="ph-title">Period Summary</span>
+                        <span class="ph-subtitle">
+                            <?php echo date('d M Y', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
+                        </span>
+                    </div>
                 </div>
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Cash In</span>
-                    <span class="grand-stat-value text-green"><?php echo formatCurrency($grand_totals['cash_in']); ?></span>
+                <div class="ph-badge">
+                    <i class="fas fa-database"></i>
+                    <?php echo $grand_totals['count']; ?> Records
                 </div>
-                <div class="grand-stat">
-                    <span class="grand-stat-label">Records</span>
-                    <span class="grand-stat-value"><?php echo $grand_totals['count']; ?></span>
+            </div>
+            
+            <div class="period-cards-grid">
+                <!-- TOTAL IN -->
+                <div class="period-card card-total-in">
+                    <div class="pc-icon pc-icon-green">
+                        <i class="fas fa-arrow-down"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Total In</span>
+                        <span class="pc-value pc-value-green">
+                            + <?php echo formatCurrency($grand_totals['total_in']); ?>
+                        </span>
+                        <span class="pc-sub">Period incoming</span>
+                    </div>
+                </div>
+                
+                <!-- TOTAL OUT -->
+                <div class="period-card card-total-out">
+                    <div class="pc-icon pc-icon-red">
+                        <i class="fas fa-arrow-up"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Total Out</span>
+                        <span class="pc-value pc-value-red">
+                            - <?php echo formatCurrency($grand_totals['total_out']); ?>
+                        </span>
+                        <span class="pc-sub">Period outgoing</span>
+                    </div>
+                </div>
+                
+                <!-- NET PERIOD -->
+                <div class="period-card card-net">
+                    <div class="pc-icon pc-icon-blue">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Net Change</span>
+                        <span class="pc-value <?php echo $grand_totals['net_capital'] >= 0 ? 'pc-value-green' : 'pc-value-red'; ?>">
+                            <?php echo formatCurrency($grand_totals['net_capital']); ?>
+                        </span>
+                        <span class="pc-sub">In - Out</span>
+                    </div>
+                </div>
+                
+                <!-- FLOAT IN -->
+                <div class="period-card card-float-in">
+                    <div class="pc-icon pc-icon-purple">
+                        <i class="fas fa-university"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Float In</span>
+                        <span class="pc-value pc-value-purple">
+                            <?php echo formatCurrency($grand_totals['float_in']); ?>
+                        </span>
+                        <span class="pc-sub">Provider float</span>
+                    </div>
+                </div>
+                
+                <!-- CASH IN -->
+                <div class="period-card card-cash-in">
+                    <div class="pc-icon pc-icon-teal">
+                        <i class="fas fa-money-bill-wave"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Cash In</span>
+                        <span class="pc-value pc-value-teal">
+                            <?php echo formatCurrency($grand_totals['cash_in']); ?>
+                        </span>
+                        <span class="pc-sub">Branch cash</span>
+                    </div>
+                </div>
+                
+                <!-- BRANCHES -->
+                <div class="period-card card-branches">
+                    <div class="pc-icon pc-icon-orange">
+                        <i class="fas fa-store-alt"></i>
+                    </div>
+                    <div class="pc-content">
+                        <span class="pc-label">Branches</span>
+                        <span class="pc-value pc-value-orange">
+                            <?php echo $grand_totals['branches_count']; ?>
+                        </span>
+                        <span class="pc-sub">With transactions</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -388,290 +542,198 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        BRANCH GROUPS
+        SINGLE CONTINUOUS TABLE WITH SCROLL BUTTONS <>
         ============================================================ -->
-        <?php if (empty($grouped_by_branch)): ?>
-            <div class="empty-state">
-                <i class="fas fa-inbox"></i>
-                <h3>No Branches Found</h3>
-                <p>Please add branches first.</p>
-            </div>
-        <?php else: ?>
-            <?php foreach ($grouped_by_branch as $b_id => $branch_data): ?>
+        <?php if (count($flat_transactions) > 0): ?>
+            
+            <div class="table-container-main">
                 
-                <?php 
-                // Skip empty branches ONLY when showing All Branches
-                if ($selected_branch == 0 && $branch_data['count'] == 0) {
-                    continue;
-                }
-                ?>
-                
-                <div class="branch-group-card <?php echo $branch_data['count'] > 0 ? 'has-data' : 'no-data'; ?>" 
-                     data-branch-id="<?php echo $b_id; ?>">
+                <!-- RED HEADER: Left + Center(<> + Search + <>) + Right -->
+                <div class="table-header-red">
                     
-                    <!-- ===== BRANCH HEADER ===== -->
-                    <div class="branch-group-header">
-                        <div class="branch-group-title">
-                            <div class="branch-icon-wrapper">
-                                <i class="fas fa-store-alt"></i>
-                            </div>
-                            <div class="branch-title-info">
-                                <h3><?php echo htmlspecialchars($branch_data['branch_name']); ?></h3>
-                                <div class="branch-meta">
-                                    <?php if ($branch_data['branch_code']): ?>
-                                        <span class="branch-code-badge"><?php echo htmlspecialchars($branch_data['branch_code']); ?></span>
-                                    <?php endif; ?>
-                                    <?php if ($branch_data['location']): ?>
-                                        <span class="branch-location-inline">
-                                            <i class="fas fa-map-marker-alt"></i>
-                                            <?php echo htmlspecialchars($branch_data['location']); ?>
-                                        </span>
-                                    <?php endif; ?>
-                                    <span class="record-count-badge">
-                                        <i class="fas fa-list"></i>
-                                        <span class="record-count-text" data-total="<?php echo $branch_data['count']; ?>">
-                                            <?php echo $branch_data['count']; ?> transaction<?php echo $branch_data['count'] != 1 ? 's' : ''; ?>
-                                        </span>
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="branch-group-actions">
-                            <?php if ($selected_branch == 0): ?>
-                                <a href="?branch_id=<?php echo $b_id; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&type=<?php echo $type_filter; ?>" 
-                                   class="btn btn-sm btn-outline">
-                                    <i class="fas fa-eye"></i> View Only
-                                </a>
-                            <?php endif; ?>
-                            <a href="add.php?branch=<?php echo $b_id; ?>" 
-                               class="btn btn-sm btn-primary">
-                                <i class="fas fa-plus"></i> Add
-                            </a>
-                        </div>
+                    <!-- LEFT: Title -->
+                    <div class="thr-left">
+                        <i class="fas fa-list"></i>
+                        <h3>Capital Transactions</h3>
+                        <span class="thr-count"><?php echo $grand_totals['count']; ?> records</span>
                     </div>
                     
-                    <?php if ($branch_data['count'] > 0): ?>
-                        <!-- ===== SUMMARY ===== -->
-                        <div class="branch-summary-bar">
-                            <div class="summary-stat">
-                                <span class="summary-stat-label">
-                                    <i class="fas fa-arrow-down text-success"></i> Total In
-                                </span>
-                                <span class="summary-stat-value text-success">
-                                    + <?php echo formatCurrency($branch_data['total_in']); ?>
-                                </span>
-                            </div>
-                            <div class="summary-stat">
-                                <span class="summary-stat-label">
-                                    <i class="fas fa-arrow-up text-danger"></i> Total Out
-                                </span>
-                                <span class="summary-stat-value text-danger">
-                                    - <?php echo formatCurrency($branch_data['total_out']); ?>
-                                </span>
-                            </div>
-                            <div class="summary-stat highlight">
-                                <span class="summary-stat-label">
-                                    <i class="fas fa-wallet"></i> Current Capital
-                                </span>
-                                <span class="summary-stat-value <?php echo $branch_data['current_capital'] >= 0 ? 'text-success' : 'text-danger'; ?>">
-                                    <?php echo formatCurrency($branch_data['current_capital']); ?>
-                                </span>
-                            </div>
-                            <div class="summary-stat">
-                                <span class="summary-stat-label">
-                                    <i class="fas fa-university text-blue"></i> Float In
-                                </span>
-                                <span class="summary-stat-value text-blue">
-                                    <?php echo formatCurrency($branch_data['float_in']); ?>
-                                </span>
-                            </div>
-                            <div class="summary-stat">
-                                <span class="summary-stat-label">
-                                    <i class="fas fa-money-bill-wave text-green"></i> Cash In
-                                </span>
-                                <span class="summary-stat-value text-green">
-                                    <?php echo formatCurrency($branch_data['cash_in']); ?>
-                                </span>
-                            </div>
+                    <!-- CENTER: Scroll Left + Search + Scroll Right -->
+                    <div class="thr-center">
+                        <button type="button" class="scroll-btn-header" onclick="scrollTableMain('left')" title="Scroll Left">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        
+                        <div class="search-wrapper-main">
+                            <i class="fas fa-search"></i>
+                            <input type="text" 
+                                   id="globalSearchInput" 
+                                   placeholder="Search..."
+                                   oninput="onGlobalSearch(this)">
+                            <button type="button" id="globalSearchClear" onclick="clearGlobalSearch()" style="display:none;">
+                                <i class="fas fa-times"></i>
+                            </button>
+                            <span class="search-count-main" id="globalSearchCount" style="display:none;">0</span>
                         </div>
                         
-                        <!-- ===== TYPE BREAKDOWN ===== -->
-                        <div class="type-breakdown-bar">
-                            <?php foreach ($type_labels as $key => $label): 
-                                $amount = $branch_data[$key] ?? 0;
-                                if ($amount == 0) continue;
-                                $is_out = in_array($key, ['cash_out', 'adjustment']);
-                            ?>
-                                <div class="type-pill type-<?php echo $label['color']; ?>">
-                                    <i class="fas <?php echo $label['icon']; ?>"></i>
-                                    <span><?php echo $label['label']; ?>:</span>
-                                    <strong class="<?php echo $is_out ? 'text-danger' : 'text-success'; ?>">
-                                        <?php echo $is_out ? '-' : '+'; ?>
-                                        <?php echo formatCurrency($amount); ?>
-                                    </strong>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        
-                        <!-- ===== TABLE ===== -->
-                        <div class="table-container-inner">
-                            <div class="table-responsive">
-                                <table class="data-table" data-branch-table="<?php echo $b_id; ?>">
-                                    <thead>
-                                        <tr class="table-header-row">
-                                            <th colspan="8" class="table-search-header">
-                                                <div class="table-search-wrapper">
-                                                    <i class="fas fa-search table-search-icon"></i>
-                                                    <input type="text" 
-                                                           class="table-search-input" 
-                                                           data-branch-id="<?php echo $b_id; ?>"
-                                                           placeholder="Search..."
-                                                           oninput="onTableSearch(this, <?php echo $b_id; ?>)">
-                                                    <button type="button" class="table-search-clear" 
-                                                            data-branch-id="<?php echo $b_id; ?>"
-                                                            onclick="clearTableSearch(<?php echo $b_id; ?>)" 
-                                                            style="display:none;">
-                                                        <i class="fas fa-times"></i>
-                                                    </button>
-                                                    <span class="table-search-count" data-branch-id="<?php echo $b_id; ?>" style="display:none;">0</span>
-                                                </div>
-                                            </th>
-                                        </tr>
-                                        <tr>
-                                            <th style="width: 40px;">#</th>
-                                            <th>Number</th>
-                                            <th>Date</th>
-                                            <th>Type</th>
-                                            <th>Source</th>
-                                            <th>Employee</th>
-                                            <th class="text-right">Amount</th>
-                                            <th style="width: 90px;">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody data-branch-tbody="<?php echo $b_id; ?>">
-                                        <?php $counter = 1; ?>
-                                        <?php foreach ($branch_data['transactions'] as $t): 
-                                            $type_info = $type_labels[$t['transaction_type']] ?? ['label' => $t['transaction_type'], 'color' => 'gray'];
-                                            $is_out = in_array($t['transaction_type'], ['cash_out', 'adjustment']);
-                                            $is_float = ($t['reference_module'] === 'provider' && !empty($t['provider_name']));
-                                            
-                                            $search_data = strtolower(
-                                                $t['capital_number'] . ' ' .
-                                                ($t['provider_name'] ?? '') . ' ' .
-                                                ($t['branch_provider_code'] ?? '') . ' ' .
-                                                ($t['employee_name'] ?? '') . ' ' .
-                                                ($t['description'] ?? '') . ' ' .
-                                                ($t['notes'] ?? '') . ' ' .
-                                                $type_info['label']
-                                            );
-                                        ?>
-                                            <tr class="transaction-row" 
-                                                data-search="<?php echo htmlspecialchars($search_data); ?>">
-                                                <td class="row-number"><?php echo $counter++; ?></td>
-                                                <td>
-                                                    <a href="view.php?id=<?php echo $t['id']; ?>" class="capital-link">
-                                                        <?php echo htmlspecialchars($t['capital_number']); ?>
-                                                    </a>
-                                                </td>
-                                                <td>
-                                                    <span class="date-display">
-                                                        <?php echo date('d M Y', strtotime($t['transaction_date'])); ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <span class="type-badge type-<?php echo $type_info['color']; ?>">
-                                                        <i class="fas <?php echo $type_info['icon']; ?>"></i>
-                                                        <?php echo $type_info['label']; ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <?php if ($is_float): ?>
-                                                        <div class="source-display source-float">
-                                                            <div class="source-icon-sm" style="background: <?php echo htmlspecialchars($t['provider_color'] ?? '#0B5ED7'); ?>;">
-                                                                <i class="<?php echo htmlspecialchars($t['provider_icon'] ?? 'fas fa-university'); ?>"></i>
-                                                            </div>
-                                                            <div class="source-info-sm">
-                                                                <span class="source-name">
-                                                                    <?php echo htmlspecialchars($t['provider_name']); ?>
-                                                                </span>
-                                                                <span class="source-code">
-                                                                    <?php echo htmlspecialchars($t['branch_provider_code'] ?? 'N/A'); ?>
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    <?php else: ?>
-                                                        <div class="source-display source-cash">
-                                                            <div class="source-icon-sm">
-                                                                <i class="fas fa-money-bill-wave"></i>
-                                                            </div>
-                                                            <div class="source-info-sm">
-                                                                <span class="source-name">Cash</span>
-                                                                <span class="source-code">Manual</span>
-                                                            </div>
-                                                        </div>
-                                                    <?php endif; ?>
-                                                </td>
-                                                <td>
-                                                    <span class="employee-display">
-                                                        <?php echo htmlspecialchars($t['employee_name'] ?? 'N/A'); ?>
-                                                    </span>
-                                                </td>
-                                                <td class="text-right">
-                                                    <span class="amount-display <?php echo $is_out ? 'text-danger' : 'text-success'; ?>">
-                                                        <?php echo $is_out ? '-' : '+'; ?>
-                                                        <?php echo formatCurrency($t['amount']); ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <div class="action-buttons">
-                                                        <a href="view.php?id=<?php echo $t['id']; ?>" class="btn-action btn-view" title="View">
-                                                            <i class="fas fa-eye"></i>
-                                                        </a>
-                                                        <a href="edit.php?id=<?php echo $t['id']; ?>" class="btn-action btn-edit" title="Edit">
-                                                            <i class="fas fa-edit"></i>
-                                                        </a>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                                
-                                <div class="no-branch-results" data-branch-id="<?php echo $b_id; ?>" style="display:none;">
-                                    <i class="fas fa-search-minus"></i>
-                                    <p>No records match your search</p>
-                                    <button type="button" class="btn btn-sm btn-secondary" onclick="clearTableSearch(<?php echo $b_id; ?>)">
-                                        <i class="fas fa-times"></i> Clear
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                    <?php else: ?>
-                        <!-- ✅ Branch selected but NO RECORDS -->
-                        <div class="branch-no-data">
-                            <div class="zero-badge">
-                                <i class="fas fa-inbox"></i>
-                                <span class="zero-count">0</span>
-                            </div>
-                            <h4>No Capital Records for <?php echo htmlspecialchars($branch_data['branch_name']); ?></h4>
-                            <p>No capital transactions found for this branch in the selected period.</p>
-                            <a href="add.php?branch=<?php echo $b_id; ?>" class="btn btn-sm btn-primary">
-                                <i class="fas fa-plus"></i> Add First Transaction
-                            </a>
-                        </div>
-                    <?php endif; ?>
+                        <button type="button" class="scroll-btn-header" onclick="scrollTableMain('right')" title="Scroll Right">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
                     
+                    <!-- RIGHT: Branches count -->
+                    <div class="thr-right">
+                        <span class="thr-branches-badge">
+                            <i class="fas fa-store-alt"></i>
+                            <?php echo $grand_totals['branches_count']; ?> branches
+                        </span>
+                    </div>
                 </div>
-            <?php endforeach; ?>
+                
+                <!-- TABLE -->
+                <div class="table-responsive-main" id="tableWrapperMain">
+                    <table class="data-table-main" id="capitalTable">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th style="width: 120px;">Branch</th>
+                                <th>Number</th>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Source</th>
+                                <th>Employee</th>
+                                <th class="text-right">Amount</th>
+                                <th style="width: 100px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            $global_counter = 1;
+                            foreach ($flat_transactions as $item): 
+                                $t = $item['transaction'];
+                                $is_new_branch = $item['is_new_branch'];
+                                
+                                $type_info = $type_labels[$t['transaction_type']] ?? ['label' => $t['transaction_type'], 'color' => 'gray'];
+                                $is_out = in_array($t['transaction_type'], ['cash_out', 'adjustment']);
+                                $is_float = ($t['reference_module'] === 'provider' && !empty($t['provider_name']));
+                                
+                                $search_data = strtolower(
+                                    $t['capital_number'] . ' ' .
+                                    ($t['provider_name'] ?? '') . ' ' .
+                                    ($t['branch_provider_code'] ?? '') . ' ' .
+                                    ($t['employee_name'] ?? '') . ' ' .
+                                    ($t['branch_name'] ?? '') . ' ' .
+                                    ($t['branch_code'] ?? '') . ' ' .
+                                    ($t['description'] ?? '') . ' ' .
+                                    ($t['notes'] ?? '') . ' ' .
+                                    $type_info['label']
+                                );
+                            ?>
+                                <?php if ($is_new_branch && $global_counter > 1): ?>
+                                    <tr class="branch-separator-row">
+                                        <td colspan="9">
+                                            <div class="branch-separator-line"></div>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
+                                
+                                <tr class="transaction-row" 
+                                    data-branch-id="<?php echo $t['branch_id']; ?>"
+                                    data-search="<?php echo htmlspecialchars($search_data); ?>">
+                                    <td class="row-number"><?php echo $global_counter++; ?></td>
+                                    <td>
+                                        <span class="branch-cell-badge">
+                                            <i class="fas fa-store-alt"></i>
+                                            <?php echo htmlspecialchars($t['branch_name'] ?? 'N/A'); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <a href="view.php?id=<?php echo $t['id']; ?>" class="capital-link">
+                                            <?php echo htmlspecialchars($t['capital_number']); ?>
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <span class="date-display">
+                                            <?php echo date('d M Y', strtotime($t['transaction_date'])); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="type-badge type-<?php echo $type_info['color']; ?>">
+                                            <i class="fas <?php echo $type_info['icon']; ?>"></i>
+                                            <?php echo $type_info['label']; ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <?php if ($is_float): ?>
+                                            <div class="source-display source-float">
+                                                <div class="source-icon-sm" style="background: <?php echo htmlspecialchars($t['provider_color'] ?? '#0B5ED7'); ?>;">
+                                                    <i class="<?php echo htmlspecialchars($t['provider_icon'] ?? 'fas fa-university'); ?>"></i>
+                                                </div>
+                                                <div class="source-info-sm">
+                                                    <span class="source-name"><?php echo htmlspecialchars($t['provider_name']); ?></span>
+                                                    <span class="source-code"><?php echo htmlspecialchars($t['branch_provider_code'] ?? 'N/A'); ?></span>
+                                                </div>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="source-display source-cash">
+                                                <div class="source-icon-sm">
+                                                    <i class="fas fa-money-bill-wave"></i>
+                                                </div>
+                                                <div class="source-info-sm">
+                                                    <span class="source-name">Cash</span>
+                                                    <span class="source-code">Manual</span>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="employee-display">
+                                            <?php echo htmlspecialchars($t['employee_name'] ?? 'N/A'); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-display <?php echo $is_out ? 'text-danger' : 'text-success'; ?>">
+                                            <?php echo $is_out ? '-' : '+'; ?>
+                                            <?php echo formatCurrency($t['amount']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="action-buttons">
+                                            <a href="view.php?id=<?php echo $t['id']; ?>" class="btn-action btn-view" title="View">
+                                                <i class="fas fa-eye"></i>
+                                            </a>
+                                            <a href="edit.php?id=<?php echo $t['id']; ?>" class="btn-action btn-edit" title="Edit">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="no-results-main" id="noResultsMain" style="display:none;">
+                    <i class="fas fa-search-minus"></i>
+                    <h3>No records found</h3>
+                    <p>No capital transactions match your search.</p>
+                    <button type="button" class="btn btn-secondary" onclick="clearGlobalSearch()">
+                        <i class="fas fa-times"></i> Clear Search
+                    </button>
+                </div>
+            </div>
             
-            <?php if ($grand_totals['count'] == 0 && $selected_branch == 0): ?>
-                <div class="empty-state">
-                    <i class="fas fa-inbox"></i>
-                    <h3>No Transactions Found</h3>
-                    <p>No capital transactions in any branch for the selected period.</p>
-                </div>
-            <?php endif; ?>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <h3>No Capital Transactions</h3>
+                <p>No capital transactions found for the selected period.</p>
+                <?php if ($selected_branch > 0): ?>
+                    <a href="add.php?branch=<?php echo $selected_branch; ?>" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add First Transaction
+                    </a>
+                <?php endif; ?>
+            </div>
         <?php endif; ?>
 
     </div>
@@ -710,28 +772,46 @@ html.dark-mode {
     --cm-shadow-md: rgba(0,0,0,0.5);
 }
 
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+    width: 100% !important;
+}
+
 body {
     background: var(--cm-bg) !important;
     color: var(--cm-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
-.main-wrapper { background: var(--cm-bg) !important; }
-.main-content { background: var(--cm-bg) !important; }
+.main-wrapper { background: var(--cm-bg) !important; overflow-x: hidden !important; }
+.main-content { background: var(--cm-bg) !important; overflow-x: hidden !important; max-width: 100% !important; padding: 16px 20px !important; }
 
 /* ============================================================
    BRANCH FILTER CARD
    ============================================================ */
 .branch-filter-card {
-    border-radius: 10px;
-    padding: 12px 20px;
+    border-radius: 12px;
+    padding: 16px 22px;
     margin-bottom: 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
     color: #FFFFFF;
+    position: relative;
+    overflow: hidden;
+}
+.branch-filter-card::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 250px; height: 250px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
 }
 .branch-filter-card.filter-all {
     background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
@@ -745,33 +825,37 @@ body {
     gap: 10px;
     font-size: 14px;
     flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
 }
-.filter-left i { font-size: 18px; opacity: 0.9; }
+.filter-left > i { font-size: 20px; opacity: 0.9; color: #FCD34D; }
 .filter-label { font-weight: 500; opacity: 0.8; }
-.filter-name { font-weight: 700; font-size: 16px; }
+.filter-name { font-weight: 800; font-size: 17px; }
 .filter-code {
     font-size: 12px;
-    font-weight: 600;
-    opacity: 0.7;
-    padding: 2px 10px;
-    background: rgba(255,255,255,0.12);
+    font-weight: 700;
+    opacity: 0.9;
+    padding: 3px 12px;
+    background: rgba(255,255,255,0.18);
     border-radius: 10px;
+    font-family: 'Courier New', monospace;
 }
 .filter-clear {
     margin-left: 8px;
     color: #FFFFFF;
     text-decoration: none;
     font-size: 12px;
-    padding: 4px 12px;
+    padding: 5px 14px;
     background: rgba(255,255,255,0.15);
     border-radius: 12px;
     transition: all 0.3s ease;
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    font-weight: 600;
 }
-.filter-clear:hover { background: rgba(255,255,255,0.25); color: #FFFFFF; }
-.filter-right { display: flex; gap: 8px; flex-wrap: wrap; }
+.filter-clear:hover { background: rgba(255,255,255,0.25); color: #FFFFFF; transform: translateY(-1px); }
+.filter-right { display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 1; }
 
 /* ============================================================
    PAGE HEADER
@@ -797,68 +881,344 @@ body {
 }
 
 /* ============================================================
-   GRAND TOTALS
+   ✅ CURRENT CAPITAL WRAPPER (FROM daily_reports - CORRECT)
    ============================================================ */
-.grand-totals-card {
-    background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 100%);
-    border-radius: 12px;
+.current-capital-wrapper {
+    background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
+    border-radius: 16px;
     padding: 0;
     margin-bottom: 20px;
     overflow: hidden;
-    box-shadow: 0 4px 20px rgba(30, 64, 175, 0.3);
+    box-shadow: 0 8px 32px rgba(30, 64, 175, 0.35);
+    position: relative;
 }
-.grand-totals-header {
-    padding: 14px 22px;
+.current-capital-wrapper::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 400px; height: 400px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.current-capital-header {
+    padding: 18px 24px;
     background: rgba(255,255,255,0.08);
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    color: #FFFFFF;
-    font-size: 14px;
-    font-weight: 600;
+    gap: 16px;
     border-bottom: 1px solid rgba(255,255,255,0.1);
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
 }
-.grand-totals-header i { font-size: 16px; }
-.grand-totals-header .period-badge {
-    margin-left: auto;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 3px 12px;
-    background: rgba(255,255,255,0.15);
+.cch-left { display: flex; align-items: center; gap: 14px; }
+.cch-icon {
+    width: 48px;
+    height: 48px;
     border-radius: 12px;
+    background: rgba(255,255,255,0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #FCD34D;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(252, 211, 77, 0.3);
 }
-.grand-totals-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 0;
-    padding: 8px 0;
-}
-.grand-stat {
-    text-align: center;
-    padding: 12px 16px;
-    border-right: 1px solid rgba(255,255,255,0.1);
-}
-.grand-stat:last-child { border-right: none; }
-.grand-stat-label {
-    display: block;
-    font-size: 10px;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.6);
-    letter-spacing: 1px;
-    font-weight: 600;
-    margin-bottom: 4px;
-}
-.grand-stat-value {
-    display: block;
+.cch-info { display: flex; flex-direction: column; gap: 3px; }
+.cch-title {
     font-size: 16px;
     font-weight: 800;
     color: #FFFFFF;
     letter-spacing: 0.3px;
 }
-.grand-stat-value.text-success { color: #6EE7B7; }
-.grand-stat-value.text-danger { color: #FCA5A5; }
-.grand-stat-value.text-blue { color: #93C5FD; }
-.grand-stat-value.text-green { color: #86EFAC; }
+.cch-subtitle {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.75);
+}
+.cch-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(252, 211, 77, 0.25);
+    color: #FCD34D;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1.5px solid rgba(252, 211, 77, 0.4);
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.current-capital-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    padding: 20px 24px;
+    position: relative;
+    z-index: 1;
+}
+
+.current-card {
+    background: rgba(255,255,255,0.12);
+    border-radius: 14px;
+    padding: 20px 22px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border: 1.5px solid rgba(255,255,255,0.18);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+}
+.current-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 5px; height: 100%;
+}
+.current-card:hover {
+    background: rgba(255,255,255,0.2);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.card-float::before { background: #93C5FD; }
+.card-cash::before { background: #86EFAC; }
+.card-capital::before { background: #FCD34D; }
+
+.cc-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.cc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); color: #FFFFFF; }
+.cc-icon-green { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; }
+.cc-icon-purple { background: linear-gradient(135deg, #A855F7, #7C3AED); color: #FFFFFF; }
+
+.cc-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.cc-label {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.85);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cc-value {
+    font-size: clamp(18px, 1.6vw, 24px);
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    line-height: 1.15;
+    word-break: break-word;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.cc-value-blue { color: #93C5FD !important; }
+.cc-value-green { color: #86EFAC !important; }
+.cc-value-purple { color: #FCD34D !important; }
+.cc-sub {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.65);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ============================================================
+   PERIOD SUMMARY WRAPPER
+   ============================================================ */
+.period-summary-wrapper {
+    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
+    border-radius: 16px;
+    padding: 0;
+    margin-bottom: 20px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(124, 58, 237, 0.35);
+    position: relative;
+}
+.period-summary-wrapper::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 400px; height: 400px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.period-header {
+    padding: 18px 24px;
+    background: rgba(255,255,255,0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+}
+.ph-left { display: flex; align-items: center; gap: 14px; }
+.ph-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #FCD34D;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(252, 211, 77, 0.3);
+}
+.ph-info { display: flex; flex-direction: column; gap: 3px; }
+.ph-title {
+    font-size: 16px;
+    font-weight: 800;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+}
+.ph-subtitle {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.75);
+}
+.ph-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(252, 211, 77, 0.25);
+    color: #FCD34D;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1.5px solid rgba(252, 211, 77, 0.4);
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.period-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 14px;
+    padding: 20px 24px;
+    position: relative;
+    z-index: 1;
+}
+
+.period-card {
+    background: rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1.5px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+}
+.period-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 4px; height: 100%;
+}
+.period-card:hover {
+    background: rgba(255,255,255,0.18);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.card-total-in::before { background: #86EFAC; }
+.card-total-out::before { background: #FCA5A5; }
+.card-net::before { background: #93C5FD; }
+.card-float-in::before { background: #C4B5FD; }
+.card-cash-in::before { background: #5EEAD4; }
+.card-branches::before { background: #FCD34D; }
+
+.pc-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.pc-icon-green { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; }
+.pc-icon-red { background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFFFFF; }
+.pc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); color: #FFFFFF; }
+.pc-icon-purple { background: linear-gradient(135deg, #A855F7, #7C3AED); color: #FFFFFF; }
+.pc-icon-teal { background: linear-gradient(135deg, #14B8A6, #0D9488); color: #FFFFFF; }
+.pc-icon-orange { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFFFFF; }
+
+.pc-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+}
+.pc-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.85);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pc-value {
+    font-size: 16px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    line-height: 1.15;
+    word-break: break-word;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pc-value-green { color: #86EFAC !important; }
+.pc-value-red { color: #FCA5A5 !important; }
+.pc-value-purple { color: #C4B5FD !important; }
+.pc-value-teal { color: #5EEAD4 !important; }
+.pc-value-orange { color: #FCD34D !important; }
+.pc-sub {
+    font-size: 9px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 /* ============================================================
    FILTERS BAR
@@ -922,7 +1282,6 @@ body {
     font-family: 'Inter', sans-serif;
     white-space: nowrap;
 }
-.btn-sm { padding: 5px 12px; font-size: 12px; }
 .btn-primary { background: #bb0404; color: white; }
 .btn-primary:hover { background: #8a0303; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(187,4,4,0.3); color: white; }
 .btn-info { background: #3B82F6; color: white; }
@@ -937,16 +1296,6 @@ body {
     border: 1px solid var(--cm-border);
 }
 .btn-reset:hover { background: var(--cm-border); color: var(--cm-text); }
-.btn-outline {
-    background: transparent;
-    color: var(--cm-text-secondary);
-    border: 1px solid var(--cm-border);
-}
-.btn-outline:hover {
-    background: var(--cm-hover);
-    color: var(--cm-text);
-    border-color: #3B82F6;
-}
 .btn-secondary {
     background: var(--cm-hover);
     color: var(--cm-text-secondary);
@@ -955,7 +1304,7 @@ body {
 .btn-secondary:hover { background: var(--cm-border); color: var(--cm-text); }
 
 /* ============================================================
-   EXPORT DROPDOWN
+   DROPDOWN
    ============================================================ */
 .dropdown { position: relative; display: inline-block; }
 .dropdown-menu {
@@ -988,263 +1337,161 @@ body {
 .dropdown-menu a i { width: 18px; font-size: 15px; }
 
 /* ============================================================
-   BRANCH GROUP CARD
+   SINGLE CONTINUOUS TABLE
    ============================================================ */
-.branch-group-card {
+.table-container-main {
     background: var(--cm-card-bg);
-    border-radius: 12px;
-    border: 1px solid var(--cm-border);
-    margin-bottom: 20px;
+    border-radius: 14px;
+    border: 1.5px solid var(--cm-border);
     overflow: hidden;
-    box-shadow: 0 1px 3px var(--cm-shadow);
-    transition: all 0.3s ease;
-    animation: fadeInUp 0.4s ease both;
-}
-.branch-group-card:hover {
-    box-shadow: 0 4px 16px var(--cm-shadow-md);
-}
-.branch-group-card.has-data {
-    border-left: 4px solid #3B82F6;
-}
-.branch-group-card.no-data {
-    border-left: 4px solid #F59E0B;
+    box-shadow: 0 4px 16px var(--cm-shadow);
+    width: 100%;
+    max-width: 100%;
 }
 
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(15px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* ============================================================
-   BRANCH GROUP HEADER
-   ============================================================ */
-.branch-group-header {
-    background: var(--cm-card-header);
-    padding: 16px 22px;
-    display: flex;
-    justify-content: space-between;
+.table-header-red {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 16px;
-    border-bottom: 1px solid var(--cm-border);
-    flex-wrap: wrap;
+    padding: 16px 22px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    position: relative;
+    overflow: hidden;
 }
-.branch-group-card.has-data .branch-group-header {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.02));
+.table-header-red::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -5%;
+    width: 250px; height: 250px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 50%;
+    pointer-events: none;
 }
-
-.branch-group-title {
+.thr-left {
     display: flex;
     align-items: center;
-    gap: 14px;
-    flex: 1;
-    min-width: 0;
+    gap: 12px;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
 }
-.branch-icon-wrapper {
-    width: 46px;
-    height: 46px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, #3B82F6, #2563EB);
+.thr-left > i {
+    font-size: 20px;
+    color: #FCD34D;
+    background: rgba(255, 255, 255, 0.15);
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #FFFFFF;
-    font-size: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
     flex-shrink: 0;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
-.branch-title-info { flex: 1; min-width: 0; }
-.branch-title-info h3 {
-    font-size: 17px;
-    font-weight: 700;
-    color: var(--cm-text);
-    margin: 0 0 4px 0;
-}
-.branch-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.branch-code-badge {
-    font-size: 10px;
-    font-weight: 700;
-    padding: 2px 10px;
-    background: rgba(59, 130, 246, 0.15);
-    color: #3B82F6;
-    border-radius: 10px;
-    letter-spacing: 0.5px;
-}
-.branch-location-inline {
-    font-size: 11px;
-    color: var(--cm-text-secondary);
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-}
-.branch-location-inline i { font-size: 10px; color: #3B82F6; }
-.record-count-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 2px 10px;
-    background: var(--cm-hover);
-    color: var(--cm-text-secondary);
-    border-radius: 10px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.record-count-badge i { font-size: 9px; }
-
-.branch-group-actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-}
-
-/* ============================================================
-   BRANCH SUMMARY BAR
-   ============================================================ */
-.branch-summary-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 0;
-    background: var(--cm-card-bg);
-    border-bottom: 1px solid var(--cm-border);
-}
-.summary-stat {
-    padding: 14px 18px;
-    border-right: 1px solid var(--cm-border);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    transition: background 0.2s ease;
-}
-.summary-stat:last-child { border-right: none; }
-.summary-stat:hover { background: var(--cm-hover); }
-.summary-stat.highlight {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(59, 130, 246, 0.02));
-    border-left: 3px solid #3B82F6;
-}
-.summary-stat-label {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--cm-text-light);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.summary-stat-label i { font-size: 11px; }
-.summary-stat-value {
-    font-size: 15px;
+.thr-left h3 {
+    font-size: 16px;
     font-weight: 800;
-    color: var(--cm-text);
+    margin: 0;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
 }
-.text-success { color: #10B981; }
-.text-danger { color: #DC2626; }
-.text-blue { color: #3B82F6; }
-.text-green { color: #10B981; }
-
-/* ============================================================
-   TYPE BREAKDOWN
-   ============================================================ */
-.type-breakdown-bar {
-    display: flex;
-    gap: 8px;
-    padding: 10px 22px;
-    background: var(--cm-card-header);
-    border-bottom: 1px solid var(--cm-border);
-    flex-wrap: wrap;
-}
-.type-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 12px;
+.thr-count {
+    font-size: 11px;
+    font-weight: 800;
+    color: #FCD34D;
+    padding: 4px 14px;
+    background: rgba(252, 211, 77, 0.2);
     border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    background: var(--cm-card-bg);
-    border: 1px solid var(--cm-border);
-}
-.type-pill i { font-size: 10px; }
-.type-pill span { color: var(--cm-text-secondary); }
-.type-pill strong { font-weight: 700; }
-.type-pill.type-blue { border-color: #3B82F6; }
-.type-pill.type-green { border-color: #10B981; }
-.type-pill.type-purple { border-color: #8B5CF6; }
-.type-pill.type-red { border-color: #DC2626; }
-.type-pill.type-orange { border-color: #F59E0B; }
-
-/* ============================================================
-   TABLE
-   ============================================================ */
-.table-container-inner {
-    padding: 0;
-    overflow: hidden;
-}
-.table-responsive {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-}
-.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-    min-width: 900px;
+    border: 1px solid rgba(252, 211, 77, 0.35);
+    white-space: nowrap;
 }
 
-/* Compact Search Header */
-.table-header-row {
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%) !important;
-}
-.table-search-header {
-    padding: 6px 14px !important;
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%) !important;
-    border-bottom: none !important;
-}
-.table-search-wrapper {
+.thr-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
     position: relative;
+    z-index: 1;
+}
+
+.scroll-btn-header {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    border: 2px solid #FFFFFF;
+    background: #FFFFFF;
+    color: #DC2626;
+    cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    background: rgba(255,255,255,0.95);
-    border-radius: 6px;
-    padding: 3px 10px;
-    width: 280px;
-    max-width: 100%;
-}
-html.dark-mode .table-search-wrapper {
-    background: rgba(30, 41, 59, 0.95);
-}
-.table-search-icon {
-    color: #DC2626;
-    font-size: 11px;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 800;
+    transition: all 0.25s ease;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
     flex-shrink: 0;
 }
-.table-search-input {
+.scroll-btn-header:hover {
+    background: #FCD34D;
+    color: #78350F;
+    border-color: #FCD34D;
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
+}
+.scroll-btn-header:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+}
+.scroll-btn-header i {
+    font-size: 15px;
+    display: block;
+    line-height: 1;
+}
+
+.search-wrapper-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    padding: 7px 14px;
+    width: 300px;
+    max-width: 100%;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.search-wrapper-main:focus-within {
+    border-color: #FCD34D;
+    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
+    background: #FFFFFF;
+}
+.search-wrapper-main > i {
+    color: #DC2626;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.search-wrapper-main input {
     flex: 1;
     border: none;
     background: transparent;
-    padding: 5px 2px;
+    padding: 4px 0;
     font-size: 12px;
-    font-family: 'Inter', sans-serif;
     color: #1F2937;
     outline: none;
     min-width: 0;
+    font-family: 'Inter', sans-serif;
 }
-html.dark-mode .table-search-input {
-    color: #F9FAFB;
-}
-.table-search-input::placeholder {
+.search-wrapper-main input::placeholder {
     color: #9CA3AF;
     font-size: 11px;
 }
-.table-search-clear {
-    width: 18px;
-    height: 18px;
+.search-wrapper-main button {
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     background: #FEE2E2;
     color: #DC2626;
@@ -1253,31 +1500,81 @@ html.dark-mode .table-search-input {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 8px;
+    font-size: 10px;
     transition: all 0.2s ease;
     flex-shrink: 0;
 }
-.table-search-clear:hover {
+.search-wrapper-main button:hover {
     background: #DC2626;
     color: #FFFFFF;
 }
-.table-search-count {
-    font-size: 9px;
-    font-weight: 700;
-    padding: 2px 8px;
-    background: #F59E0B;
-    color: #FFFFFF;
+.search-count-main {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 10px;
+    background: #FCD34D;
+    color: #78350F;
     border-radius: 8px;
-    white-space: nowrap;
     flex-shrink: 0;
+    white-space: nowrap;
 }
 
-/* Table Header (Red Background) */
-.data-table thead tr:not(.table-header-row) {
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+.thr-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    position: relative;
+    z-index: 1;
 }
-.data-table thead th:not(.table-search-header) {
-    padding: 12px 14px;
+.thr-branches-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 7px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    white-space: nowrap;
+}
+.thr-branches-badge i {
+    font-size: 11px;
+    color: #FCD34D;
+}
+
+.table-responsive-main {
+    overflow-x: auto;
+    width: 100%;
+    max-width: 100%;
+    scroll-behavior: smooth;
+}
+.table-responsive-main::-webkit-scrollbar { height: 8px; }
+.table-responsive-main::-webkit-scrollbar-track {
+    background: var(--cm-hover);
+    border-radius: 4px;
+}
+.table-responsive-main::-webkit-scrollbar-thumb {
+    background: #DC2626;
+    border-radius: 4px;
+}
+.table-responsive-main::-webkit-scrollbar-thumb:hover { background: #B91C1C; }
+
+.data-table-main {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 1100px;
+}
+.data-table-main thead {
+    background: #DC2626;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+.data-table-main thead th {
+    padding: 13px 16px;
     text-align: left;
     font-weight: 700;
     color: #FFFFFF;
@@ -1286,26 +1583,99 @@ html.dark-mode .table-search-input {
     letter-spacing: 0.8px;
     border-bottom: 2px solid #8a0303;
     white-space: nowrap;
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
 }
-.data-table thead th.text-right { text-align: right; }
-
-.data-table tbody tr {
+.data-table-main thead th.text-right { text-align: right; }
+.data-table-main tbody tr {
     border-bottom: 1px solid var(--cm-border);
     transition: background 0.2s ease;
 }
-.data-table tbody tr:last-child { border-bottom: none; }
-.data-table tbody tr:hover { background: var(--cm-hover); }
-.data-table tbody td {
-    padding: 10px 14px;
+.data-table-main tbody tr:hover { background: var(--cm-hover); }
+.data-table-main tbody td {
+    padding: 13px 16px;
     color: var(--cm-text);
     vertical-align: middle;
 }
-.data-table tbody td.text-right { text-align: right; }
+.data-table-main tbody td.text-right { text-align: right; }
 
-.transaction-row.hidden-by-search {
-    display: none !important;
+/* ============================================================
+   BRANCH SEPARATOR (RED LINE)
+   ============================================================ */
+.branch-separator-row {
+    background: transparent !important;
+    border: none !important;
+    height: 0;
 }
+.branch-separator-row td {
+    padding: 0 !important;
+    border: none !important;
+    height: 0;
+    background: transparent !important;
+}
+.branch-separator-line {
+    height: 5px;
+    background: linear-gradient(90deg, #DC2626 0%, #B91C1C 50%, #DC2626 100%);
+    box-shadow: 0 2px 12px rgba(220, 38, 38, 0.5);
+    border-radius: 3px;
+    margin: 10px 0;
+    position: relative;
+}
+.branch-separator-line::before {
+    content: '';
+    position: absolute;
+    top: -3px; left: 0; right: 0;
+    height: 1px;
+    background: rgba(220, 38, 38, 0.4);
+}
+.branch-separator-line::after {
+    content: '';
+    position: absolute;
+    bottom: -3px; left: 0; right: 0;
+    height: 1px;
+    background: rgba(220, 38, 38, 0.4);
+}
+
+.transaction-row.hidden-by-search { display: none !important; }
+.branch-separator-row.hidden-by-search { display: none !important; }
+
+.row-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--cm-hover);
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--cm-text);
+    border: 1.5px solid var(--cm-border);
+    font-family: 'Inter', monospace;
+}
+
+.branch-cell-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1E40AF;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1.5px solid #93C5FD;
+    box-shadow: 0 2px 4px rgba(29, 78, 216, 0.1);
+}
+.branch-cell-badge i {
+    color: #2563EB;
+    font-size: 10px;
+}
+html.dark-mode .branch-cell-badge {
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+    color: #93C5FD;
+    border-color: #3B82F6;
+}
+html.dark-mode .branch-cell-badge i { color: #60A5FA; }
 
 .capital-link {
     font-weight: 700;
@@ -1314,6 +1684,7 @@ html.dark-mode .table-search-input {
     font-size: 12px;
     font-family: 'Courier New', monospace;
     transition: color 0.2s ease;
+    white-space: nowrap;
 }
 .capital-link:hover { color: #2563EB; text-decoration: underline; }
 
@@ -1327,8 +1698,8 @@ html.dark-mode .table-search-input {
 .type-badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 3px 10px;
+    gap: 5px;
+    padding: 4px 12px;
     border-radius: 10px;
     font-size: 10px;
     font-weight: 700;
@@ -1350,18 +1721,20 @@ html.dark-mode .type-badge.type-gray { background: #374151; color: #9CA3AF; }
 .source-display {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 .source-icon-sm {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: #FFFFFF;
-    font-size: 12px;
+    font-size: 13px;
     flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 .source-cash .source-icon-sm {
     background: linear-gradient(135deg, #10B981, #059669);
@@ -1387,116 +1760,92 @@ html.dark-mode .type-badge.type-gray { background: #374151; color: #9CA3AF; }
     color: var(--cm-text-light);
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    font-family: 'Courier New', monospace;
 }
 
 .employee-display {
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--cm-text-secondary);
     white-space: nowrap;
 }
 
 .amount-display {
-    font-size: 13px;
-    font-weight: 800;
+    font-size: 14px;
+    font-weight: 900;
     white-space: nowrap;
-    font-family: 'Courier New', monospace;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.2px;
 }
+.text-success { color: #10B981; }
+.text-danger { color: #DC2626; }
 
 .action-buttons {
     display: flex;
-    gap: 4px;
+    gap: 5px;
     justify-content: center;
 }
 .btn-action {
-    width: 30px;
-    height: 30px;
-    border-radius: 6px;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
     border: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.25s ease;
     text-decoration: none;
-    font-size: 12px;
-}
-.btn-view { background: #DBEAFE; color: #1D4ED8; }
-.btn-view:hover { background: #1D4ED8; color: #FFFFFF; transform: translateY(-1px); }
-.btn-edit { background: #D1FAE5; color: #059669; }
-.btn-edit:hover { background: #059669; color: #FFFFFF; transform: translateY(-1px); }
-html.dark-mode .btn-view { background: #1E3A5F; color: #60A5FA; }
-html.dark-mode .btn-view:hover { background: #3B82F6; color: #FFFFFF; }
-html.dark-mode .btn-edit { background: #065F46; color: #34D399; }
-html.dark-mode .btn-edit:hover { background: #10B981; color: #FFFFFF; }
-
-/* ============================================================
-   NO BRANCH RESULTS
-   ============================================================ */
-.no-branch-results {
-    text-align: center;
-    padding: 30px 20px;
-    background: var(--cm-hover);
-    border-top: 1px solid var(--cm-border);
-}
-.no-branch-results i {
-    font-size: 32px;
-    color: var(--cm-text-light);
-    opacity: 0.5;
-    display: block;
-    margin-bottom: 8px;
-}
-.no-branch-results p {
     font-size: 13px;
-    color: var(--cm-text-secondary);
-    margin: 0 0 12px 0;
 }
+.btn-view { 
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
+    color: #1D4ED8; 
+    border: 1.5px solid #93C5FD;
+}
+.btn-view:hover { 
+    background: linear-gradient(135deg, #1D4ED8, #2563EB); 
+    color: #FFFFFF; 
+    transform: translateY(-2px); 
+    box-shadow: 0 4px 12px rgba(29, 78, 216, 0.4);
+}
+.btn-edit { 
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0); 
+    color: #059669; 
+    border: 1.5px solid #6EE7B7;
+}
+.btn-edit:hover { 
+    background: linear-gradient(135deg, #059669, #10B981); 
+    color: #FFFFFF; 
+    transform: translateY(-2px); 
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4);
+}
+html.dark-mode .btn-view { background: linear-gradient(135deg, #1E3A5F, #1E40AF); color: #60A5FA; border-color: #3B82F6; }
+html.dark-mode .btn-edit { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; border-color: #10B981; }
 
-/* ============================================================
-   BRANCH NO DATA
-   ============================================================ */
-.branch-no-data {
+.no-results-main {
     text-align: center;
-    padding: 50px 20px;
+    padding: 60px 20px;
     background: var(--cm-hover);
 }
-.zero-badge {
-    position: relative;
-    display: inline-block;
+.no-results-main i {
+    font-size: 56px;
+    color: var(--cm-text-light);
+    opacity: 0.4;
+    display: block;
     margin-bottom: 16px;
 }
-.zero-badge i {
-    font-size: 48px;
-    color: #F59E0B;
-    opacity: 0.4;
-}
-.zero-count {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 20px;
-    font-weight: 900;
-    color: #F59E0B;
-}
-.branch-no-data h4 {
+.no-results-main h3 {
     font-size: 18px;
-    font-weight: 700;
     color: var(--cm-text);
     margin: 0 0 8px 0;
 }
-.branch-no-data p {
+.no-results-main p {
     font-size: 14px;
     color: var(--cm-text-secondary);
-    margin: 0 0 18px 0;
-    max-width: 500px;
-    margin-left: auto;
-    margin-right: auto;
+    margin: 0 0 20px 0;
 }
 
-/* ============================================================
-   EMPTY STATE
-   ============================================================ */
 .empty-state {
     text-align: center;
     padding: 80px 20px;
@@ -1519,26 +1868,44 @@ html.dark-mode .btn-edit:hover { background: #10B981; color: #FFFFFF; }
 .empty-state p {
     color: var(--cm-text-secondary);
     font-size: 14px;
-    margin: 0;
+    margin: 0 0 20px 0;
 }
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-@media (max-width: 1024px) {
-    .grand-totals-grid { grid-template-columns: repeat(3, 1fr); }
-    .grand-stat:nth-child(3n) { border-right: none; }
-    .grand-stat { border-bottom: 1px solid rgba(255,255,255,0.1); }
+@media (max-width: 1400px) {
+    .period-cards-grid { grid-template-columns: repeat(3, 1fr); }
+    .current-capital-grid { grid-template-columns: repeat(3, 1fr); }
 }
-
+@media (max-width: 1024px) {
+    .current-capital-grid { grid-template-columns: repeat(3, 1fr); }
+    .period-cards-grid { grid-template-columns: repeat(3, 1fr); }
+    .cc-value { font-size: 18px; }
+    .pc-value { font-size: 14px; }
+    .table-header-red {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+    .thr-left, .thr-center, .thr-right {
+        justify-content: center;
+        width: 100%;
+    }
+    .search-wrapper-main { width: 100%; }
+    .scroll-btn-header { width: 40px; height: 40px; }
+}
 @media (max-width: 768px) {
+    .main-content { padding: 12px !important; }
     .branch-filter-card { flex-direction: column; align-items: flex-start; padding: 14px 18px; }
     .filter-right { width: 100%; }
     .filter-right .btn { flex: 1; justify-content: center; }
     
-    .grand-totals-grid { grid-template-columns: repeat(2, 1fr); }
-    .grand-stat:nth-child(2n) { border-right: none; }
-    .grand-stat:nth-child(3n) { border-right: 1px solid rgba(255,255,255,0.1); }
+    .current-capital-grid { grid-template-columns: 1fr; }
+    .period-cards-grid { grid-template-columns: repeat(2, 1fr); }
+    .current-capital-header { flex-direction: column; align-items: flex-start; }
+    .cch-badge { align-self: flex-start; }
+    .period-header { flex-direction: column; align-items: flex-start; }
+    .ph-badge { align-self: flex-start; }
     
     .filters-form { flex-direction: column; }
     .filter-group { width: 100%; }
@@ -1546,86 +1913,71 @@ html.dark-mode .btn-edit:hover { background: #10B981; color: #FFFFFF; }
     .filter-group.filter-buttons { flex-direction: column; }
     .filter-group.filter-buttons .btn { width: 100%; justify-content: center; }
     
-    .branch-group-header { flex-direction: column; align-items: flex-start; }
-    .branch-group-actions { width: 100%; }
-    .branch-group-actions .btn { flex: 1; justify-content: center; }
-    
-    .branch-summary-bar { grid-template-columns: repeat(2, 1fr); }
-    .summary-stat:nth-child(2n) { border-right: none; }
-    
-    .table-search-wrapper { width: 200px; }
+    .table-header-red { padding: 14px 16px; }
+    .thr-left h3 { font-size: 14px; }
+    .scroll-btn-header { width: 38px; height: 38px; font-size: 14px; }
+    .scroll-btn-header i { font-size: 13px; }
 }
-
 @media (max-width: 480px) {
-    .grand-totals-grid { grid-template-columns: 1fr; }
-    .grand-stat { border-right: none; }
-    .grand-stat-value { font-size: 14px; }
+    .current-capital-grid { grid-template-columns: 1fr; }
+    .period-cards-grid { grid-template-columns: 1fr; }
+    .cc-value { font-size: 18px; }
+    .pc-value { font-size: 15px; }
+    .current-card { padding: 16px 18px; }
+    .period-card { padding: 14px 16px; }
+    .cc-icon { width: 48px; height: 48px; font-size: 20px; }
+    .pc-icon { width: 40px; height: 40px; font-size: 16px; }
     
-    .branch-title-info h3 { font-size: 15px; }
-    .branch-icon-wrapper { width: 40px; height: 40px; font-size: 17px; }
-    
-    .branch-summary-bar { grid-template-columns: 1fr; }
-    .summary-stat { border-right: none; }
-    .summary-stat-value { font-size: 14px; }
-    
-    .type-pill { font-size: 10px; padding: 3px 8px; }
+    .data-table-main thead th,
+    .data-table-main tbody td { padding: 10px 12px; font-size: 12px; }
+    .branch-cell-badge { font-size: 10px; padding: 4px 8px; }
     .source-name { max-width: 90px; font-size: 11px; }
     .amount-display { font-size: 12px; }
-    .table-search-wrapper { width: 150px; }
-    .table-search-count { display: none; }
-}
-
-/* ============================================================
-   PRINT
-   ============================================================ */
-@media print {
-    .branch-filter-card .filter-right,
-    .filters-bar,
-    .branch-group-actions,
-    .action-buttons,
-    .table-header-row {
-        display: none !important;
-    }
-    .branch-group-card {
-        box-shadow: none;
-        border: 1px solid #ccc;
-        page-break-inside: avoid;
-    }
-    body { background: #FFFFFF !important; }
+    
+    .thr-center { gap: 8px; }
+    .scroll-btn-header { width: 34px; height: 34px; font-size: 13px; }
+    .scroll-btn-header i { font-size: 12px; }
 }
 </style>
 
 <script>
 // ============================================================
-// PER-BRANCH TABLE SEARCH
+// SCROLL TABLE MAIN (Horizontal)
 // ============================================================
-function onTableSearch(input, branchId) {
+function scrollTableMain(direction) {
+    const wrapper = document.getElementById('tableWrapperMain');
+    if (!wrapper) return;
+    const scrollAmount = 400;
+    wrapper.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+    });
+}
+
+// ============================================================
+// GLOBAL SEARCH
+// ============================================================
+function onGlobalSearch(input) {
     const searchTerm = input.value.toLowerCase().trim();
-    const tbody = document.querySelector(`[data-branch-tbody="${branchId}"]`);
-    const clearBtn = document.querySelector(`.table-search-clear[data-branch-id="${branchId}"]`);
-    const countBadge = document.querySelector(`.table-search-count[data-branch-id="${branchId}"]`);
-    const noResults = document.querySelector(`.no-branch-results[data-branch-id="${branchId}"]`);
-    const card = document.querySelector(`.branch-group-card[data-branch-id="${branchId}"]`);
-    const countText = card ? card.querySelector('.record-count-text') : null;
-    const totalCount = countText ? parseInt(countText.getAttribute('data-total')) || 0 : 0;
+    const rows = document.querySelectorAll('.transaction-row');
+    const separatorRows = document.querySelectorAll('.branch-separator-row');
+    const clearBtn = document.getElementById('globalSearchClear');
+    const countBadge = document.getElementById('globalSearchCount');
+    const noResults = document.getElementById('noResultsMain');
     
-    if (!tbody) return;
-    
-    const rows = tbody.querySelectorAll('.transaction-row');
-    
-    if (clearBtn) {
-        clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
-    }
+    if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
     
     if (searchTerm.length === 0) {
         rows.forEach(row => row.classList.remove('hidden-by-search'));
-        rows.forEach((row, idx) => {
-            const numCell = row.querySelector('.row-number');
-            if (numCell) numCell.textContent = idx + 1;
-        });
+        separatorRows.forEach(row => row.classList.remove('hidden-by-search'));
         if (countBadge) countBadge.style.display = 'none';
         if (noResults) noResults.style.display = 'none';
-        if (countText) countText.textContent = totalCount + ' transaction' + (totalCount !== 1 ? 's' : '');
+        
+        let idx = 1;
+        rows.forEach(row => {
+            const numCell = row.querySelector('.row-number');
+            if (numCell) numCell.textContent = idx++;
+        });
         return;
     }
     
@@ -1639,6 +1991,8 @@ function onTableSearch(input, branchId) {
             row.classList.add('hidden-by-search');
         }
     });
+    
+    separatorRows.forEach(row => row.classList.add('hidden-by-search'));
     
     let visibleIdx = 1;
     rows.forEach(row => {
@@ -1656,17 +2010,13 @@ function onTableSearch(input, branchId) {
     if (noResults) {
         noResults.style.display = matchCount === 0 ? 'block' : 'none';
     }
-    
-    if (countText) {
-        countText.textContent = matchCount + ' of ' + totalCount;
-    }
 }
 
-function clearTableSearch(branchId) {
-    const input = document.querySelector(`.table-search-input[data-branch-id="${branchId}"]`);
+function clearGlobalSearch() {
+    const input = document.getElementById('globalSearchInput');
     if (input) {
         input.value = '';
-        onTableSearch(input, branchId);
+        onGlobalSearch(input);
         input.focus();
     }
 }
@@ -1677,18 +2027,23 @@ function clearTableSearch(branchId) {
 document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        const firstInput = document.querySelector('.table-search-input');
-        if (firstInput) {
-            firstInput.focus();
-            firstInput.select();
-        }
+        const input = document.getElementById('globalSearchInput');
+        if (input) { input.focus(); input.select(); }
     }
     if (e.key === 'Escape') {
-        const focused = document.activeElement;
-        if (focused && focused.classList.contains('table-search-input')) {
-            const branchId = focused.getAttribute('data-branch-id');
-            clearTableSearch(branchId);
+        const input = document.getElementById('globalSearchInput');
+        if (input && input.value.length > 0 && document.activeElement === input) {
+            clearGlobalSearch();
         }
+    }
+    // Arrow left/right kwa scroll
+    if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        scrollTableMain('left');
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowRight') {
+        e.preventDefault();
+        scrollTableMain('right');
     }
 });
 

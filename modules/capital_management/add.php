@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: modules/capital_management/add.php
-// ADD CAPITAL TRANSACTION
-// ✅ NEW: Can add Float AND Cash at the same time
-// ✅ NEW: Checkbox to enable/disable each source
-// ✅ NEW: Providers displayed like Morning Report
-// ✅ FIXED: Description is now OPTIONAL
+// WAKALA FINANCIAL SYSTEM - ADD CAPITAL TRANSACTION
+// ✅ FIXED: Updates daily_reports.current_cash + current_capital
+// ✅ FIXED: Handles both CASH and PROVIDER float transactions
+// ✅ FIXED: Auto-selects branch from URL parameter
+// ✅ FIXED: Beautiful modern UI with cards
 // ================================================================
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
@@ -16,7 +19,7 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-if (!isset($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
@@ -29,231 +32,361 @@ if ($role !== 'admin' && $role !== 'super_admin') {
     exit();
 }
 
-$error = '';
-$success = '';
-
 // ============================================================
-// GET SELECTED BRANCH FROM URL
+// GET BRANCH FROM URL (support both 'branch' and 'branch_id')
 // ============================================================
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
-
-try {
-    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-    $stmt->execute();
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    $branches = [];
+$selected_branch = 0;
+if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
+    $selected_branch = intval($_GET['branch_id']);
+} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
+    $selected_branch = intval($_GET['branch']);
+    if ($selected_branch < 0) $selected_branch = 0;
 }
 
-$branch_name = 'Select Branch';
+// ============================================================
+// GET BRANCHES
+// ============================================================
+$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+$stmt->execute();
+$all_branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Selected branch name
+$selected_branch_name = 'All Branches';
+$selected_branch_code = '';
 if ($selected_branch > 0) {
-    foreach ($branches as $b) {
+    foreach ($all_branches as $b) {
         if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
+            $selected_branch_name = $b['branch_name'];
+            $selected_branch_code = $b['branch_code'] ?? '';
             break;
         }
     }
 }
 
 // ============================================================
-// GET BRANCH PROVIDERS
-// ============================================================
-$branch_providers = [];
-if ($selected_branch > 0) {
-    try {
-        $stmt = $db->prepare("
-            SELECT 
-                bp.id as branch_provider_id,
-                bp.provider_code,
-                bp.provider_id,
-                p.provider_name,
-                p.provider_type,
-                p.icon_class,
-                p.color_code
-            FROM branch_providers bp
-            JOIN providers p ON bp.provider_id = p.id
-            WHERE bp.branch_id = ? AND bp.is_active = 1
-            ORDER BY p.display_order, p.provider_name
-        ");
-        $stmt->execute([$selected_branch]);
-        $branch_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        error_log("Error fetching branch providers: " . $e->getMessage());
-    }
-}
-
-// ============================================================
 // HANDLE FORM SUBMISSION
 // ============================================================
-if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $transaction_type = $_POST['transaction_type'] ?? '';
-    $description_base = trim($_POST['description'] ?? ''); // ✅ Now optional
-    $notes = trim($_POST['notes'] ?? '');
-    $branch_id = intval($_POST['branch_id'] ?? 0);
-    $transaction_date = $_POST['transaction_date'] ?? date('Y-m-d');
-    
-    // Source toggles
-    $include_float = isset($_POST['include_float']) ? 1 : 0;
-    $include_cash = isset($_POST['include_cash']) ? 1 : 0;
-    
-    // Provider amounts
-    $provider_amounts = [];
-    if (isset($_POST['provider_amount']) && is_array($_POST['provider_amount'])) {
-        foreach ($_POST['provider_amount'] as $key => $val) {
-            $amount = floatval(str_replace(',', '', $val));
-            if ($amount > 0) {
-                $provider_amounts[$key] = $amount;
+$error_message = '';
+$success_message = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_transaction') {
+    try {
+        $branch_id = intval($_POST['branch_id'] ?? 0);
+        $transaction_date = $_POST['transaction_date'] ?? date('Y-m-d');
+        $transaction_type = $_POST['transaction_type'] ?? 'additional';
+        $reference_module = $_POST['reference_module'] ?? 'cash';
+        $reference_id = !empty($_POST['reference_id']) ? intval($_POST['reference_id']) : null;
+        $amount = floatval(str_replace(',', '', $_POST['amount'] ?? 0));
+        $description = trim($_POST['description'] ?? '');
+        $notes = trim($_POST['notes'] ?? '');
+        
+        // Validate
+        if ($branch_id <= 0) {
+            throw new Exception('Please select a branch.');
+        }
+        if ($amount <= 0) {
+            throw new Exception('Please enter a valid amount greater than 0.');
+        }
+        if (!in_array($transaction_type, ['opening', 'additional', 'profit_allocation', 'cash_out', 'adjustment'])) {
+            throw new Exception('Invalid transaction type.');
+        }
+        if (!in_array($reference_module, ['cash', 'provider'])) {
+            throw new Exception('Invalid reference module.');
+        }
+        if ($reference_module === 'provider' && empty($reference_id)) {
+            throw new Exception('Please select a provider.');
+        }
+        
+        // Get branch name
+        $branch_name = '';
+        foreach ($all_branches as $b) {
+            if ($b['id'] == $branch_id) {
+                $branch_name = $b['branch_name'];
+                break;
             }
         }
-    }
-    
-    // Cash amount
-    $cash_amount = floatval(str_replace(',', '', $_POST['cash_amount'] ?? 0));
-    
-    // Validate
-    $errors = [];
-    
-    if (empty($transaction_type)) {
-        $errors[] = 'Please select transaction type';
-    }
-    if ($branch_id <= 0) {
-        $errors[] = 'Please select a branch';
-    }
-    // ✅ Description is NO LONGER required
-    if (!$include_float && !$include_cash) {
-        $errors[] = 'Please enable at least one source (Float or Cash)';
-    }
-    if ($include_float && empty($provider_amounts)) {
-        $errors[] = 'Please enter at least one provider amount for Float';
-    }
-    if ($include_cash && $cash_amount <= 0) {
-        $errors[] = 'Please enter a Cash amount';
-    }
-    
-    if (!empty($errors)) {
-        $error = implode('<br>', $errors);
-    } else {
-        try {
-            // Get branch name
-            $branch_name_selected = 'Main';
-            $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
-            $stmt->execute([$branch_id]);
-            $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($branch) {
-                $branch_name_selected = $branch['branch_name'];
-            }
+        
+        // ====================================================
+        // START TRANSACTION
+        // ====================================================
+        $db->beginTransaction();
+        
+        // Generate capital number
+        $prefix = 'CAP';
+        $capital_number = $prefix . '-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+        
+        // Check for duplicate
+        $stmt = $db->prepare("SELECT id FROM capital_management WHERE capital_number = ?");
+        $stmt->execute([$capital_number]);
+        if ($stmt->fetch()) {
+            $capital_number = $prefix . '-' . date('Ymd') . '-' . str_pad(rand(10000, 99999), 5, '0', STR_PAD_LEFT);
+        }
+        
+        // ====================================================
+        // GET LATEST DAILY REPORT FOR THIS BRANCH
+        // ====================================================
+        $stmt = $db->prepare("
+            SELECT id, current_cash, current_capital 
+            FROM daily_reports 
+            WHERE branch_id = ? 
+            ORDER BY report_date DESC, id DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$branch_id]);
+        $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // If no daily report exists, we can still add but cash/capital won't update
+        $dr_id = $latest_dr ? $latest_dr['id'] : null;
+        
+        // ====================================================
+        // INSERT TRANSACTION
+        // ====================================================
+        $stmt = $db->prepare("
+            INSERT INTO capital_management 
+            (capital_number, branch_id, employee_id, transaction_date, transaction_type,
+             reference_module, reference_id, amount, description, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([
+            $capital_number,
+            $branch_id,
+            $user_id,
+            $transaction_date,
+            $transaction_type,
+            $reference_module,
+            $reference_id,
+            $amount,
+            $description,
+            $notes
+        ]);
+        
+        $capital_id = $db->lastInsertId();
+        
+        // ====================================================
+        // UPDATE DAILY REPORTS
+        // ====================================================
+        if ($dr_id) {
+            $is_out = in_array($transaction_type, ['cash_out', 'adjustment']);
             
-            $inserted_count = 0;
-            $total_amount = 0;
-            
-            // ✅ Default description if empty
-            $default_description = !empty($description_base) ? $description_base : 'Capital transaction';
-            
-            // ============================================================
-            // INSERT FLOAT CAPITAL (multiple providers)
-            // ============================================================
-            if ($include_float && !empty($provider_amounts)) {
-                foreach ($provider_amounts as $branch_provider_id => $amount) {
-                    $stmt = $db->prepare("
-                        SELECT bp.provider_code, bp.provider_id, p.provider_name
-                        FROM branch_providers bp
-                        JOIN providers p ON bp.provider_id = p.id
-                        WHERE bp.id = ?
-                    ");
-                    $stmt->execute([$branch_provider_id]);
-                    $bp_data = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($reference_module === 'provider' && $reference_id > 0) {
+                // ============================================
+                // PROVIDER FLOAT UPDATE
+                // ============================================
+                $stmt = $db->prepare("
+                    SELECT id, current_float 
+                    FROM daily_report_providers 
+                    WHERE daily_report_id = ? AND provider_id = ?
+                    ORDER BY id DESC LIMIT 1
+                ");
+                $stmt->execute([$dr_id, $reference_id]);
+                $drp = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($drp) {
+                    // Update existing provider row
+                    $old_float = floatval($drp['current_float']);
                     
-                    if ($bp_data) {
-                        $capital_number = generateNumber('CAP');
-                        // ✅ Description with provider name
-                        $description = $default_description . ' [' . $bp_data['provider_name'] . ' - ' . $bp_data['provider_code'] . ']';
+                    if ($is_out) {
+                        $new_float = max(0, $old_float - $amount);
+                    } else {
+                        $new_float = $old_float + $amount;
+                    }
+                    
+                    $stmt = $db->prepare("
+                        UPDATE daily_report_providers 
+                        SET current_float = ?, 
+                            total_deposits = total_deposits + ?,
+                            total_withdrawals = total_withdrawals + ?,
+                            updated_at = NOW() 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([
+                        $new_float,
+                        $is_out ? 0 : $amount,
+                        $is_out ? $amount : 0,
+                        $drp['id']
+                    ]);
+                } else {
+                    // Insert new provider row
+                    $stmt = $db->prepare("
+                        SELECT p.provider_name, bp.provider_code 
+                        FROM providers p
+                        INNER JOIN branch_providers bp ON p.id = bp.provider_id AND bp.branch_id = ?
+                        WHERE p.id = ?
+                    ");
+                    $stmt->execute([$branch_id, $reference_id]);
+                    $pinfo = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($pinfo) {
+                        $new_float = $is_out ? 0 : $amount;
                         
-                        $sql = "INSERT INTO capital_management (
-                            capital_number, employee_id, branch_id, branch, transaction_date,
-                            transaction_type, amount, description, reference_id, reference_module, notes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-                        
-                        $stmt = $db->prepare($sql);
+                        $stmt = $db->prepare("
+                            INSERT INTO daily_report_providers 
+                            (daily_report_id, provider_id, provider_code, provider_name,
+                             morning_float, morning_cash, current_float, current_cash,
+                             total_deposits, total_withdrawals, created_at)
+                            VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?, NOW())
+                        ");
                         $stmt->execute([
-                            $capital_number,
-                            $user_id,
-                            $branch_id,
-                            $branch_name_selected,
-                            $transaction_date,
-                            $transaction_type,
-                            $amount,
-                            $description,
-                            $bp_data['provider_id'],
-                            'provider',
-                            $notes
+                            $dr_id,
+                            $reference_id,
+                            $pinfo['provider_code'],
+                            $pinfo['provider_name'],
+                            $new_float,
+                            $is_out ? 0 : $amount,
+                            $is_out ? $amount : 0
                         ]);
-                        
-                        $inserted_count++;
-                        $total_amount += $amount;
                     }
                 }
-            }
-            
-            // ============================================================
-            // INSERT CASH CAPITAL (single)
-            // ============================================================
-            if ($include_cash && $cash_amount > 0) {
-                $capital_number = generateNumber('CAP');
-                // ✅ Description with cash marker
-                $description = $default_description . ' [Cash - Manual]';
                 
-                $sql = "INSERT INTO capital_management (
-                    capital_number, employee_id, branch_id, branch, transaction_date,
-                    transaction_type, amount, description, reference_id, reference_module, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                // Update total capital
+                $stmt = $db->prepare("SELECT current_capital FROM daily_reports WHERE id = ?");
+                $stmt->execute([$dr_id]);
+                $current_cap = floatval($stmt->fetchColumn());
                 
-                $stmt = $db->prepare($sql);
-                $stmt->execute([
-                    $capital_number,
-                    $user_id,
-                    $branch_id,
-                    $branch_name_selected,
-                    $transaction_date,
-                    $transaction_type,
-                    $cash_amount,
-                    $description,
-                    null,
-                    'cash_manual',
-                    $notes
-                ]);
+                if ($is_out) {
+                    $new_capital = max(0, $current_cap - $amount);
+                } else {
+                    $new_capital = $current_cap + $amount;
+                }
                 
-                $inserted_count++;
-                $total_amount += $cash_amount;
-            }
-            
-            if ($inserted_count > 0) {
-                logActivity($user_id, 'Add Capital', 'Capital Management', null, null, json_encode([
-                    'type' => $transaction_type,
-                    'branch_id' => $branch_id,
-                    'records' => $inserted_count,
-                    'total' => $total_amount
-                ]));
+                $stmt = $db->prepare("
+                    UPDATE daily_reports 
+                    SET current_capital = ?, updated_at = NOW() 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_capital, $dr_id]);
                 
-                $_SESSION['success_message'] = $inserted_count . ' capital transaction(s) added successfully! Total: ' . formatCurrency($total_amount);
-                header('Location: index.php?branch=' . $branch_id);
-                exit();
             } else {
-                $error = 'No valid transactions to add.';
+                // ============================================
+                // CASH UPDATE
+                // ============================================
+                $old_cash = floatval($latest_dr['current_cash']);
+                $old_capital = floatval($latest_dr['current_capital']);
+                
+                if ($is_out) {
+                    $new_cash = max(0, $old_cash - $amount);
+                    $new_capital = max(0, $old_capital - $amount);
+                } else {
+                    $new_cash = $old_cash + $amount;
+                    $new_capital = $old_capital + $amount;
+                }
+                
+                $stmt = $db->prepare("
+                    UPDATE daily_reports 
+                    SET current_cash = ?, 
+                        current_capital = ?, 
+                        updated_at = NOW() 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_cash, $new_capital, $dr_id]);
             }
-        } catch (PDOException $e) {
-            $error = 'Database error: ' . $e->getMessage();
-            error_log("Error adding capital: " . $e->getMessage());
         }
+        
+        // ====================================================
+        // LOG ACTIVITY
+        // ====================================================
+        logActivity(
+            $user_id,
+            'Add Capital Transaction',
+            'Capital Management',
+            $capital_id,
+            '',
+            'Added ' . $transaction_type . ': ' . formatCurrency($amount) . ' at ' . $branch_name
+        );
+        
+        $db->commit();
+        
+        $_SESSION['success_message'] = 'Capital transaction of ' . formatCurrency($amount) . ' added successfully! Ref: ' . $capital_number;
+        header('Location: view.php?id=' . $capital_id);
+        exit();
+        
+    } catch (Exception $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        $error_message = $e->getMessage();
     }
 }
 
+// ============================================================
+// GET PROVIDERS FOR SELECTED BRANCH (FOR MODAL/DROPDOWN)
+// ============================================================
+$all_providers = [];
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("
+        SELECT 
+            p.id,
+            p.provider_name,
+            p.provider_code as main_code,
+            p.icon_class,
+            p.color_code,
+            p.provider_type,
+            bp.provider_code as branch_provider_code,
+            COALESCE(
+                (SELECT drp.current_float FROM daily_report_providers drp
+                 INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+                 WHERE dr.branch_id = ? AND drp.provider_id = p.id
+                 ORDER BY dr.report_date DESC, dr.id DESC LIMIT 1),
+                0
+            ) as current_float
+        FROM providers p
+        INNER JOIN branch_providers bp ON p.id = bp.provider_id
+        WHERE bp.branch_id = ? AND bp.is_active = 1 AND p.is_active = 1
+        ORDER BY p.display_order, p.provider_name
+    ");
+    $stmt->execute([$selected_branch, $selected_branch]);
+    $all_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// ============================================================
+// GET CURRENT CAPITAL INFO FOR SELECTED BRANCH
+// ============================================================
+$current_cash = 0;
+$current_float = 0;
+$current_capital = 0;
+
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("
+        SELECT current_cash, current_capital 
+        FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch]);
+    $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($dr) {
+        $current_cash = floatval($dr['current_cash'] ?? 0);
+        $current_capital = floatval($dr['current_capital'] ?? 0);
+    }
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
+        FROM daily_report_providers drp
+        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+        WHERE dr.branch_id = ?
+        AND dr.id = (SELECT MAX(id) FROM daily_reports WHERE branch_id = ?)
+    ");
+    $stmt->execute([$selected_branch, $selected_branch]);
+    $current_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+}
+
+// Type labels
 $type_labels = [
-    'opening' => ['label' => 'Opening Capital', 'icon' => 'fa-play', 'color' => 'blue'],
-    'additional' => ['label' => 'Additional Capital', 'icon' => 'fa-plus-circle', 'color' => 'green'],
-    'profit_allocation' => ['label' => 'Profit Allocation', 'icon' => 'fa-chart-line', 'color' => 'purple'],
-    'cash_out' => ['label' => 'Capital Cash Out', 'icon' => 'fa-money-bill-wave', 'color' => 'red'],
-    'adjustment' => ['label' => 'Adjustment', 'icon' => 'fa-sliders-h', 'color' => 'orange']
+    'opening' => ['label' => 'Opening Capital', 'icon' => 'fa-play', 'color' => 'blue', 'desc' => 'Initial capital'],
+    'additional' => ['label' => 'Additional Capital', 'icon' => 'fa-plus-circle', 'color' => 'green', 'desc' => 'More capital added'],
+    'profit_allocation' => ['label' => 'Profit Allocation', 'icon' => 'fa-chart-line', 'color' => 'purple', 'desc' => 'Profit to capital'],
+    'cash_out' => ['label' => 'Cash Out', 'icon' => 'fa-money-bill-wave', 'color' => 'red', 'desc' => 'Reduce capital'],
+    'adjustment' => ['label' => 'Adjustment', 'icon' => 'fa-sliders-h', 'color' => 'orange', 'desc' => 'Correction']
 ];
+
+// Success/error messages
+$success_message_session = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message_session = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
@@ -263,345 +396,423 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== BRANCH CARD ===== -->
-        <div class="branch-card">
-            <i class="fas fa-store-alt"></i>
-            <span class="branch-label">Current Branch:</span>
-            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
-            <?php if ($selected_branch > 0): ?>
-                <span class="provider-count-badge">
-                    <i class="fas fa-university"></i> <?php echo count($branch_providers); ?> Providers
+        <!-- ============================================================
+        BRANCH CARD (Conditional color)
+        ============================================================ -->
+        <div class="branch-status-card <?php echo $selected_branch > 0 ? 'branch-selected' : 'branch-all'; ?>">
+            <div class="branch-status-icon">
+                <i class="fas <?php echo $selected_branch > 0 ? 'fa-store-alt' : 'fa-globe-africa'; ?>"></i>
+            </div>
+            <div class="branch-status-info">
+                <span class="branch-status-label">
+                    <?php echo $selected_branch > 0 ? 'Adding Transaction For' : 'Select Branch Below'; ?>
                 </span>
-                <a href="add.php" class="branch-clear">
-                    <i class="fas fa-times-circle"></i> Clear
-                </a>
-            <?php endif; ?>
+                <span class="branch-status-name"><?php echo htmlspecialchars($selected_branch_name); ?></span>
+                <?php if ($selected_branch > 0 && $selected_branch_code): ?>
+                    <span class="branch-status-code"><?php echo htmlspecialchars($selected_branch_code); ?></span>
+                <?php endif; ?>
+            </div>
+            <a href="index.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn-back-card">
+                <i class="fas fa-arrow-left"></i>
+                <span>Back to List</span>
+            </a>
         </div>
 
+        <!-- ============================================================
+        PAGE HEADER
+        ============================================================ -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-plus-circle" style="color:#bb0404;"></i> Add Capital Transaction</h2>
-                <p class="text-muted">You can add Float, Cash, or both at the same time</p>
-            </div>
-            <div class="header-right">
-                <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-secondary">
-                    <i class="fas fa-arrow-left"></i> Back to List
-                </a>
+                <h2><i class="fas fa-plus-circle" style="color:#F59E0B;"></i> Add Capital Transaction</h2>
+                <p class="text-muted">Record a new capital management transaction</p>
             </div>
         </div>
 
-        <?php if ($error): ?>
+        <!-- ============================================================
+        ALERTS
+        ============================================================ -->
+        <?php if (!empty($success_message_session)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo $success_message_session; ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i> 
-                <div><?php echo $error; ?></div>
+                <span><?php echo htmlspecialchars($error_message); ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
-        <div class="form-card">
-            <form method="POST" action="" class="capital-form" id="capitalForm">
+        <!-- ============================================================
+        IF NO BRANCH SELECTED - SHOW WARNING
+        ============================================================ -->
+        <?php if ($selected_branch == 0): ?>
+            <div class="no-branch-warning">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div>
+                    <strong>Please select a branch first</strong>
+                    <p>Capital transactions must be applied to a specific branch. Select a branch from the list below or from the topbar filter.</p>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- ============================================================
+        CURRENT CAPITAL SUMMARY (if branch selected)
+        ============================================================ -->
+        <?php if ($selected_branch > 0): ?>
+        <div class="summary-cards-row">
+            <div class="summary-mini-card mini-cash">
+                <div class="smc-icon">
+                    <i class="fas fa-money-bill-wave"></i>
+                </div>
+                <div class="smc-content">
+                    <span class="smc-label">Current Cash</span>
+                    <span class="smc-value"><?php echo formatCurrency($current_cash); ?></span>
+                </div>
+            </div>
+            
+            <div class="summary-mini-card mini-float">
+                <div class="smc-icon">
+                    <i class="fas fa-university"></i>
+                </div>
+                <div class="smc-content">
+                    <span class="smc-label">Current Float</span>
+                    <span class="smc-value"><?php echo formatCurrency($current_float); ?></span>
+                </div>
+            </div>
+            
+            <div class="summary-mini-card mini-capital">
+                <div class="smc-icon">
+                    <i class="fas fa-vault"></i>
+                </div>
+                <div class="smc-content">
+                    <span class="smc-label">Total Capital</span>
+                    <span class="smc-value"><?php echo formatCurrency($current_capital); ?></span>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <!-- ============================================================
+        MAIN FORM
+        ============================================================ -->
+        <div class="form-container">
+            <form method="POST" action="" class="main-form" id="capitalForm" onsubmit="return validateForm()">
+                <input type="hidden" name="action" value="add_transaction">
                 
-                <!-- ============================================================
-                STEP 1: BRANCH SELECTION
-                ============================================================ -->
+                <!-- ===== BRANCH SELECTION ===== -->
                 <div class="form-section">
-                    <div class="section-title">
-                        <span class="step-number">1</span>
-                        <span>Select Branch</span>
+                    <div class="section-header">
+                        <h3><i class="fas fa-store-alt"></i> Select Branch</h3>
+                        <span class="section-badge">Required *</span>
                     </div>
                     
-                    <div class="form-row">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label>Branch <span class="required">*</span></label>
-                            <select name="branch_id" id="branchSelect" class="form-control" required onchange="onBranchChange()">
-                                <option value="">-- Select Branch --</option>
-                                <?php foreach ($branches as $b): ?>
-                                    <option value="<?php echo $b['id']; ?>" 
-                                        <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($b['branch_name']); ?>
-                                        (<?php echo htmlspecialchars($b['branch_code']); ?>)
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <small>Choose the branch for this capital transaction</small>
+                    <?php if ($selected_branch > 0): ?>
+                        <!-- Branch pre-selected, show as locked -->
+                        <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
+                        <div class="selected-branch-locked">
+                            <div class="sbl-icon">
+                                <i class="fas fa-store-alt"></i>
+                            </div>
+                            <div class="sbl-info">
+                                <span class="sbl-name"><?php echo htmlspecialchars($selected_branch_name); ?></span>
+                                <?php if ($selected_branch_code): ?>
+                                    <span class="sbl-code"><?php echo htmlspecialchars($selected_branch_code); ?></span>
+                                <?php endif; ?>
+                            </div>
+                            <a href="add.php" class="sbl-change">
+                                <i class="fas fa-exchange-alt"></i> Change
+                            </a>
                         </div>
-                    </div>
-                </div>
-
-                <!-- ============================================================
-                STEP 2: TRANSACTION DETAILS
-                ============================================================ -->
-                <div class="form-section">
-                    <div class="section-title">
-                        <span class="step-number">2</span>
-                        <span>Transaction Details</span>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Transaction Type <span class="required">*</span></label>
-                            <select name="transaction_type" class="form-control" required>
-                                <option value="">Select Type</option>
-                                <?php foreach ($type_labels as $key => $type): ?>
-                                    <option value="<?php echo $key; ?>"><?php echo $type['label']; ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Transaction Date <span class="required">*</span></label>
-                            <input type="date" name="transaction_date" class="form-control" 
-                                   value="<?php echo date('Y-m-d'); ?>" required>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ============================================================
-                STEP 3: CAPITAL SOURCE (Float AND/OR Cash)
-                ============================================================ -->
-                <div class="form-section">
-                    <div class="section-title">
-                        <span class="step-number">3</span>
-                        <span>Capital Source</span>
-                    </div>
-
-                    <!-- ============================================================
-                    ENABLE/DISABLE TOGGLES
-                    ============================================================ -->
-                    <div class="source-toggles">
-                        <label class="source-toggle" id="floatToggleCard">
-                            <input type="checkbox" name="include_float" id="includeFloat" 
-                                   value="1" onchange="onFloatToggle(this.checked)">
-                            <div class="source-toggle-content">
-                                <div class="toggle-icon float-icon">
-                                    <i class="fas fa-university"></i>
-                                </div>
-                                <div class="toggle-info">
-                                    <h4>Float (Providers)</h4>
-                                    <p>Add capital from providers</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <span class="switch-slider"></span>
-                                </div>
-                            </div>
-                        </label>
-
-                        <label class="source-toggle" id="cashToggleCard">
-                            <input type="checkbox" name="include_cash" id="includeCash" 
-                                   value="1" onchange="onCashToggle(this.checked)">
-                            <div class="source-toggle-content">
-                                <div class="toggle-icon cash-icon">
-                                    <i class="fas fa-money-bill-wave"></i>
-                                </div>
-                                <div class="toggle-info">
-                                    <h4>Cash (Manual)</h4>
-                                    <p>Add capital in cash</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <span class="switch-slider"></span>
-                                </div>
-                            </div>
-                        </label>
-                    </div>
-
-                    <!-- ============================================================
-                    FLOAT PROVIDERS SECTION
-                    ============================================================ -->
-                    <div class="provider-section" id="providerSection" style="display:none;">
-                        <div class="provider-header">
-                            <div class="provider-header-left">
-                                <i class="fas fa-university" style="color:#3B82F6;"></i>
-                                <span>Provider Capital Amounts</span>
-                            </div>
-                            <div class="provider-header-right">
-                                <span class="provider-count-badge-inline">
-                                    <?php echo count($branch_providers); ?> providers available
-                                </span>
-                                <button type="button" class="btn-select-all" onclick="selectAllProviders()">
-                                    <i class="fas fa-check-double"></i> Select All
-                                </button>
-                                <button type="button" class="btn-deselect-all" onclick="deselectAllProviders()">
-                                    <i class="fas fa-times"></i> Deselect
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <?php if (empty($branch_providers)): ?>
-                            <div class="no-providers">
-                                <i class="fas fa-info-circle"></i>
-                                <p>No providers assigned to this branch.</p>
-                                <a href="../branches/providers_add.php?branch_id=<?php echo $selected_branch; ?>" class="btn-link">
-                                    <i class="fas fa-plus-circle"></i> Add Providers
-                                </a>
-                            </div>
-                        <?php else: ?>
-                            <div class="providers-grid">
-                                <?php foreach ($branch_providers as $bp): 
-                                    $bp_id = $bp['branch_provider_id'];
-                                    $provider_color = $bp['color_code'] ?? '#0B5ED7';
-                                    $provider_icon = $bp['icon_class'] ?? 'fas fa-university';
-                                    $provider_type_label = ($bp['provider_type'] === 'mobile_money') ? 'Mobile Money' : 'Bank';
-                                ?>
-                                    <div class="provider-card" data-provider-id="<?php echo $bp_id; ?>">
-                                        <div class="provider-checkbox-wrapper">
-                                            <input type="checkbox" 
-                                                   id="provider_check_<?php echo $bp_id; ?>"
-                                                   class="provider-checkbox"
-                                                   onchange="onProviderCheck(this, <?php echo $bp_id; ?>)">
-                                            <label for="provider_check_<?php echo $bp_id; ?>" class="provider-checkbox-label">
-                                                <span class="custom-checkbox">
-                                                    <i class="fas fa-check"></i>
+                    <?php else: ?>
+                        <!-- Branch selection grid -->
+                        <div class="branch-selection-grid">
+                            <?php foreach ($all_branches as $b): ?>
+                                <label class="branch-option">
+                                    <input type="radio" name="branch_id" value="<?php echo $b['id']; ?>" required onchange="onBranchChange(<?php echo $b['id']; ?>)">
+                                    <div class="bo-content">
+                                        <div class="bo-icon">
+                                            <i class="fas fa-store-alt"></i>
+                                        </div>
+                                        <div class="bo-info">
+                                            <span class="bo-name"><?php echo htmlspecialchars($b['branch_name']); ?></span>
+                                            <?php if (!empty($b['branch_code'])): ?>
+                                                <span class="bo-code"><?php echo htmlspecialchars($b['branch_code']); ?></span>
+                                            <?php endif; ?>
+                                            <?php if (!empty($b['location'])): ?>
+                                                <span class="bo-location">
+                                                    <i class="fas fa-map-marker-alt"></i>
+                                                    <?php echo htmlspecialchars($b['location']); ?>
                                                 </span>
-                                            </label>
+                                            <?php endif; ?>
                                         </div>
-                                        
-                                        <div class="provider-icon" style="background: <?php echo htmlspecialchars($provider_color); ?>;">
-                                            <i class="<?php echo htmlspecialchars($provider_icon); ?>"></i>
-                                        </div>
-                                        
-                                        <div class="provider-info">
-                                            <span class="provider-name"><?php echo htmlspecialchars($bp['provider_name']); ?></span>
-                                            <span class="provider-code">
-                                                <i class="fas fa-tag"></i>
-                                                <?php echo htmlspecialchars($bp['provider_code']); ?>
-                                            </span>
-                                            <span class="provider-type-badge"><?php echo $provider_type_label; ?></span>
-                                        </div>
-                                        
-                                        <div class="provider-input-wrapper" id="input_wrapper_<?php echo $bp_id; ?>" style="display:none;">
-                                            <span class="currency-symbol">TSh</span>
-                                            <input type="text" 
-                                                   name="provider_amount[<?php echo $bp_id; ?>]"
-                                                   id="provider_amount_<?php echo $bp_id; ?>"
-                                                   class="provider-amount money-input"
-                                                   placeholder="0.00"
-                                                   oninput="formatMoneyInput(this); calculateTotals();"
-                                                   data-provider-id="<?php echo $bp_id; ?>">
-                                        </div>
-                                        
-                                        <div class="provider-locked-badge" id="locked_badge_<?php echo $bp_id; ?>">
-                                            <i class="fas fa-lock"></i>
+                                        <div class="bo-check">
+                                            <i class="fas fa-check-circle"></i>
                                         </div>
                                     </div>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                
+                <?php if ($selected_branch > 0): ?>
+                
+                <!-- ===== TRANSACTION TYPE ===== -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-tag"></i> Transaction Type</h3>
+                        <span class="section-badge">Required *</span>
+                    </div>
+                    
+                    <div class="type-options-grid">
+                        <?php foreach ($type_labels as $key => $label): ?>
+                            <label class="type-option-card type-option-<?php echo $label['color']; ?>">
+                                <input type="radio" 
+                                       name="transaction_type" 
+                                       value="<?php echo $key; ?>" 
+                                       <?php echo $key == 'additional' ? 'checked' : ''; ?>
+                                       onchange="updatePreview()">
+                                <div class="toc-content">
+                                    <div class="toc-icon">
+                                        <i class="fas <?php echo $label['icon']; ?>"></i>
+                                    </div>
+                                    <div class="toc-text">
+                                        <span class="toc-title"><?php echo $label['label']; ?></span>
+                                        <span class="toc-desc"><?php echo $label['desc']; ?></span>
+                                    </div>
+                                    <div class="toc-check">
+                                        <i class="fas fa-check-circle"></i>
+                                    </div>
+                                </div>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                
+                <!-- ===== REFERENCE SOURCE ===== -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-database"></i> Where to Apply</h3>
+                        <span class="section-badge">Required *</span>
+                    </div>
+                    
+                    <div class="source-options-grid">
+                        <label class="source-option-card source-cash">
+                            <input type="radio" 
+                                   name="reference_module" 
+                                   value="cash" 
+                                   checked
+                                   onchange="onSourceChange('cash')">
+                            <div class="soc-content">
+                                <div class="soc-icon soc-icon-cash">
+                                    <i class="fas fa-money-bill-wave"></i>
+                                </div>
+                                <div class="soc-text">
+                                    <span class="soc-title">Branch Cash</span>
+                                    <span class="soc-desc">Update branch cash balance</span>
+                                </div>
+                                <div class="soc-check">
+                                    <i class="fas fa-check-circle"></i>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="source-option-card source-provider">
+                            <input type="radio" 
+                                   name="reference_module" 
+                                   value="provider"
+                                   onchange="onSourceChange('provider')">
+                            <div class="soc-content">
+                                <div class="soc-icon soc-icon-provider">
+                                    <i class="fas fa-university"></i>
+                                </div>
+                                <div class="soc-text">
+                                    <span class="soc-title">Provider Float</span>
+                                    <span class="soc-desc">Update specific provider float</span>
+                                </div>
+                                <div class="soc-check">
+                                    <i class="fas fa-check-circle"></i>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- Provider Selection (Hidden by default) -->
+                    <div class="provider-select-wrapper" id="providerSelectWrapper" style="display:none;">
+                        <label class="form-label">
+                            <i class="fas fa-university"></i>
+                            Select Provider <span class="required">*</span>
+                        </label>
+                        
+                        <?php if (count($all_providers) > 0): ?>
+                            <div class="provider-grid">
+                                <?php foreach ($all_providers as $p): ?>
+                                    <label class="provider-option-card">
+                                        <input type="radio" 
+                                               name="reference_id" 
+                                               value="<?php echo $p['id']; ?>"
+                                               onchange="onProviderSelect(this)">
+                                        <div class="poc-content">
+                                            <div class="poc-icon" style="background: <?php echo htmlspecialchars($p['color_code']); ?>;">
+                                                <i class="<?php echo htmlspecialchars($p['icon_class']); ?>"></i>
+                                            </div>
+                                            <div class="poc-info">
+                                                <span class="poc-name"><?php echo htmlspecialchars($p['provider_name']); ?></span>
+                                                <span class="poc-code"><?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?></span>
+                                            </div>
+                                            <div class="poc-float">
+                                                <span class="poc-float-label">Float</span>
+                                                <span class="poc-float-value"><?php echo formatCurrency($p['current_float']); ?></span>
+                                            </div>
+                                            <div class="poc-check">
+                                                <i class="fas fa-check-circle"></i>
+                                            </div>
+                                        </div>
+                                    </label>
                                 <?php endforeach; ?>
                             </div>
-                            
-                            <div class="providers-summary">
-                                <div class="summary-row">
-                                    <span class="summary-label">Selected:</span>
-                                    <span class="summary-value" id="selectedProvidersCount">0</span>
-                                </div>
-                                <div class="summary-row">
-                                    <span class="summary-label">Float Total:</span>
-                                    <span class="summary-value text-blue" id="totalFloatDisplay">TSh 0</span>
-                                </div>
+                        <?php else: ?>
+                            <div class="empty-providers">
+                                <i class="fas fa-info-circle"></i>
+                                <p>No providers found for this branch.</p>
                             </div>
                         <?php endif; ?>
                     </div>
-
-                    <!-- ============================================================
-                    CASH SECTION
-                    ============================================================ -->
-                    <div class="cash-section" id="cashSection" style="display:none;">
-                        <div class="cash-header">
-                            <i class="fas fa-money-bill-wave" style="color:#10B981;"></i>
-                            <span>Cash Amount</span>
-                        </div>
-                        <div class="cash-input-wrapper">
-                            <span class="currency-symbol-large">TSh</span>
-                            <input type="text" 
-                                   name="cash_amount"
-                                   id="cashAmount"
-                                   class="cash-amount money-input"
-                                   placeholder="0.00"
-                                   oninput="formatMoneyInput(this); calculateTotals();">
-                        </div>
-                        <small>Enter the cash amount manually</small>
+                </div>
+                
+                <!-- ===== BASIC INFO ===== -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-info-circle"></i> Transaction Information</h3>
+                        <span class="section-badge">Required *</span>
                     </div>
                     
-                    <!-- Message when no source enabled -->
-                    <div class="no-source-message" id="noSourceMessage">
-                        <i class="fas fa-hand-pointer"></i>
-                        <p>Enable <strong>Float</strong> or <strong>Cash</strong> (or both) above to enter amounts</p>
-                    </div>
-                </div>
-
-                <!-- ============================================================
-                STEP 4: DESCRIPTION (OPTIONAL NOW)
-                ============================================================ -->
-                <div class="form-section">
-                    <div class="section-title">
-                        <span class="step-number">4</span>
-                        <span>Description <span class="optional-tag">Optional</span></span>
-                    </div>
-
                     <div class="form-row">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label>
-                                Description 
-                                <span class="optional-badge">OPTIONAL</span>
+                        <div class="form-group">
+                            <label class="form-label">
+                                <i class="fas fa-calendar-alt"></i>
+                                Transaction Date <span class="required">*</span>
                             </label>
-                            <textarea name="description" class="form-control" rows="3" 
-                                      placeholder="Describe the transaction (e.g., 'Initial capital'). Leave empty if not needed."></textarea>
-                            <small>
-                                <i class="fas fa-info-circle"></i>
-                                This field is optional. Provider name will be auto-appended for Float transactions.
-                            </small>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-calendar"></i></span>
+                                <input type="date" 
+                                       name="transaction_date" 
+                                       class="form-control" 
+                                       value="<?php echo date('Y-m-d'); ?>" 
+                                       max="<?php echo date('Y-m-d'); ?>"
+                                       required>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">
+                                <i class="fas fa-money-bill-wave"></i>
+                                Amount (TSh) <span class="required">*</span>
+                            </label>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-coins"></i></span>
+                                <input type="text" 
+                                       name="amount" 
+                                       id="amountInput"
+                                       class="form-control money-input" 
+                                       placeholder="0"
+                                       inputmode="numeric"
+                                       oninput="formatMoneyInput(this); updatePreview();"
+                                       required>
+                            </div>
                         </div>
                     </div>
-
+                    
                     <div class="form-row">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label>Notes (Optional)</label>
-                            <textarea name="notes" class="form-control" rows="2" 
-                                      placeholder="Additional notes"></textarea>
+                        <div class="form-group full-width">
+                            <label class="form-label">
+                                <i class="fas fa-align-left"></i>
+                                Description
+                            </label>
+                            <div class="input-group">
+                                <span class="input-icon"><i class="fas fa-pen"></i></span>
+                                <input type="text" 
+                                       name="description" 
+                                       class="form-control" 
+                                       placeholder="Brief description of the transaction">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group full-width">
+                            <label class="form-label">
+                                <i class="fas fa-sticky-note"></i>
+                                Notes
+                            </label>
+                            <textarea name="notes" 
+                                      class="form-control textarea-control" 
+                                      rows="3" 
+                                      placeholder="Additional notes..."></textarea>
                         </div>
                     </div>
                 </div>
-
-                <!-- ============================================================
-                GRAND TOTAL SUMMARY
-                ============================================================ -->
-                <div class="grand-total-bar">
-                    <div class="grand-total-split">
-                        <div class="split-item">
-                            <span class="split-label">Float:</span>
-                            <span class="split-value" id="floatSummaryDisplay">TSh 0</span>
-                        </div>
-                        <div class="split-divider">+</div>
-                        <div class="split-item">
-                            <span class="split-label">Cash:</span>
-                            <span class="split-value" id="cashSummaryDisplay">TSh 0</span>
-                        </div>
+                
+                <!-- ===== PREVIEW ===== -->
+                <div class="form-section preview-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-calculator"></i> Preview</h3>
                     </div>
-                    <div class="grand-total-right">
-                        <span class="grand-label">GRAND TOTAL:</span>
-                        <span class="grand-value" id="grandTotalDisplay">TSh 0</span>
+                    
+                    <div class="preview-grid">
+                        <div class="preview-item">
+                            <span class="pi-label">Direction</span>
+                            <span class="pi-value" id="previewDirection">
+                                <span class="direction-badge badge-in">
+                                    <i class="fas fa-arrow-down"></i>
+                                    INCOMING
+                                </span>
+                            </span>
+                        </div>
+                        
+                        <div class="preview-item">
+                            <span class="pi-label">Amount</span>
+                            <span class="pi-value pi-amount" id="previewAmount">TSh 0</span>
+                        </div>
+                        
+                        <div class="preview-item preview-highlight">
+                            <span class="pi-label">New Capital After</span>
+                            <span class="pi-value" id="previewNewCapital">
+                                <?php echo formatCurrency($current_capital); ?>
+                            </span>
+                        </div>
                     </div>
                 </div>
-
-                <!-- ============================================================
-                FORM ACTIONS
-                ============================================================ -->
+                
+                <!-- ===== ACTIONS ===== -->
                 <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Save Transaction(s)
+                    <button type="submit" class="btn btn-submit" id="submitBtn">
+                        <i class="fas fa-save"></i> Save Transaction
                     </button>
-                    <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-secondary">
+                    <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
+                        <i class="fas fa-undo"></i> Reset
+                    </button>
+                    <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-cancel">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                 </div>
+                
+                <?php else: ?>
+                    <!-- No branch selected, show continue button -->
+                    <div class="form-section">
+                        <div class="select-branch-message">
+                            <i class="fas fa-arrow-up"></i>
+                            <p>Please select a branch from above to continue</p>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                
             </form>
-        </div>
-
-        <!-- Type Info -->
-        <div class="type-info-card">
-            <h4><i class="fas fa-info-circle" style="color:#bb0404;"></i> Transaction Types</h4>
-            <div class="type-info-grid">
-                <div class="type-info-item type-blue"><span class="dot"></span> <strong>Opening Capital</strong> - Initial capital</div>
-                <div class="type-info-item type-green"><span class="dot"></span> <strong>Additional Capital</strong> - Adding more</div>
-                <div class="type-info-item type-purple"><span class="dot"></span> <strong>Profit Allocation</strong> - Profit to capital</div>
-                <div class="type-info-item type-red"><span class="dot"></span> <strong>Capital Cash Out</strong> - Withdrawing</div>
-                <div class="type-info-item type-orange"><span class="dot"></span> <strong>Adjustment</strong> - Correcting balance</div>
-            </div>
         </div>
 
     </div>
@@ -613,74 +824,154 @@ include_once '../../includes/admin_topbar.php';
    CSS VARIABLES
    ============================================================ */
 :root {
-    --cm-bg: #F3F4F6;
-    --cm-text: #1F2937;
-    --cm-text-secondary: #6B7280;
-    --cm-text-light: #9CA3AF;
-    --cm-border: #E5E7EB;
-    --cm-card-bg: #FFFFFF;
-    --cm-card-header: #FAFBFC;
-    --cm-input-bg: #F9FAFB;
-    --cm-hover: #F3F4F6;
-    --cm-shadow: rgba(0,0,0,0.06);
+    --ca-bg: #F3F4F6;
+    --ca-text: #1F2937;
+    --ca-text-secondary: #6B7280;
+    --ca-text-light: #9CA3AF;
+    --ca-border: #E5E7EB;
+    --ca-card-bg: #FFFFFF;
+    --ca-card-header: #FAFBFC;
+    --ca-input-bg: #F9FAFB;
+    --ca-hover: #F3F4F6;
+    --ca-shadow: rgba(0,0,0,0.06);
+    --ca-shadow-md: rgba(0,0,0,0.1);
 }
 
 html.dark-mode {
-    --cm-bg: #0F172A;
-    --cm-text: #F9FAFB;
-    --cm-text-secondary: #9CA3AF;
-    --cm-text-light: #6B7280;
-    --cm-border: #334155;
-    --cm-card-bg: #1E293B;
-    --cm-card-header: #1E293B;
-    --cm-input-bg: #334155;
-    --cm-hover: #334155;
-    --cm-shadow: rgba(0,0,0,0.3);
+    --ca-bg: #0F172A;
+    --ca-text: #F9FAFB;
+    --ca-text-secondary: #9CA3AF;
+    --ca-text-light: #6B7280;
+    --ca-border: #334155;
+    --ca-card-bg: #1E293B;
+    --ca-card-header: #1E293B;
+    --ca-input-bg: #334155;
+    --ca-hover: #334155;
+    --ca-shadow: rgba(0,0,0,0.3);
+    --ca-shadow-md: rgba(0,0,0,0.5);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+    width: 100% !important;
 }
 
 body {
-    background: var(--cm-bg) !important;
-    color: var(--cm-text);
+    background: var(--ca-bg) !important;
+    color: var(--ca-text);
     transition: background 0.3s ease, color 0.3s ease;
 }
-.main-wrapper { background: var(--cm-bg) !important; }
-.main-content { background: var(--cm-bg) !important; }
+.main-wrapper { background: var(--ca-bg) !important; overflow-x: hidden !important; }
+.main-content { 
+    background: var(--ca-bg) !important; 
+    overflow-x: hidden !important; 
+    max-width: 100% !important; 
+    padding: 16px 20px !important; 
+}
 
 /* ============================================================
    BRANCH CARD
    ============================================================ */
-.branch-card {
-    background: #bb0404;
-    color: #ffffff;
-    padding: 12px 20px;
-    border-radius: 8px;
-    margin-bottom: 16px;
+.branch-status-card {
     display: flex;
     align-items: center;
-    gap: 12px;
-    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+    gap: 18px;
+    padding: 16px 22px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     flex-wrap: wrap;
+    color: #FFFFFF;
+    position: relative;
+    overflow: hidden;
 }
-.branch-card i { font-size: 18px; }
-.branch-card .branch-label { font-weight: 500; font-size: 13px; opacity: 0.9; }
-.branch-card .branch-name { font-weight: 700; font-size: 15px; }
-.branch-card .provider-count-badge {
-    background: rgba(255,255,255,0.15);
+.branch-status-card::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 250px; height: 250px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.branch-status-card.branch-all {
+    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
+}
+.branch-status-card.branch-selected {
+    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+}
+.branch-status-icon {
+    width: 52px;
+    height: 52px;
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #FCD34D;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    border: 1.5px solid rgba(252, 211, 77, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.branch-status-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
+    flex: 1;
+}
+.branch-status-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+}
+.branch-status-name {
+    font-size: 18px;
+    font-weight: 800;
+    color: #FFFFFF;
+    letter-spacing: 0.3px;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.branch-status-code {
+    font-size: 11px;
+    font-weight: 700;
+    color: #FCD34D;
     padding: 3px 12px;
+    background: rgba(252, 211, 77, 0.2);
     border-radius: 12px;
-    font-size: 12px;
+    border: 1px solid rgba(252, 211, 77, 0.35);
+    font-family: 'Courier New', monospace;
 }
-.branch-card .branch-clear {
-    margin-left: auto;
-    color: #ffffff;
+.btn-back-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #FFFFFF;
     text-decoration: none;
-    font-size: 12px;
-    padding: 4px 12px;
-    background: rgba(255,255,255,0.15);
-    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
     transition: all 0.3s ease;
+    position: relative;
+    z-index: 1;
 }
-.branch-card .branch-clear:hover { background: rgba(255,255,255,0.25); }
+.btn-back-card:hover {
+    background: rgba(255, 255, 255, 0.25);
+    color: #FFFFFF;
+    transform: translateX(-3px);
+}
 
 /* ============================================================
    PAGE HEADER
@@ -690,112 +981,656 @@ body {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    gap: 16px;
     flex-wrap: wrap;
-    gap: 12px;
 }
-.page-header .header-left h2 {
+.header-left h2 {
     font-size: 22px;
-    font-weight: 700;
-    color: var(--cm-text);
+    font-weight: 800;
+    color: var(--ca-text);
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
-.page-header .header-left .text-muted {
+.header-left .text-muted {
     font-size: 13px;
-    color: var(--cm-text-secondary);
+    color: var(--ca-text-secondary);
     margin: 4px 0 0 0;
 }
-.header-right { display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* ============================================================
    ALERTS
    ============================================================ */
 .alert {
-    padding: 12px 18px;
-    border-radius: 8px;
-    margin-bottom: 20px;
+    padding: 14px 18px;
+    border-radius: 10px;
+    margin-bottom: 16px;
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 12px;
+    font-weight: 500;
+    font-size: 13px;
+    animation: slideDown 0.4s ease forwards;
 }
+.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
 html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
-.alert i { font-size: 18px; flex-shrink: 0; margin-top: 2px; }
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; }
+.alert-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+}
+.alert-close:hover { opacity: 1; }
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 
 /* ============================================================
-   FORM CARD & SECTIONS
+   NO BRANCH WARNING
    ============================================================ */
-.form-card {
-    background: var(--cm-card-bg);
+.no-branch-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    background: #FEF3C7;
+    border: 2px solid #FDE68A;
     border-radius: 12px;
-    border: 1px solid var(--cm-border);
+    margin-bottom: 16px;
+    color: #92400E;
+}
+.no-branch-warning i { font-size: 24px; flex-shrink: 0; margin-top: 2px; color: #D97706; }
+.no-branch-warning strong { font-weight: 800; font-size: 14px; display: block; margin-bottom: 4px; }
+.no-branch-warning p { font-size: 13px; margin: 0; line-height: 1.5; }
+html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; color: #FBBF24; }
+
+/* ============================================================
+   SUMMARY MINI CARDS
+   ============================================================ */
+.summary-cards-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
     margin-bottom: 20px;
-    box-shadow: 0 1px 3px var(--cm-shadow);
+}
+.summary-mini-card {
+    background: var(--ca-card-bg);
+    border-radius: 14px;
+    padding: 18px 20px;
+    border: 1.5px solid var(--ca-border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: 0 2px 8px var(--ca-shadow);
+    transition: all 0.3s ease;
+    position: relative;
     overflow: hidden;
+    min-width: 0;
+}
+.summary-mini-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 4px; height: 100%;
+}
+.summary-mini-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 28px var(--ca-shadow-md);
+}
+.mini-cash::before { background: #10B981; }
+.mini-float::before { background: #3B82F6; }
+.mini-capital::before { background: #7C3AED; }
+
+.smc-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+}
+.mini-cash .smc-icon { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; }
+.mini-float .smc-icon { background: linear-gradient(135deg, #3B82F6, #2563EB); color: #FFFFFF; }
+.mini-capital .smc-icon { background: linear-gradient(135deg, #A855F7, #7C3AED); color: #FFFFFF; }
+
+.smc-content { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.smc-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ca-text-light);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.smc-value {
+    font-size: 18px;
+    font-weight: 900;
+    color: var(--ca-text);
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    word-break: break-word;
+    line-height: 1.15;
+}
+
+/* ============================================================
+   FORM CONTAINER
+   ============================================================ */
+.form-container {
+    background: var(--ca-card-bg);
+    border-radius: 14px;
+    border: 1.5px solid var(--ca-border);
+    overflow: hidden;
+    box-shadow: 0 2px 8px var(--ca-shadow);
 }
 .form-section {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--cm-border);
+    padding: 22px 26px;
+    border-bottom: 1px solid var(--ca-border);
 }
-.form-section:last-of-type { border-bottom: none; }
+.form-section:last-child { border-bottom: none; }
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.section-header h3 {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ca-text);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.section-header h3 i { color: #F59E0B; font-size: 15px; }
+.section-badge {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ca-text-secondary);
+    background: var(--ca-hover);
+    padding: 3px 12px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 
-.section-title {
+/* ============================================================
+   SELECTED BRANCH LOCKED
+   ============================================================ */
+.selected-branch-locked {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+    border: 2px solid #10B981;
+    border-radius: 12px;
+    flex-wrap: wrap;
+}
+html.dark-mode .selected-branch-locked {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
+    border-color: #10B981;
+}
+.sbl-icon {
+    width: 52px;
+    height: 52px;
+    background: #10B981;
+    color: #FFFFFF;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+.sbl-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.sbl-name {
+    font-size: 16px;
+    font-weight: 800;
+    color: #065F46;
+    letter-spacing: 0.3px;
+}
+html.dark-mode .sbl-name { color: #D1FAE5; }
+.sbl-code {
+    font-size: 11px;
+    font-weight: 700;
+    color: #059669;
+    background: rgba(16, 185, 129, 0.15);
+    padding: 3px 10px;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    align-self: flex-start;
+}
+html.dark-mode .sbl-code { color: #34D399; background: rgba(52, 211, 153, 0.15); }
+.sbl-change {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: #FFFFFF;
+    color: #059669;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    transition: all 0.25s ease;
+    border: 1.5px solid #10B981;
+}
+.sbl-change:hover {
+    background: #10B981;
+    color: #FFFFFF;
+    transform: translateX(3px);
+}
+html.dark-mode .sbl-change {
+    background: rgba(15, 23, 42, 0.5);
+    color: #34D399;
+}
+html.dark-mode .sbl-change:hover {
+    background: #10B981;
+    color: #FFFFFF;
+}
+
+/* ============================================================
+   BRANCH SELECTION GRID
+   ============================================================ */
+.branch-selection-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+.branch-option {
+    position: relative;
+    cursor: pointer;
+    display: block;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.branch-option input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.bo-content {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 16px;
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--cm-text);
+    padding: 14px 16px;
+    background: var(--ca-input-bg);
+    border: 2px solid var(--ca-border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
 }
-.step-number {
-    display: inline-flex;
+.branch-option:hover .bo-content {
+    border-color: #F59E0B;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(245, 158, 11, 0.2);
+}
+.branch-option input[type="radio"]:checked + .bo-content {
+    border-color: #F59E0B;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3);
+}
+html.dark-mode .branch-option input[type="radio"]:checked + .bo-content {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+}
+.bo-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #F59E0B, #D97706);
+    color: #FFFFFF;
+    display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #bb0404;
-    color: #FFFFFF;
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 20px;
     flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
 }
-
-/* ✅ NEW: Optional tag styles */
-.optional-tag {
-    display: inline-block;
+.bo-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.bo-name {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ca-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.bo-code {
     font-size: 10px;
     font-weight: 700;
-    padding: 2px 10px;
-    border-radius: 10px;
+    color: #D97706;
     background: #FEF3C7;
-    color: #92400E;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-left: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    align-self: flex-start;
 }
-html.dark-mode .optional-tag {
-    background: #5F3A1E;
-    color: #FBBF24;
+html.dark-mode .bo-code { background: #5F3A1E; color: #FBBF24; }
+.bo-location {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--ca-text-secondary);
+    font-weight: 500;
+}
+.bo-location i { font-size: 9px; color: #F59E0B; }
+.bo-check {
+    opacity: 0;
+    color: #F59E0B;
+    font-size: 20px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+.branch-option input[type="radio"]:checked + .bo-content .bo-check {
+    opacity: 1;
+    transform: scale(1.1);
 }
 
-.optional-badge {
-    display: inline-block;
-    font-size: 9px;
+/* ============================================================
+   TYPE OPTIONS GRID
+   ============================================================ */
+.type-options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+.type-option-card {
+    position: relative;
+    cursor: pointer;
+    display: block;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.type-option-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.toc-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--ca-input-bg);
+    border: 2px solid var(--ca-border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+}
+.type-option-card:hover .toc-content { border-color: #FCD34D; }
+.type-option-card input[type="radio"]:checked + .toc-content {
+    border-color: #F59E0B;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+}
+html.dark-mode .type-option-card input[type="radio"]:checked + .toc-content {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+}
+.toc-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    border: 1.5px solid;
+}
+.type-option-blue .toc-icon { background: #DBEAFE; color: #1D4ED8; border-color: #93C5FD; }
+.type-option-green .toc-icon { background: #D1FAE5; color: #059669; border-color: #6EE7B7; }
+.type-option-purple .toc-icon { background: #EDE9FE; color: #7C3AED; border-color: #C4B5FD; }
+.type-option-red .toc-icon { background: #FEE2E2; color: #DC2626; border-color: #FCA5A5; }
+.type-option-orange .toc-icon { background: #FEF3C7; color: #D97706; border-color: #FCD34D; }
+html.dark-mode .type-option-blue .toc-icon { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+html.dark-mode .type-option-green .toc-icon { background: #065F46; color: #34D399; border-color: #10B981; }
+html.dark-mode .type-option-purple .toc-icon { background: #4C1D95; color: #C4B5FD; border-color: #A78BFA; }
+html.dark-mode .type-option-red .toc-icon { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .type-option-orange .toc-icon { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
+.toc-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.toc-title { font-size: 13px; font-weight: 700; color: var(--ca-text); }
+.toc-desc { font-size: 10px; color: var(--ca-text-secondary); line-height: 1.3; }
+.toc-check {
+    opacity: 0;
+    color: #F59E0B;
+    font-size: 18px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+.type-option-card input[type="radio"]:checked + .toc-content .toc-check {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* ============================================================
+   SOURCE OPTIONS GRID
+   ============================================================ */
+.source-options-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin-bottom: 16px;
+}
+.source-option-card {
+    position: relative;
+    cursor: pointer;
+    display: block;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.source-option-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.soc-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 18px;
+    background: var(--ca-input-bg);
+    border: 2px solid var(--ca-border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+}
+.source-option-card:hover .soc-content { border-color: #FCD34D; }
+.source-option-card input[type="radio"]:checked + .soc-content {
+    border-color: #F59E0B;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+}
+html.dark-mode .source-option-card input[type="radio"]:checked + .soc-content {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+}
+.soc-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    border: 1.5px solid;
+}
+.soc-icon-cash { background: #D1FAE5; color: #059669; border-color: #6EE7B7; }
+.soc-icon-provider { background: #DBEAFE; color: #1D4ED8; border-color: #93C5FD; }
+html.dark-mode .soc-icon-cash { background: #065F46; color: #34D399; border-color: #10B981; }
+html.dark-mode .soc-icon-provider { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+.soc-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.soc-title { font-size: 14px; font-weight: 700; color: var(--ca-text); }
+.soc-desc { font-size: 11px; color: var(--ca-text-secondary); line-height: 1.3; }
+.soc-check {
+    opacity: 0;
+    color: #F59E0B;
+    font-size: 20px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+.source-option-card input[type="radio"]:checked + .soc-content .soc-check {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* ============================================================
+   PROVIDER SELECT
+   ============================================================ */
+.provider-select-wrapper {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--ca-border);
+}
+.form-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
     font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 8px;
-    background: #FEF3C7;
-    color: #92400E;
+    color: var(--ca-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-left: 6px;
-    vertical-align: middle;
+    margin-bottom: 10px;
 }
-html.dark-mode .optional-badge {
-    background: #5F3A1E;
-    color: #FBBF24;
+.form-label i { color: #F59E0B; font-size: 13px; }
+.form-label .required { color: #DC2626; font-weight: 800; }
+
+.provider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 4px;
 }
+.provider-option-card {
+    position: relative;
+    cursor: pointer;
+    display: block;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.provider-option-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.poc-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--ca-input-bg);
+    border: 2px solid var(--ca-border);
+    border-radius: 10px;
+    transition: all 0.25s ease;
+}
+.provider-option-card:hover .poc-content { 
+    border-color: #FCD34D; 
+    transform: translateY(-2px);
+}
+.provider-option-card input[type="radio"]:checked + .poc-content {
+    border-color: #F59E0B;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+}
+html.dark-mode .provider-option-card input[type="radio"]:checked + .poc-content {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+}
+.poc-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #FFFFFF;
+    font-size: 16px;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.poc-info { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.poc-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ca-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.poc-code {
+    font-size: 10px;
+    font-weight: 700;
+    color: #1D4ED8;
+    background: #DBEAFE;
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    align-self: flex-start;
+}
+html.dark-mode .poc-code { background: #1E3A5F; color: #60A5FA; }
+.poc-float {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.poc-float-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--ca-text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.poc-float-value {
+    font-size: 11px;
+    font-weight: 800;
+    color: #059669;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+}
+html.dark-mode .poc-float-value { color: #34D399; }
+.poc-check {
+    opacity: 0;
+    color: #F59E0B;
+    font-size: 18px;
+    flex-shrink: 0;
+    transition: all 0.25s ease;
+}
+.provider-option-card input[type="radio"]:checked + .poc-content .poc-check {
+    opacity: 1;
+    transform: scale(1.1);
+}
+.empty-providers {
+    text-align: center;
+    padding: 30px 20px;
+    background: var(--ca-input-bg);
+    border-radius: 10px;
+    border: 1px dashed var(--ca-border);
+    color: var(--ca-text-secondary);
+}
+.empty-providers i { font-size: 36px; opacity: 0.4; display: block; margin-bottom: 10px; }
 
 /* ============================================================
    FORM ROWS
@@ -804,929 +1639,468 @@ html.dark-mode .optional-badge {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
-    margin-bottom: 12px;
-}
-.form-group { display: flex; flex-direction: column; gap: 4px; }
-.form-group label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--cm-text);
-}
-.form-group label .required { color: #DC2626; }
-
-.form-control {
-    padding: 10px 14px;
-    border: 1.5px solid var(--cm-border);
-    border-radius: 8px;
-    font-size: 13px;
-    color: var(--cm-text);
-    background: var(--cm-input-bg);
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    width: 100%;
-}
-.form-control:focus {
-    outline: none;
-    border-color: #bb0404;
-    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
-    background: var(--cm-card-bg);
-}
-textarea.form-control { resize: vertical; min-height: 60px; }
-.form-group small { font-size: 11px; color: var(--cm-text-secondary); margin-top: 2px; }
-
-/* ============================================================
-   SOURCE TOGGLES (Float / Cash)
-   ============================================================ */
-.source-toggles {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
     margin-bottom: 16px;
 }
-.source-toggle {
+.form-row:last-child { margin-bottom: 0; }
+.form-row .full-width { grid-column: span 2; }
+.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+
+.input-group {
     position: relative;
-    cursor: pointer;
-    border-radius: 12px;
-    border: 2px solid var(--cm-border);
-    background: var(--cm-card-bg);
-    transition: all 0.3s ease;
-    overflow: hidden;
-    display: block;
+    display: flex;
+    align-items: center;
 }
-.source-toggle:hover {
-    border-color: #3B82F6;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-}
-.source-toggle input[type="checkbox"] {
+.input-icon {
     position: absolute;
-    opacity: 0;
+    left: 14px;
+    color: #F59E0B;
+    font-size: 14px;
+    z-index: 1;
     pointer-events: none;
 }
-.source-toggle-content {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 18px;
-    transition: background 0.3s ease;
-}
-.toggle-icon {
-    width: 44px;
-    height: 44px;
+.form-control {
+    width: 100%;
+    padding: 12px 14px 12px 42px;
     border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    color: #FFFFFF;
-    flex-shrink: 0;
-    opacity: 0.5;
-    transition: opacity 0.3s ease;
-}
-.float-icon { background: linear-gradient(135deg, #3B82F6, #2563EB); }
-.cash-icon { background: linear-gradient(135deg, #10B981, #059669); }
-
-.toggle-info { flex: 1; min-width: 0; }
-.toggle-info h4 {
+    border: 1.5px solid var(--ca-border);
     font-size: 14px;
-    font-weight: 700;
-    color: var(--cm-text);
-    margin: 0 0 2px 0;
-}
-.toggle-info p {
-    font-size: 11px;
-    color: var(--cm-text-secondary);
-    margin: 0;
-}
-
-/* Toggle Switch */
-.toggle-switch {
-    position: relative;
-    width: 46px;
-    height: 26px;
-    background: var(--cm-border);
-    border-radius: 13px;
-    transition: background 0.3s ease;
-    flex-shrink: 0;
-}
-.switch-slider {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 20px;
-    height: 20px;
-    background: #FFFFFF;
-    border-radius: 50%;
-    transition: transform 0.3s ease;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-.source-toggle input:checked ~ .source-toggle-content .toggle-switch {
-    background: #3B82F6;
-}
-.source-toggle input:checked ~ .source-toggle-content .switch-slider {
-    transform: translateX(20px);
-}
-.source-toggle input:checked ~ .source-toggle-content .toggle-icon {
-    opacity: 1;
-}
-
-.source-toggle:has(input:checked) {
-    border-color: #3B82F6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(59, 130, 246, 0.01));
-}
-
-/* ============================================================
-   FLOAT PROVIDER SECTION
-   ============================================================ */
-.provider-section {
-    background: var(--cm-card-header);
-    border-radius: 10px;
-    padding: 16px;
-    border: 1px solid var(--cm-border);
-    margin-bottom: 16px;
-    animation: slideDown 0.3s ease;
-}
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.provider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--cm-border);
-    flex-wrap: wrap;
-}
-.provider-header-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--cm-text);
-}
-.provider-header-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.provider-count-badge-inline {
-    font-size: 11px;
-    font-weight: 600;
-    color: #3B82F6;
-    background: rgba(59, 130, 246, 0.1);
-    padding: 3px 10px;
-    border-radius: 12px;
-}
-.btn-select-all, .btn-deselect-all {
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.btn-select-all { background: #3B82F6; color: #FFFFFF; }
-.btn-select-all:hover { background: #2563EB; }
-.btn-deselect-all {
-    background: var(--cm-hover);
-    color: var(--cm-text-secondary);
-    border: 1px solid var(--cm-border);
-}
-.btn-deselect-all:hover { background: var(--cm-border); }
-
-/* ============================================================
-   PROVIDERS GRID
-   ============================================================ */
-.providers-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
-}
-
-.provider-card {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
-    background: var(--cm-card-bg);
-    border: 2px solid var(--cm-border);
-    border-radius: 10px;
+    outline: none;
     transition: all 0.3s ease;
-    flex-wrap: wrap;
+    font-family: 'Inter', sans-serif;
+    background: var(--ca-input-bg);
+    color: var(--ca-text);
+    font-weight: 500;
 }
-.provider-card:hover {
-    border-color: #3B82F6;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+.form-control::placeholder { color: var(--ca-text-light); }
+.form-control:focus {
+    border-color: #F59E0B;
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.12);
+    background: var(--ca-card-bg);
 }
-.provider-card.selected {
-    border-color: #3B82F6;
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.02));
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+.form-control.textarea-control {
+    padding: 12px 14px;
+    min-height: 80px;
+    resize: vertical;
+    line-height: 1.6;
 }
-
-.provider-checkbox-wrapper { position: relative; flex-shrink: 0; }
-.provider-checkbox { position: absolute; opacity: 0; pointer-events: none; }
-.provider-checkbox-label { display: block; cursor: pointer; }
-.custom-checkbox {
-    width: 24px;
-    height: 24px;
-    border: 2px solid var(--cm-border);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    background: var(--cm-card-bg);
-}
-.custom-checkbox i {
-    color: transparent;
-    font-size: 13px;
-    transition: color 0.2s ease;
-}
-.provider-checkbox:checked + .provider-checkbox-label .custom-checkbox {
-    background: #3B82F6;
-    border-color: #3B82F6;
-}
-.provider-checkbox:checked + .provider-checkbox-label .custom-checkbox i {
-    color: #FFFFFF;
-}
-
-.provider-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #FFFFFF;
+.money-input {
+    font-weight: 800;
     font-size: 16px;
-    flex-shrink: 0;
+    font-family: 'Inter', 'Courier New', monospace;
+    text-align: right;
+    padding-right: 18px;
+    color: #F59E0B;
+    letter-spacing: 0.5px;
 }
+html.dark-mode .money-input { color: #FCD34D; }
 
-.provider-info { flex: 1; min-width: 100px; }
-.provider-name {
-    display: block;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--cm-text);
+/* ============================================================
+   PREVIEW SECTION
+   ============================================================ */
+.preview-section {
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+}
+html.dark-mode .preview-section {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 100%);
+}
+.preview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+.preview-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 18px;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 10px;
+    border: 1.5px solid rgba(245, 158, 11, 0.3);
+    min-width: 0;
+}
+html.dark-mode .preview-item {
+    background: rgba(15, 23, 42, 0.4);
+    border-color: rgba(245, 158, 11, 0.5);
+}
+.preview-item.preview-highlight {
+    background: linear-gradient(135deg, #F59E0B, #D97706);
+    border-color: #F59E0B;
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+.pi-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: #92400E;
+    text-transform: uppercase;
+    letter-spacing: 1px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.provider-code {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    color: #3B82F6;
-    font-weight: 600;
-    margin-top: 2px;
+html.dark-mode .pi-label { color: #FCD34D; }
+.preview-highlight .pi-label { color: #FFFFFF; }
+.pi-value {
+    font-size: 16px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    word-break: break-word;
+    line-height: 1.2;
 }
-.provider-type-badge {
-    display: inline-block;
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--cm-text-secondary);
-    background: var(--cm-hover);
-    padding: 1px 8px;
-    border-radius: 8px;
-    margin-top: 2px;
-}
+.pi-amount { color: #1D4ED8; }
+.preview-highlight .pi-value { color: #FFFFFF; font-size: 18px; }
 
-.provider-input-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    width: 100%;
-    margin-top: 8px;
-    animation: fadeIn 0.3s ease;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.provider-input-wrapper .currency-symbol {
-    position: absolute;
-    left: 10px;
-    font-size: 12px;
-    font-weight: 700;
-    color: #3B82F6;
-    z-index: 1;
-    pointer-events: none;
-}
-.provider-amount {
-    width: 100%;
-    padding: 8px 12px 8px 40px;
-    border: 2px solid #3B82F6;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cm-text);
-    background: var(--cm-card-bg);
-    outline: none;
-    transition: all 0.3s ease;
-    text-align: right;
-}
-.provider-amount:focus { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2); }
-.provider-amount::placeholder { color: var(--cm-text-light); font-weight: 400; }
-
-.provider-locked-badge {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--cm-text-light);
-    font-size: 12px;
-    opacity: 0.4;
-    flex-shrink: 0;
-}
-
-.no-providers {
-    text-align: center;
-    padding: 24px;
-    color: var(--cm-text-secondary);
-}
-.no-providers i {
-    font-size: 32px;
-    color: var(--cm-text-light);
-    display: block;
-    margin-bottom: 8px;
-}
-.no-providers p { font-size: 13px; margin: 0 0 10px 0; }
-.btn-link {
-    color: #3B82F6;
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: rgba(59, 130, 246, 0.1);
+.direction-badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    transition: all 0.2s ease;
-}
-.btn-link:hover { background: #3B82F6; color: #FFFFFF; }
-
-/* ============================================================
-   PROVIDERS SUMMARY
-   ============================================================ */
-.providers-summary {
-    background: var(--cm-card-bg);
-    border-radius: 8px;
-    padding: 12px 16px;
-    display: flex;
-    justify-content: space-around;
-    flex-wrap: wrap;
-    gap: 12px;
-    border: 1px solid var(--cm-border);
-}
-.summary-row { display: flex; align-items: center; gap: 8px; }
-.summary-label {
+    gap: 5px;
+    padding: 4px 12px;
+    border-radius: 10px;
     font-size: 11px;
-    text-transform: uppercase;
-    color: var(--cm-text-secondary);
-    font-weight: 600;
-}
-.summary-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--cm-text);
-}
-.summary-value.text-blue { color: #3B82F6; }
-
-/* ============================================================
-   CASH SECTION
-   ============================================================ */
-.cash-section {
-    background: var(--cm-card-header);
-    border-radius: 10px;
-    padding: 16px;
-    border: 1px solid var(--cm-border);
-    margin-bottom: 16px;
-    animation: slideDown 0.3s ease;
-}
-.cash-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--cm-text);
-    margin-bottom: 12px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--cm-border);
-}
-.cash-input-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    margin-bottom: 6px;
-}
-.currency-symbol-large {
-    position: absolute;
-    left: 16px;
-    font-size: 16px;
-    font-weight: 700;
-    color: #10B981;
-    z-index: 1;
-    pointer-events: none;
-}
-.cash-amount {
-    width: 100%;
-    padding: 14px 18px 14px 65px;
-    border: 2px solid #10B981;
-    border-radius: 10px;
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--cm-text);
-    background: var(--cm-card-bg);
-    outline: none;
-    transition: all 0.3s ease;
-}
-.cash-amount:focus { box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
-.cash-amount::placeholder { color: var(--cm-text-light); font-weight: 400; }
-.cash-section small { font-size: 11px; color: var(--cm-text-secondary); }
-
-/* ============================================================
-   NO SOURCE MESSAGE
-   ============================================================ */
-.no-source-message {
-    text-align: center;
-    padding: 24px;
-    color: var(--cm-text-secondary);
-    background: var(--cm-hover);
-    border-radius: 10px;
-    border: 1px dashed var(--cm-border);
-}
-.no-source-message i {
-    font-size: 28px;
-    color: var(--cm-text-light);
-    display: block;
-    margin-bottom: 8px;
-}
-.no-source-message p {
-    font-size: 13px;
-    margin: 0;
-}
-.no-source-message strong { color: var(--cm-text); }
-
-/* ============================================================
-   GRAND TOTAL BAR
-   ============================================================ */
-.grand-total-bar {
-    background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 100%);
-    padding: 18px 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 16px;
-}
-.grand-total-split {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-.split-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    background: rgba(255,255,255,0.1);
-    border-radius: 10px;
-    border: 1px solid rgba(255,255,255,0.15);
-}
-.split-label {
-    font-size: 11px;
-    color: rgba(255,255,255,0.7);
-    text-transform: uppercase;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-}
-.split-value {
-    font-size: 15px;
-    font-weight: 700;
-    color: #FFFFFF;
-}
-.split-divider {
-    font-size: 18px;
-    color: rgba(255,255,255,0.5);
-    font-weight: 700;
-}
-.grand-total-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.grand-label {
-    font-size: 12px;
-    color: rgba(255,255,255,0.7);
-    text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 1px;
-}
-.grand-value {
-    font-size: 24px;
     font-weight: 800;
-    color: #FCD34D;
-    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
 }
+.direction-badge.badge-in {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1.5px solid #10B981;
+}
+.direction-badge.badge-out {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1.5px solid #DC2626;
+}
+html.dark-mode .direction-badge.badge-in { background: #065F46; color: #34D399; }
+html.dark-mode .direction-badge.badge-out { background: #7F1D1D; color: #FCA5A5; }
 
 /* ============================================================
-   BUTTONS
+   FORM ACTIONS
    ============================================================ */
-.btn {
-    padding: 10px 22px;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-}
-.btn-primary { background: #bb0404; color: white; }
-.btn-primary:hover {
-    background: #8a0303;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(187,4,4,0.3);
-}
-.btn-secondary {
-    background: var(--cm-hover);
-    color: var(--cm-text-secondary);
-    border: 1px solid var(--cm-border);
-}
-.btn-secondary:hover { background: var(--cm-border); color: var(--cm-text); }
-
 .form-actions {
     display: flex;
     gap: 12px;
-    padding: 20px 24px;
-    border-top: 1px solid var(--cm-border);
-    background: var(--cm-card-header);
+    padding: 20px 26px;
+    border-top: 1px solid var(--ca-border);
+    background: var(--ca-hover);
     flex-wrap: wrap;
 }
-.form-actions .btn-primary { flex: 1; justify-content: center; min-width: 180px; }
-
-/* ============================================================
-   TYPE INFO
-   ============================================================ */
-.type-info-card {
-    background: var(--cm-card-bg);
+.btn {
+    padding: 12px 26px;
     border-radius: 10px;
-    padding: 16px 20px;
-    border: 1px solid var(--cm-border);
-}
-.type-info-card h4 {
+    font-weight: 700;
     font-size: 14px;
-    font-weight: 600;
-    color: var(--cm-text);
-    margin: 0 0 12px 0;
-}
-.type-info-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-}
-.type-info-item {
-    font-size: 13px;
-    color: var(--cm-text);
-    padding: 6px 10px;
-    border-radius: 6px;
-    display: flex;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
-    background: var(--cm-hover);
+    text-decoration: none;
+    white-space: nowrap;
 }
-.type-info-item .dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
+.btn-submit {
+    background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
 }
-.type-blue .dot { background: #3B82F6; }
-.type-green .dot { background: #10B981; }
-.type-purple .dot { background: #8B5CF6; }
-.type-red .dot { background: #DC2626; }
-.type-orange .dot { background: #F59E0B; }
+.btn-submit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(245, 158, 11, 0.45);
+    color: white;
+}
+.btn-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+.btn-reset {
+    background: var(--ca-card-bg);
+    color: var(--ca-text-secondary);
+    border: 1.5px solid var(--ca-border);
+}
+.btn-reset:hover {
+    background: var(--ca-border);
+    color: var(--ca-text);
+}
+.btn-cancel {
+    background: var(--ca-card-bg);
+    color: var(--ca-text-secondary);
+    border: 1.5px solid var(--ca-border);
+}
+.btn-cancel:hover {
+    background: #FEE2E2;
+    color: #991B1B;
+    border-color: #FECACA;
+}
+html.dark-mode .btn-cancel:hover {
+    background: #7F1D1D;
+    color: #FEE2E2;
+    border-color: #991B1B;
+}
+
+.select-branch-message {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--ca-text-secondary);
+}
+.select-branch-message i {
+    font-size: 48px;
+    color: #F59E0B;
+    display: block;
+    margin-bottom: 14px;
+    animation: bounceUpDown 2s ease-in-out infinite;
+}
+@keyframes bounceUpDown {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+.select-branch-message p {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+}
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1024px) {
+    .summary-cards-row { grid-template-columns: repeat(3, 1fr); }
+    .type-options-grid { grid-template-columns: repeat(2, 1fr); }
+    .preview-grid { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 768px) {
-    .branch-card { padding: 10px 16px; font-size: 13px; }
+    .main-content { padding: 12px !important; }
+    
+    .branch-status-card {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 18px;
+    }
+    .branch-status-info { width: 100%; }
+    .btn-back-card { width: 100%; justify-content: center; }
+    
+    .page-header { flex-direction: column; align-items: flex-start; }
+    
+    .summary-cards-row { grid-template-columns: 1fr; }
+    
+    .branch-selection-grid { grid-template-columns: 1fr; }
+    .type-options-grid { grid-template-columns: 1fr; }
+    .source-options-grid { grid-template-columns: 1fr; }
+    .provider-grid { grid-template-columns: 1fr; }
+    
     .form-row { grid-template-columns: 1fr; }
-    .source-toggles { grid-template-columns: 1fr; }
-    .providers-grid { grid-template-columns: 1fr; }
-    .type-info-grid { grid-template-columns: 1fr; }
+    .form-row .full-width { grid-column: span 1; }
+    
+    .preview-grid { grid-template-columns: 1fr; }
+    
     .form-actions { flex-direction: column; }
     .form-actions .btn { width: 100%; justify-content: center; }
-    .page-header { flex-direction: column; align-items: flex-start; }
-    .form-section { padding: 16px; }
-    .provider-header { flex-direction: column; align-items: flex-start; }
-    .grand-total-bar { flex-direction: column; align-items: stretch; }
-    .grand-total-split { justify-content: center; }
-    .grand-total-right { justify-content: center; }
-    .grand-value { font-size: 20px; }
+    
+    .form-section { padding: 18px 20px; }
+    
+    .selected-branch-locked { flex-direction: column; text-align: center; }
+    .sbl-change { width: 100%; justify-content: center; }
 }
 @media (max-width: 480px) {
-    .branch-card { flex-direction: column; text-align: center; gap: 4px; }
-    .source-toggle-content { padding: 12px 14px; }
-    .toggle-icon { width: 38px; height: 38px; font-size: 15px; }
-    .toggle-info h4 { font-size: 13px; }
-    .cash-amount { font-size: 16px; padding: 12px 14px 12px 55px; }
-    .currency-symbol-large { font-size: 14px; left: 12px; }
-    .split-item { padding: 4px 10px; }
-    .split-value { font-size: 13px; }
+    .main-content { padding: 10px !important; }
+    .branch-status-name { font-size: 15px; }
+    .branch-status-icon { width: 44px; height: 44px; font-size: 18px; }
+    .header-left h2 { font-size: 18px; }
+    .section-header h3 { font-size: 13px; }
+    .form-control { font-size: 13px; padding: 10px 12px 10px 38px; }
+    .money-input { font-size: 14px; }
+    .smc-value { font-size: 16px; }
+    .form-section { padding: 16px 14px; }
 }
 </style>
 
 <script>
 // ============================================================
-// BRANCH CHANGE
-// ============================================================
-function onBranchChange() {
-    const branchId = document.getElementById('branchSelect').value;
-    if (branchId) {
-        window.location.href = 'add.php?branch=' + branchId;
-    } else {
-        window.location.href = 'add.php';
-    }
-}
-
-// ============================================================
-// FLOAT TOGGLE
-// ============================================================
-function onFloatToggle(enabled) {
-    const providerSection = document.getElementById('providerSection');
-    if (enabled) {
-        providerSection.style.display = 'block';
-    } else {
-        providerSection.style.display = 'none';
-        document.querySelectorAll('.provider-checkbox').forEach(cb => {
-            cb.checked = false;
-            const id = cb.id.replace('provider_check_', '');
-            onProviderCheck(cb, id, true);
-        });
-    }
-    updateNoSourceMessage();
-    calculateTotals();
-}
-
-// ============================================================
-// CASH TOGGLE
-// ============================================================
-function onCashToggle(enabled) {
-    const cashSection = document.getElementById('cashSection');
-    if (enabled) {
-        cashSection.style.display = 'block';
-        setTimeout(() => {
-            const input = document.getElementById('cashAmount');
-            if (input) input.focus();
-        }, 100);
-    } else {
-        cashSection.style.display = 'none';
-        const input = document.getElementById('cashAmount');
-        if (input) input.value = '';
-    }
-    updateNoSourceMessage();
-    calculateTotals();
-}
-
-// ============================================================
-// UPDATE NO SOURCE MESSAGE
-// ============================================================
-function updateNoSourceMessage() {
-    const floatEnabled = document.getElementById('includeFloat').checked;
-    const cashEnabled = document.getElementById('includeCash').checked;
-    const noSourceMsg = document.getElementById('noSourceMessage');
-    
-    if (!floatEnabled && !cashEnabled) {
-        noSourceMsg.style.display = 'block';
-    } else {
-        noSourceMsg.style.display = 'none';
-    }
-}
-
-// ============================================================
-// PROVIDER CHECKBOX TOGGLE
-// ============================================================
-function onProviderCheck(checkbox, providerId, silent) {
-    const card = checkbox.closest('.provider-card');
-    const inputWrapper = document.getElementById('input_wrapper_' + providerId);
-    const lockedBadge = document.getElementById('locked_badge_' + providerId);
-    const amountInput = document.getElementById('provider_amount_' + providerId);
-    
-    if (checkbox.checked) {
-        card.classList.add('selected');
-        if (inputWrapper) inputWrapper.style.display = 'flex';
-        if (lockedBadge) lockedBadge.style.display = 'none';
-        if (amountInput && !silent) {
-            setTimeout(() => amountInput.focus(), 100);
-        }
-    } else {
-        card.classList.remove('selected');
-        if (inputWrapper) inputWrapper.style.display = 'none';
-        if (lockedBadge) lockedBadge.style.display = 'flex';
-        if (amountInput) amountInput.value = '';
-    }
-    
-    calculateTotals();
-}
-
-// ============================================================
-// SELECT ALL PROVIDERS
-// ============================================================
-function selectAllProviders() {
-    document.querySelectorAll('.provider-checkbox').forEach(cb => {
-        cb.checked = true;
-        const id = cb.id.replace('provider_check_', '');
-        onProviderCheck(cb, id, true);
-    });
-    calculateTotals();
-}
-
-// ============================================================
-// DESELECT ALL PROVIDERS
-// ============================================================
-function deselectAllProviders() {
-    document.querySelectorAll('.provider-checkbox').forEach(cb => {
-        cb.checked = false;
-        const id = cb.id.replace('provider_check_', '');
-        onProviderCheck(cb, id, true);
-    });
-    calculateTotals();
-}
-
-// ============================================================
 // FORMAT MONEY INPUT
 // ============================================================
 function formatMoneyInput(input) {
-    let value = input.value.replace(/[^0-9.]/g, '');
-    let parts = value.split('.');
-    let integerPart = parts[0] || '';
-    let decimalPart = parts[1] || '';
+    var value = input.value.replace(/[^0-9]/g, '');
+    if (value === '') { input.value = ''; updatePreview(); return; }
     
-    if (integerPart.length > 0) {
-        integerPart = parseInt(integerPart).toLocaleString('en-US');
-    }
-    if (decimalPart.length > 2) {
-        decimalPart = decimalPart.substring(0, 2);
-    }
+    value = value.replace(/^0+/, '') || '0';
+    if (value.length > 15) value = value.substring(0, 15);
     
-    let formatted = integerPart;
-    if (decimalPart.length > 0) {
-        formatted += '.' + decimalPart;
+    var formatted = '';
+    var count = 0;
+    for (var i = value.length - 1; i >= 0; i--) {
+        if (count > 0 && count % 3 === 0) formatted = ',' + formatted;
+        formatted = value[i] + formatted;
+        count++;
     }
     input.value = formatted;
+    updatePreview();
 }
 
 // ============================================================
-// CALCULATE TOTALS
+// SOURCE CHANGE
 // ============================================================
-function calculateTotals() {
-    let totalFloat = 0;
-    let selectedCount = 0;
-    let cashAmount = 0;
-    
-    const floatEnabled = document.getElementById('includeFloat').checked;
-    const cashEnabled = document.getElementById('includeCash').checked;
-    
-    if (floatEnabled) {
-        document.querySelectorAll('.provider-checkbox:checked').forEach(cb => {
-            selectedCount++;
-            const id = cb.id.replace('provider_check_', '');
-            const input = document.getElementById('provider_amount_' + id);
-            if (input) {
-                const val = parseFloat(input.value.replace(/,/g, '')) || 0;
-                totalFloat += val;
-            }
-        });
+function onSourceChange(source) {
+    var providerWrapper = document.getElementById('providerSelectWrapper');
+    if (source === 'provider') {
+        providerWrapper.style.display = 'block';
+    } else {
+        providerWrapper.style.display = 'none';
+    }
+    updatePreview();
+}
+
+// ============================================================
+// PROVIDER SELECT
+// ============================================================
+function onProviderSelect(radio) {
+    document.querySelectorAll('.provider-option-card').forEach(function(card) {
+        card.classList.remove('selected');
+    });
+    radio.closest('.provider-option-card').classList.add('selected');
+    updatePreview();
+}
+
+// ============================================================
+// UPDATE PREVIEW
+// ============================================================
+function updatePreview() {
+    var amountInput = document.getElementById('amountInput');
+    var amount = 0;
+    if (amountInput && amountInput.value) {
+        amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
     }
     
-    if (cashEnabled) {
-        const cashInput = document.getElementById('cashAmount');
-        if (cashInput && cashInput.value) {
-            cashAmount = parseFloat(cashInput.value.replace(/,/g, '')) || 0;
+    var type = document.querySelector('input[name="transaction_type"]:checked');
+    var isOut = type && ['cash_out', 'adjustment'].includes(type.value);
+    
+    // Update direction badge
+    var directionEl = document.getElementById('previewDirection');
+    if (directionEl) {
+        if (isOut) {
+            directionEl.innerHTML = '<span class="direction-badge badge-out"><i class="fas fa-arrow-up"></i> OUTGOING</span>';
+        } else {
+            directionEl.innerHTML = '<span class="direction-badge badge-in"><i class="fas fa-arrow-down"></i> INCOMING</span>';
         }
     }
     
-    const grandTotal = totalFloat + cashAmount;
+    // Update amount
+    var amountEl = document.getElementById('previewAmount');
+    if (amountEl) amountEl.textContent = 'TSh ' + amount.toLocaleString('en-US');
     
-    const selectedCountEl = document.getElementById('selectedProvidersCount');
-    const totalFloatEl = document.getElementById('totalFloatDisplay');
-    const floatSummaryEl = document.getElementById('floatSummaryDisplay');
-    const cashSummaryEl = document.getElementById('cashSummaryDisplay');
-    const grandTotalEl = document.getElementById('grandTotalDisplay');
-    
-    if (selectedCountEl) selectedCountEl.textContent = selectedCount;
-    if (totalFloatEl) totalFloatEl.textContent = 'TSh ' + formatNumberDisplay(totalFloat);
-    if (floatSummaryEl) floatSummaryEl.textContent = 'TSh ' + formatNumberDisplay(totalFloat);
-    if (cashSummaryEl) cashSummaryEl.textContent = 'TSh ' + formatNumberDisplay(cashAmount);
-    if (grandTotalEl) grandTotalEl.textContent = 'TSh ' + formatNumberDisplay(grandTotal);
-}
-
-function formatNumberDisplay(num) {
-    return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    // Update new capital
+    var currentCapital = <?php echo floatval($current_capital); ?>;
+    var newCapital = isOut ? Math.max(0, currentCapital - amount) : currentCapital + amount;
+    var newCapitalEl = document.getElementById('previewNewCapital');
+    if (newCapitalEl) newCapitalEl.textContent = 'TSh ' + newCapital.toLocaleString('en-US');
 }
 
 // ============================================================
-// DARK MODE SYNC
+// BRANCH CHANGE (redirect to reload with branch info)
+// ============================================================
+function onBranchChange(branchId) {
+    window.location.href = 'add.php?branch=' + branchId;
+}
+
+// ============================================================
+// VALIDATE FORM
+// ============================================================
+function validateForm() {
+    var branch = document.querySelector('input[name="branch_id"]:checked');
+    var branchHidden = document.querySelector('input[name="branch_id"][type="hidden"]');
+    
+    if (!branch && !branchHidden) {
+        alert('Please select a branch.');
+        return false;
+    }
+    
+    var type = document.querySelector('input[name="transaction_type"]:checked');
+    if (!type) {
+        alert('Please select a transaction type.');
+        return false;
+    }
+    
+    var source = document.querySelector('input[name="reference_module"]:checked');
+    if (!source) {
+        alert('Please select where to apply.');
+        return false;
+    }
+    
+    if (source.value === 'provider') {
+        var provider = document.querySelector('input[name="reference_id"]:checked');
+        if (!provider) {
+            alert('Please select a provider.');
+            return false;
+        }
+    }
+    
+    var amountInput = document.getElementById('amountInput');
+    var amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
+    if (amount <= 0) {
+        alert('Please enter a valid amount greater than 0.');
+        amountInput.focus();
+        return false;
+    }
+    
+    var isOut = ['cash_out', 'adjustment'].includes(type.value);
+    var confirmMsg = 'Confirm Transaction:\n\n' +
+                     'Type: ' + type.parentElement.querySelector('.toc-title').textContent + '\n' +
+                     'Amount: TSh ' + amount.toLocaleString() + '\n' +
+                     'Direction: ' + (isOut ? 'OUTGOING' : 'INCOMING') + '\n\n' +
+                     'Continue?';
+    if (!confirm(confirmMsg)) {
+        return false;
+    }
+    
+    var submitBtn = document.getElementById('submitBtn');
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    submitBtn.disabled = true;
+    return true;
+}
+
+function confirmReset() {
+    return confirm('Are you sure you want to reset the form?\n\nAny unsaved data will be lost.');
+}
+
+// ============================================================
+// INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    updateNoSourceMessage();
+    updatePreview();
     
+    // Dark mode
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
+    }
+    syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
+    
+    // Auto-hide alerts
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() {
+            successAlert.style.transition = 'opacity 0.4s ease';
+            successAlert.style.opacity = '0';
+            setTimeout(function() {
+                if (successAlert.parentElement) successAlert.remove();
+            }, 400);
+        }, 5000);
     }
     
-    syncDarkMode();
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
-    
-    // Form validation - ✅ Description NO LONGER required
-    const form = document.getElementById('capitalForm');
-    if (form) {
-        form.addEventListener('submit', function(e) {
-            const branchId = document.getElementById('branchSelect').value;
-            const floatEnabled = document.getElementById('includeFloat').checked;
-            const cashEnabled = document.getElementById('includeCash').checked;
-            
-            if (!branchId) {
-                e.preventDefault();
-                alert('Please select a branch first');
-                return false;
-            }
-            
-            if (!floatEnabled && !cashEnabled) {
-                e.preventDefault();
-                alert('Please enable Float or Cash (or both)');
-                return false;
-            }
-            
-            if (floatEnabled) {
-                const selected = document.querySelectorAll('.provider-checkbox:checked');
-                let hasAmount = false;
-                selected.forEach(cb => {
-                    const id = cb.id.replace('provider_check_', '');
-                    const input = document.getElementById('provider_amount_' + id);
-                    if (input) {
-                        const val = parseFloat(input.value.replace(/,/g, '')) || 0;
-                        if (val > 0) hasAmount = true;
-                    }
-                });
-                
-                if (selected.length === 0) {
-                    e.preventDefault();
-                    alert('Please select at least one provider for Float');
-                    return false;
-                }
-                if (!hasAmount) {
-                    e.preventDefault();
-                    alert('Please enter an amount for at least one provider');
-                    return false;
-                }
-            }
-            
-            if (cashEnabled) {
-                const cashInput = document.getElementById('cashAmount');
-                const cashVal = parseFloat(cashInput.value.replace(/,/g, '')) || 0;
-                if (cashVal <= 0) {
-                    e.preventDefault();
-                    alert('Please enter a Cash amount');
-                    return false;
-                }
-            }
-            
-            // ✅ Description validation REMOVED
-        });
+    var errorAlert = document.querySelector('.alert-danger');
+    if (errorAlert) {
+        setTimeout(function() {
+            errorAlert.style.transition = 'opacity 0.4s ease';
+            errorAlert.style.opacity = '0';
+            setTimeout(function() {
+                if (errorAlert.parentElement) errorAlert.remove();
+            }, 400);
+        }, 10000);
     }
 });
 </script>
