@@ -25,7 +25,7 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
-// GET BRANCH ID
+// GET BRANCH
 // ============================================================
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($id <= 0) {
@@ -34,9 +34,6 @@ if ($id <= 0) {
     exit();
 }
 
-// ============================================================
-// FETCH BRANCH
-// ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
 $stmt->execute([$id]);
 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -48,7 +45,7 @@ if (!$branch) {
 }
 
 // ============================================================
-// LOAD EMPLOYEES IN THIS BRANCH (for manager dropdown)
+// LOAD EMPLOYEES IN THIS BRANCH
 // ============================================================
 $branch_employees = [];
 try {
@@ -100,7 +97,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
         $stmt->execute([$branch_code, $id]);
         if ($stmt->fetchColumn() > 0) throw new Exception('Branch code already exists.');
 
-        // Manager validation
         $manager_id_val = $manager_id > 0 ? $manager_id : null;
 
         // Update
@@ -204,9 +200,7 @@ include_once '../../includes/admin_topbar.php';
         <form method="POST" action="" id="branchForm" onsubmit="return validateForm()">
             <input type="hidden" name="action" value="update_branch">
 
-            <!-- ============================================================
-            MAIN CARD
-            ============================================================ -->
+            <!-- MAIN CARD -->
             <div class="form-card">
                 <div class="form-card-header">
                     <div class="form-card-header-left">
@@ -275,9 +269,11 @@ include_once '../../includes/admin_topbar.php';
                     <div class="form-row">
                         <div class="form-group">
                             <label>Email</label>
-                            <input type="email" name="email" class="form-control"
+                            <input type="email" name="email" id="branchEmail"
+                                   class="form-control"
                                    value="<?php echo htmlspecialchars($form_email); ?>"
-                                   placeholder="e.g. kariakoo@wakala.co.tz">
+                                   placeholder="e.g. kariakoo@wakala.co.tz"
+                                   oninput="updatePreview()">
                         </div>
                         <div class="form-group">
                             <label>Branch Manager</label>
@@ -342,9 +338,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- ============================================================
-            LIVE PREVIEW
-            ============================================================ -->
+            <!-- LIVE PREVIEW -->
             <div class="form-card">
                 <div class="form-card-header">
                     <div class="form-card-header-left">
@@ -370,13 +364,9 @@ include_once '../../includes/admin_topbar.php';
                                         <div class="preview-name" id="previewName">
                                             <?php echo htmlspecialchars($form_name ?: 'Branch Name'); ?>
                                         </div>
-                                        <?php if (!empty($form_code)): ?>
-                                            <div class="preview-code" id="previewCode">
-                                                <?php echo htmlspecialchars($form_code); ?>
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="preview-code" id="previewCode">CODE</div>
-                                        <?php endif; ?>
+                                        <div class="preview-code" id="previewCode">
+                                            <?php echo htmlspecialchars($form_code ?: 'CODE'); ?>
+                                        </div>
                                     </div>
                                 </div>
                                 <span class="preview-status-pill <?php echo $form_is_active ? 'active' : 'inactive'; ?>"
@@ -386,51 +376,30 @@ include_once '../../includes/admin_topbar.php';
                                 </span>
                             </div>
 
-                            <?php if (!empty($form_location)): ?>
-                            <div class="preview-location" id="previewLocationRow">
+                            <div class="preview-location" id="previewLocationRow"
+                                 style="<?php echo empty($form_location) ? 'display:none;' : ''; ?>">
                                 <i class="fas fa-map-marker-alt"></i>
                                 <span id="previewLocation"><?php echo htmlspecialchars($form_location); ?></span>
                             </div>
-                            <?php else: ?>
-                            <div class="preview-location" id="previewLocationRow" style="display:none;">
-                                <i class="fas fa-map-marker-alt"></i>
-                                <span id="previewLocation"></span>
-                            </div>
-                            <?php endif; ?>
 
                             <div class="preview-meta">
-                                <?php if (!empty($form_phone)): ?>
-                                <div class="preview-meta-item" id="previewPhoneRow">
+                                <div class="preview-meta-item" id="previewPhoneRow"
+                                     style="<?php echo empty($form_phone) ? 'display:none;' : ''; ?>">
                                     <i class="fas fa-phone"></i>
                                     <span id="previewPhone"><?php echo htmlspecialchars($form_phone); ?></span>
                                 </div>
-                                <?php else: ?>
-                                <div class="preview-meta-item" id="previewPhoneRow" style="display:none;">
-                                    <i class="fas fa-phone"></i>
-                                    <span id="previewPhone"></span>
-                                </div>
-                                <?php endif; ?>
-
-                                <?php if (!empty($form_email)): ?>
-                                <div class="preview-meta-item" id="previewEmailRow">
+                                <div class="preview-meta-item" id="previewEmailRow"
+                                     style="<?php echo empty($form_email) ? 'display:none;' : ''; ?>">
                                     <i class="fas fa-envelope"></i>
                                     <span id="previewEmail"><?php echo htmlspecialchars($form_email); ?></span>
                                 </div>
-                                <?php else: ?>
-                                <div class="preview-meta-item" id="previewEmailRow" style="display:none;">
-                                    <i class="fas fa-envelope"></i>
-                                    <span id="previewEmail"></span>
-                                </div>
-                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- ============================================================
-            WARNING BANNER
-            ============================================================ -->
+            <!-- WARNING BANNER -->
             <div class="warning-banner">
                 <div class="warning-icon">
                     <i class="fas fa-exclamation-triangle"></i>
@@ -442,9 +411,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- ============================================================
-            FORM ACTIONS
-            ============================================================ -->
+            <!-- ACTIONS -->
             <div class="form-actions">
                 <a href="view.php?id=<?php echo $id; ?>" class="btn btn-secondary-large">
                     <i class="fas fa-times"></i> Cancel
@@ -641,7 +608,7 @@ select.form-control { cursor: pointer; }
 }
 .field-hint i { font-size: 10px; color: var(--red-primary); }
 
-/* STATUS TOGGLE */
+/* STATUS TOGGLE ROW */
 .status-toggle-row {
     display: flex; align-items: center; justify-content: space-between;
     gap: 20px;
@@ -692,6 +659,7 @@ html.dark-mode .status-toggle-icon.icon-inactive {
     line-height: 1.4;
 }
 
+/* TOGGLE */
 .toggle-switch-wrapper {
     display: inline-flex; align-items: center; gap: 12px;
     cursor: pointer; user-select: none;
@@ -793,6 +761,7 @@ html.dark-mode .toggle-switch { background: #475569; }
     font-family: 'Courier New', monospace;
     letter-spacing: 0.4px;
     border: 1px solid rgba(255, 255, 255, 0.15);
+    text-transform: uppercase;
 }
 .preview-status-pill {
     display: inline-flex; align-items: center; gap: 4px;
@@ -978,6 +947,7 @@ function updatePreview() {
     var code = (document.getElementById('branchCode')?.value || '').trim();
     var location = (document.getElementById('branchLocation')?.value || '').trim();
     var phone = (document.getElementById('branchPhone')?.value || '').trim();
+    var email = (document.getElementById('branchEmail')?.value || '').trim();
     var isActive = document.getElementById('isActiveToggle')?.checked;
 
     // Name
@@ -1013,7 +983,6 @@ function updatePreview() {
     }
 
     // Email
-    var email = (document.querySelector('input[name="email"]')?.value || '').trim();
     var emailRow = document.getElementById('previewEmailRow');
     var emailEl = document.getElementById('previewEmail');
     if (emailRow && emailEl) {
@@ -1057,13 +1026,8 @@ function updateStatusLabel() {
 
     if (label) label.textContent = isActive ? 'Active' : 'Inactive';
     if (title) title.textContent = isActive ? 'Branch is Active' : 'Branch is Inactive';
-
-    if (icon) {
-        icon.className = isActive ? 'fas fa-check-circle' : 'fas fa-times-circle';
-    }
-    if (iconBox) {
-        iconBox.className = 'status-toggle-icon ' + (isActive ? 'icon-active' : 'icon-inactive');
-    }
+    if (icon) icon.className = isActive ? 'fas fa-check-circle' : 'fas fa-times-circle';
+    if (iconBox) iconBox.className = 'status-toggle-icon ' + (isActive ? 'icon-active' : 'icon-inactive');
 }
 
 // ============================================================
@@ -1096,12 +1060,6 @@ function validateForm() {
 document.addEventListener('DOMContentLoaded', function() {
     updateStatusLabel();
     updatePreview();
-
-    // Email input live-sync
-    var emailInput = document.querySelector('input[name="email"]');
-    if (emailInput) {
-        emailInput.addEventListener('input', updatePreview);
-    }
 
     function syncDarkMode() {
         var html = document.documentElement;

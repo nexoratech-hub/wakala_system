@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: modules/commissions/view.php
 // WAKALA FINANCIAL SYSTEM - VIEW COMMISSION (SIMPLE)
-// Shows ONLY the transaction details - no summary cards
+// ✅ Shows ONLY the transaction details - no summary cards
+// ✅ FIXED: Uses employee sidebar/header for employees
+// ✅ FIXED: Uses admin sidebar/header for admins
 // ================================================================
 
 error_reporting(E_ALL);
@@ -28,6 +30,11 @@ if ($role !== 'admin' && $role !== 'super_admin' && $role !== 'employee') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
+
+// ============================================================
+// ✅ DETERMINE USER TYPE
+// ============================================================
+$is_admin = ($role === 'admin' || $role === 'super_admin');
 
 // ============================================================
 // GET COMMISSION ID
@@ -108,9 +115,18 @@ if (isset($_SESSION['error_message'])) {
 
 $branch_qs = ($view_commission['branch_id'] > 0) ? '?branch_id=' . $view_commission['branch_id'] : '';
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+// ============================================================
+// ✅ LOAD HEADER/SIDEBAR BASED ON ROLE
+// ============================================================
+if ($is_admin) {
+    include_once '../../includes/admin_header.php';
+    include_once '../../includes/admin_sidebar.php';
+    include_once '../../includes/admin_topbar.php';
+} else {
+    include_once '../../includes/employee_header.php';
+    include_once '../../includes/employee_sidebar.php';
+    include_once '../../includes/employee_topbar.php';
+}
 ?>
 
 <div class="main-wrapper">
@@ -124,7 +140,9 @@ include_once '../../includes/admin_topbar.php';
                 <i class="fas fa-store-alt"></i>
             </div>
             <div class="branch-status-info">
-                <span class="branch-status-label">Commission Branch</span>
+                <span class="branch-status-label">
+                    <?php echo $is_admin ? 'Commission Branch' : 'My Branch'; ?>
+                </span>
                 <span class="branch-status-name">
                     <?php echo htmlspecialchars($view_commission['branch_display_name'] ?? $view_commission['branch'] ?? 'Main'); ?>
                 </span>
@@ -138,7 +156,7 @@ include_once '../../includes/admin_topbar.php';
                     </span>
                 <?php endif; ?>
             </div>
-            <a href="index.php<?php echo $branch_qs; ?>" class="btn-back-card">
+            <a href="<?php echo $is_admin ? 'index.php' : 'index_employee.php'; ?><?php echo $branch_qs; ?>" class="btn-back-card">
                 <i class="fas fa-arrow-left"></i>
                 <span>Back to List</span>
             </a>
@@ -157,9 +175,11 @@ include_once '../../includes/admin_topbar.php';
                 <a href="edit.php?id=<?php echo $commission_id; ?>" class="btn btn-edit">
                     <i class="fas fa-edit"></i> Edit
                 </a>
+                <?php if ($is_admin): ?>
                 <a href="delete.php?id=<?php echo $commission_id; ?>" class="btn btn-delete" onclick="return confirmDelete(<?php echo $commission_id; ?>)">
                     <i class="fas fa-trash"></i> Delete
                 </a>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -277,7 +297,8 @@ include_once '../../includes/admin_topbar.php';
                         </span>
                     </div>
                     
-                    <!-- Allocate to Capital -->
+                    <!-- Allocate to Capital (admin only) -->
+                    <?php if ($is_admin): ?>
                     <div class="amount-row allocation-row">
                         <span class="amount-row-label">
                             <i class="fas fa-building"></i>
@@ -290,6 +311,7 @@ include_once '../../includes/admin_topbar.php';
                             <?php echo formatCurrency($allocated_amount); ?>
                         </span>
                     </div>
+                    <?php endif; ?>
                     
                 </div>
                 
@@ -371,20 +393,28 @@ include_once '../../includes/admin_topbar.php';
         ACTION BUTTONS
         ============================================================ -->
         <div class="view-actions">
-            <a href="index.php<?php echo $branch_qs; ?>" class="btn btn-back">
+            <a href="<?php echo $is_admin ? 'index.php' : 'index_employee.php'; ?><?php echo $branch_qs; ?>" class="btn btn-back">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
             <a href="edit.php?id=<?php echo $commission_id; ?>" class="btn btn-edit">
                 <i class="fas fa-edit"></i> Edit
             </a>
+            <?php if ($is_admin): ?>
             <a href="delete.php?id=<?php echo $commission_id; ?>" class="btn btn-delete" onclick="return confirmDelete(<?php echo $commission_id; ?>)">
                 <i class="fas fa-trash"></i> Delete
             </a>
+            <?php endif; ?>
         </div>
 
     </div>
     
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php 
+    if ($is_admin) {
+        include_once '../../includes/admin_footer.php';
+    } else {
+        include_once '../../includes/employee_footer.php';
+    }
+    ?>
 </div>
 
 <!-- ============================================================
@@ -420,13 +450,38 @@ html.dark-mode {
     --view-shadow-lg: rgba(0,0,0,0.5);
 }
 
-body {
-    background: var(--view-bg) !important;
-    color: var(--view-text);
-    transition: background 0.3s ease, color 0.3s ease;
+/* ✅ FIXED: Proper overflow + margins for both employee and admin */
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+    width: 100% !important;
 }
 
-.main-wrapper { background: var(--view-bg) !important; }
+/* ✅ Admin layout */
+.main-wrapper {
+    overflow-x: hidden !important;
+    max-width: 100% !important;
+    background: var(--view-bg) !important;
+}
+
+/* ✅ Employee layout - margins kwa sidebar */
+<?php if (!$is_admin): ?>
+.main-wrapper {
+    margin-left: 240px;
+    width: calc(100% - 240px);
+    padding-top: 56px;
+    min-height: 100vh;
+    transition: margin-left 0.3s ease, width 0.3s ease;
+    position: relative;
+}
+@media (max-width: 768px) {
+    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
+}
+@media (max-width: 480px) {
+    .main-wrapper { padding-top: 44px; }
+}
+<?php endif; ?>
 
 .main-content {
     background: var(--view-bg) !important;
@@ -1212,10 +1267,11 @@ html.dark-mode .notes-box {
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1024px) {
+    .main-content { padding: 16px 18px !important; }
+}
 @media (max-width: 768px) {
-    .main-content {
-        padding: 12px !important;
-    }
+    .main-content { padding: 12px !important; }
     
     .branch-status-card {
         flex-direction: column;
@@ -1224,9 +1280,7 @@ html.dark-mode .notes-box {
         padding: 14px 16px;
     }
     
-    .branch-status-info {
-        width: 100%;
-    }
+    .branch-status-info { width: 100%; }
     
     .btn-back-card {
         width: 100%;
@@ -1296,13 +1350,9 @@ html.dark-mode .notes-box {
 }
 
 @media (max-width: 480px) {
-    .main-content {
-        padding: 10px !important;
-    }
+    .main-content { padding: 10px !important; }
     
-    .branch-status-name {
-        font-size: 15px;
-    }
+    .branch-status-name { font-size: 15px; }
     
     .branch-status-icon {
         width: 44px;
@@ -1310,13 +1360,9 @@ html.dark-mode .notes-box {
         font-size: 18px;
     }
     
-    .page-header-left h2 {
-        font-size: 17px;
-    }
+    .page-header-left h2 { font-size: 17px; }
     
-    .view-card-top {
-        padding: 18px 18px;
-    }
+    .view-card-top { padding: 18px 18px; }
     
     .top-icon {
         width: 54px;
@@ -1328,9 +1374,7 @@ html.dark-mode .notes-box {
         font-size: clamp(20px, 7vw, 26px);
     }
     
-    .view-card-body {
-        padding: 16px 14px;
-    }
+    .view-card-body { padding: 16px 14px; }
     
     .providers-table thead th,
     .providers-table tbody td {

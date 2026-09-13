@@ -5,6 +5,7 @@
 // ✅ NEW: BLUE branch card
 // ✅ NEW: Single continuous table (all providers 1-30)
 // ✅ NEW: Red line separator between branches
+// ✅ REMOVED: Edit button (only View + Delete remain)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -558,7 +559,7 @@ include_once '../../includes/admin_topbar.php';
                                 <th class="text-right">Total Commission</th>
                                 <th>Last Date</th>
                                 <th>Added By</th>
-                                <th style="width: 130px;">Actions</th>
+                                <th style="width: 100px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -637,18 +638,14 @@ include_once '../../includes/admin_topbar.php';
                                     </td>
                                     <td>
                                         <div class="provider-actions">
+                                            <!-- ✅ VIEW ONLY -->
                                             <a href="view_provider_commissions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $p['branch_id']; ?>" 
                                                class="btn-provider btn-provider-view" 
-                                               title="View Commissions">
+                                               title="View All Commissions">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                             
-                                            <a href="add.php?branch_id=<?php echo $p['branch_id']; ?>&provider_id=<?php echo $p['provider_id']; ?>" 
-                                               class="btn-provider btn-provider-edit" 
-                                               title="Add/Edit Commission">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            
+                                            <!-- ✅ DELETE ONLY -->
                                             <a href="index.php?delete_provider_commissions=1&branch_id=<?php echo $p['branch_id']; ?>&provider_id=<?php echo $p['provider_id']; ?>" 
                                                class="btn-provider btn-provider-delete" 
                                                onclick="return confirmDeleteCommissions('<?php echo addslashes($p['provider_name']); ?>', <?php echo $p['commission_count']; ?>)"
@@ -1631,13 +1628,13 @@ html.dark-mode .added-by-cell i { color: #FBBF24; }
 /* Provider Actions */
 .provider-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     justify-content: center;
     align-items: center;
 }
 .btn-provider {
-    width: 36px;
-    height: 36px;
+    width: 38px;
+    height: 38px;
     border-radius: 10px;
     border: none;
     display: inline-flex;
@@ -1646,7 +1643,7 @@ html.dark-mode .added-by-cell i { color: #FBBF24; }
     cursor: pointer;
     transition: all 0.25s ease;
     text-decoration: none;
-    font-size: 14px;
+    font-size: 15px;
     position: relative;
     overflow: hidden;
 }
@@ -1661,18 +1658,6 @@ html.dark-mode .added-by-cell i { color: #FBBF24; }
     color: #FFFFFF;
     transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
-}
-.btn-provider-edit {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #D97706;
-    border: 1.5px solid #FCD34D;
-    box-shadow: 0 2px 6px rgba(217, 119, 6, 0.15);
-}
-.btn-provider-edit:hover {
-    background: linear-gradient(135deg, #D97706, #F59E0B);
-    color: #FFFFFF;
-    transform: translateY(-3px) scale(1.05);
-    box-shadow: 0 6px 16px rgba(217, 119, 6, 0.4);
 }
 .btn-provider-delete {
     background: linear-gradient(135deg, #FEE2E2, #FECACA);
@@ -1689,10 +1674,6 @@ html.dark-mode .added-by-cell i { color: #FBBF24; }
 html.dark-mode .btn-provider-view {
     background: linear-gradient(135deg, #1E3A5F, #1E40AF);
     color: #60A5FA; border-color: #3B82F6;
-}
-html.dark-mode .btn-provider-edit {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-    color: #FBBF24; border-color: #F59E0B;
 }
 html.dark-mode .btn-provider-delete {
     background: linear-gradient(135deg, #7F1D1D, #991B1B);
@@ -1801,8 +1782,8 @@ html.dark-mode .btn-provider-delete {
     .data-table tbody td { padding: 8px 10px; font-size: 11px; }
     .provider-icon-circle { width: 32px; height: 32px; font-size: 14px; }
     .provider-name-text { font-size: 12px; }
-    .provider-actions { flex-direction: column; gap: 4px; }
-    .btn-provider { width: 28px; height: 28px; font-size: 12px; }
+    .provider-actions { gap: 5px; }
+    .btn-provider { width: 32px; height: 32px; font-size: 13px; }
     .scroll-btn { width: 36px; height: 36px; font-size: 14px; }
     .scroll-label { font-size: 10px; }
 }
