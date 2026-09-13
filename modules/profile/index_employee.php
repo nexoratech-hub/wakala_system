@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: modules/profile/index.php
-// WAKALA FINANCIAL SYSTEM - USER PROFILE
-// RED THEME + EDIT INFO + CHANGE PASSWORD + ACTIVITY LOG
+// FILE: modules/profile/index_employee.php
+// WAKALA FINANCIAL SYSTEM - EMPLOYEE PROFILE
+// RED THEME + EDIT INFO (NO CHANGE PASSWORD)
 // PROFILE PICTURE: MAX 15MB
 // ================================================================
 
@@ -137,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
         $db->commit();
 
         $_SESSION['success_message'] = 'Profile updated successfully!';
-        header('Location: index.php');
+        header('Location: index_employee.php');
         exit();
 
     } catch (Exception $e) {
@@ -147,45 +147,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
         $stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
         $stmt->execute([$user_id]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-}
-
-// ============================================================
-// HANDLE: CHANGE PASSWORD
-// ============================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_password') {
-    try {
-        $current_pass = $_POST['current_password'] ?? '';
-        $new_pass     = $_POST['new_password'] ?? '';
-        $confirm_pass = $_POST['confirm_password'] ?? '';
-
-        if ($current_pass === '') throw new Exception('Please enter your current password.');
-        if ($new_pass === '')     throw new Exception('Please enter a new password.');
-        if (strlen($new_pass) < 6) throw new Exception('New password must be at least 6 characters.');
-        if ($new_pass !== $confirm_pass) throw new Exception('New passwords do not match.');
-
-        if (!password_verify($current_pass, $user['password_hash'])) {
-            throw new Exception('Current password is incorrect.');
-        }
-        if ($current_pass === $new_pass) {
-            throw new Exception('New password must be different from current password.');
-        }
-
-        $new_hash = password_hash($new_pass, PASSWORD_DEFAULT);
-
-        $stmt = $db->prepare("UPDATE employees SET password_hash = ?, updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$new_hash, $user_id]);
-
-        if (function_exists('logActivity')) {
-            logActivity($user_id, 'Change Password', 'Profile', $user_id, '', 'Changed own password');
-        }
-
-        $_SESSION['success_message'] = 'Password changed successfully!';
-        header('Location: index.php');
-        exit();
-
-    } catch (Exception $e) {
-        $error_message = $e->getMessage();
     }
 }
 
@@ -247,13 +208,7 @@ $status_icon = [
 ][$emp_status] ?? 'fa-circle';
 
 include_once '../../includes/admin_header.php';
-
-if ($role === 'admin' || $role === 'super_admin') {
-    include_once '../../includes/admin_sidebar.php';
-} else {
-    include_once '../../includes/employee_sidebar.php';
-}
-
+include_once '../../includes/employee_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
@@ -264,7 +219,7 @@ include_once '../../includes/admin_topbar.php';
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-user-circle"></i> My Profile</h2>
-                <p class="text-muted">Manage your personal information and account settings</p>
+                <p class="text-muted">View and update your personal information</p>
             </div>
         </div>
 
@@ -381,7 +336,7 @@ include_once '../../includes/admin_topbar.php';
 
             <div class="profile-main">
 
-                <!-- EDIT PROFILE INFO -->
+                <!-- EDIT PROFILE INFO (ONLY FORM FOR EMPLOYEE) -->
                 <div class="form-card">
                     <div class="form-card-header">
                         <div class="form-card-header-left">
@@ -496,77 +451,6 @@ include_once '../../includes/admin_topbar.php';
                         <div class="form-card-footer">
                             <button type="submit" class="btn btn-primary">
                                 <i class="fas fa-save"></i> Save Profile
-                            </button>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- CHANGE PASSWORD -->
-                <div class="form-card">
-                    <div class="form-card-header">
-                        <div class="form-card-header-left">
-                            <div class="form-card-icon">
-                                <i class="fas fa-lock"></i>
-                            </div>
-                            <div>
-                                <h3>Change Password</h3>
-                                <p>Keep your account secure</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <form method="POST" action="" onsubmit="return validatePassword()">
-                        <input type="hidden" name="action" value="change_password">
-
-                        <div class="form-card-body">
-                            <div class="form-row">
-                                <div class="form-group full-width">
-                                    <label>Current Password <span class="required">*</span></label>
-                                    <div class="password-wrapper">
-                                        <input type="password" name="current_password" id="current_password" class="form-control"
-                                               placeholder="Enter your current password" required>
-                                        <button type="button" class="toggle-password" onclick="togglePassword('current_password', this)">
-                                            <i class="fas fa-eye"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>New Password <span class="required">*</span></label>
-                                    <div class="password-wrapper">
-                                        <input type="password" name="new_password" id="new_password" class="form-control"
-                                               placeholder="At least 6 characters" minlength="6" required>
-                                        <button type="button" class="toggle-password" onclick="togglePassword('new_password', this)">
-                                            <i class="fas fa-eye"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label>Confirm New Password <span class="required">*</span></label>
-                                    <div class="password-wrapper">
-                                        <input type="password" name="confirm_password" id="confirm_password" class="form-control"
-                                               placeholder="Repeat new password" minlength="6" required>
-                                        <button type="button" class="toggle-password" onclick="togglePassword('confirm_password', this)">
-                                            <i class="fas fa-eye"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="password-strength" id="passwordStrength" style="display:none;">
-                                <div class="strength-bar">
-                                    <div class="strength-fill" id="strengthFill"></div>
-                                </div>
-                                <span class="strength-text" id="strengthText"></span>
-                            </div>
-
-                        </div>
-
-                        <div class="form-card-footer">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-key"></i> Change Password
                             </button>
                         </div>
                     </form>
@@ -966,31 +850,6 @@ html.dark-mode .form-card-footer { background: #0f172a; }
 }
 .form-control::placeholder { color: var(--text-light); font-size: 12px; }
 
-.password-wrapper { position: relative; display: flex; align-items: center; }
-.password-wrapper .form-control { padding-right: 46px; }
-.toggle-password {
-    position: absolute; right: 12px; top: 50%;
-    transform: translateY(-50%);
-    background: transparent; border: none;
-    color: var(--text-muted); cursor: pointer;
-    font-size: 14px; padding: 6px; border-radius: 6px;
-}
-.toggle-password:hover { color: var(--red-primary); background: rgba(220, 38, 38, 0.1); }
-
-.password-strength { margin-top: 10px; animation: slideDown 0.3s ease; }
-.strength-bar {
-    height: 6px; background: var(--border-color);
-    border-radius: 4px; overflow: hidden; margin-bottom: 6px;
-}
-.strength-fill {
-    height: 100%; width: 0%; border-radius: 4px;
-    transition: all 0.3s ease;
-}
-.strength-text {
-    font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-
 .section-divider {
     display: flex; align-items: center; gap: 12px;
     margin: 24px 0 18px 0;
@@ -1281,56 +1140,6 @@ function removeProfilePic() {
     if (placeholder) placeholder.style.display = 'block';
 }
 
-function togglePassword(fieldId, btn) {
-    var field = document.getElementById(fieldId);
-    var icon = btn.querySelector('i');
-    if (!field) return;
-    if (field.type === 'password') {
-        field.type = 'text';
-        icon.classList.remove('fa-eye');
-        icon.classList.add('fa-eye-slash');
-    } else {
-        field.type = 'password';
-        icon.classList.remove('fa-eye-slash');
-        icon.classList.add('fa-eye');
-    }
-}
-
-var newPasswordInput = document.getElementById('new_password');
-if (newPasswordInput) {
-    newPasswordInput.addEventListener('input', function() {
-        var val = this.value;
-        var meter = document.getElementById('passwordStrength');
-        var fill = document.getElementById('strengthFill');
-        var text = document.getElementById('strengthText');
-
-        if (val === '') { meter.style.display = 'none'; return; }
-        meter.style.display = 'block';
-
-        var score = 0;
-        if (val.length >= 6) score++;
-        if (val.length >= 10) score++;
-        if (/[A-Z]/.test(val)) score++;
-        if (/[0-9]/.test(val)) score++;
-        if (/[^A-Za-z0-9]/.test(val)) score++;
-
-        var levels = [
-            { pct: 15, color: '#DC2626', label: 'Very Weak' },
-            { pct: 30, color: '#DC2626', label: 'Weak' },
-            { pct: 55, color: '#F59E0B', label: 'Fair' },
-            { pct: 75, color: '#3B82F6', label: 'Good' },
-            { pct: 90, color: '#10B981', label: 'Strong' },
-            { pct: 100, color: '#059669', label: 'Very Strong' }
-        ];
-        var level = levels[Math.min(score, levels.length - 1)];
-
-        fill.style.width = level.pct + '%';
-        fill.style.background = level.color;
-        text.textContent = level.label;
-        text.style.color = level.color;
-    });
-}
-
 function validateProfile() {
     var full_name = document.querySelector('input[name="full_name"]').value.trim();
     var email     = document.querySelector('input[name="email"]').value.trim();
@@ -1338,18 +1147,6 @@ function validateProfile() {
     if (full_name === '') { alert('Please enter your full name.'); return false; }
     if (email === '')     { alert('Please enter your email.'); return false; }
     if (phone === '')     { alert('Please enter your phone number.'); return false; }
-    return true;
-}
-
-function validatePassword() {
-    var current = document.getElementById('current_password').value;
-    var newPass = document.getElementById('new_password').value;
-    var confirm = document.getElementById('confirm_password').value;
-    if (current === '') { alert('Please enter your current password.'); return false; }
-    if (newPass === '') { alert('Please enter a new password.'); return false; }
-    if (newPass.length < 6) { alert('New password must be at least 6 characters.'); return false; }
-    if (newPass !== confirm) { alert('New passwords do not match.'); return false; }
-    if (current === newPass) { alert('New password must be different from current.'); return false; }
     return true;
 }
 

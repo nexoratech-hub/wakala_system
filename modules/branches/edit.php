@@ -2,26 +2,23 @@
 // ================================================================
 // FILE: modules/branches/edit.php
 // WAKALA FINANCIAL SYSTEM - EDIT BRANCH
-// FIXED: No variable collision with topbar
+// RED THEME + LIVE PREVIEW + MANAGER PICKER
 // ================================================================
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+if (session_status() === PHP_SESSION_NONE) session_start();
 
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
 
-// Check permission - Only admin and super_admin can access
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
@@ -30,119 +27,142 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 // ============================================================
 // GET BRANCH ID
 // ============================================================
-$branch_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
-
-if ($branch_id <= 0) {
-    $_SESSION['error_message'] = 'Invalid branch selected.';
+$id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+if ($id <= 0) {
+    $_SESSION['error_message'] = 'Invalid branch ID.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// NO SESSION FORCING - URL IS SOURCE OF TRUTH
-// ============================================================
-unset($_SESSION['selected_branch']);
-
-// ============================================================
-// GET BRANCH DATA (uses $edit_branch to avoid collision)
+// FETCH BRANCH
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-$stmt->execute([$branch_id]);
-$edit_branch = $stmt->fetch();
+$stmt->execute([$id]);
+$branch = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$edit_branch) {
+if (!$branch) {
     $_SESSION['error_message'] = 'Branch not found.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET EMPLOYEES FOR MANAGER DROPDOWN
+// LOAD EMPLOYEES IN THIS BRANCH (for manager dropdown)
 // ============================================================
-$stmt = $db->prepare("SELECT id, full_name FROM employees WHERE is_active = 1 ORDER BY full_name");
-$stmt->execute();
-$edit_employees = $stmt->fetchAll();
+$branch_employees = [];
+try {
+    $stmt = $db->prepare("
+        SELECT id, employee_id, full_name, role
+        FROM employees
+        WHERE branch_id = ? AND is_active = 1
+        ORDER BY full_name ASC
+    ");
+    $stmt->execute([$id]);
+    $branch_employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branch_employees = [];
+}
 
 // ============================================================
-// GET BRANCH PROVIDERS COUNT
-// ============================================================
-$stmt = $db->prepare("SELECT COUNT(*) FROM branch_providers WHERE branch_id = ?");
-$stmt->execute([$branch_id]);
-$provider_count = $stmt->fetchColumn();
-
-// ============================================================
-// HANDLE FORM SUBMISSION
+// HANDLE UPDATE
 // ============================================================
 $error_message = '';
-$show_error = false;
-$success_message = '';
-$show_success = false;
+$form_data = [];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'edit_branch') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_branch') {
     try {
-        $branch_code = strtoupper(trim($_POST['branch_code'] ?? ''));
+        $db->beginTransaction();
+
         $branch_name = trim($_POST['branch_name'] ?? '');
-        $location = trim($_POST['location'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $email = trim($_POST['email'] ?? '');
-        $manager_id = intval($_POST['manager_id'] ?? 0);
-        $is_active = intval($_POST['is_active'] ?? 1);
-        
-        // Validate
-        if (empty($branch_code)) {
-            throw new Exception('Please enter a branch code.');
+        $branch_code = trim($_POST['branch_code'] ?? '');
+        $location    = trim($_POST['location'] ?? '');
+        $phone       = trim($_POST['phone'] ?? '');
+        $email       = trim($_POST['email'] ?? '');
+        $address     = trim($_POST['address'] ?? '');
+        $manager_id  = intval($_POST['manager_id'] ?? 0);
+        $is_active   = isset($_POST['is_active']) ? 1 : 0;
+
+        // Validation
+        if ($branch_name === '') throw new Exception('Branch name is required.');
+        if ($branch_code === '') throw new Exception('Branch code is required.');
+
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new Exception('Invalid email format.');
         }
-        if (empty($branch_name)) {
-            throw new Exception('Please enter a branch name.');
-        }
-        
-        // Check if branch code already exists (excluding current)
-        $check_stmt = $db->prepare("SELECT id FROM branches WHERE branch_code = ? AND id != ?");
-        $check_stmt->execute([$branch_code, $branch_id]);
-        if ($check_stmt->fetch()) {
-            throw new Exception('Branch code "' . $branch_code . '" already exists. Please use a different code.');
-        }
-        
-        // Check if branch name already exists (excluding current)
-        $check_stmt = $db->prepare("SELECT id FROM branches WHERE branch_name = ? AND id != ?");
-        $check_stmt->execute([$branch_name, $branch_id]);
-        if ($check_stmt->fetch()) {
-            throw new Exception('Branch name "' . $branch_name . '" already exists. Please use a different name.');
-        }
-        
-        // Update branch
-        $update_stmt = $db->prepare("UPDATE branches 
-            SET branch_code = ?, branch_name = ?, location = ?, phone = ?, email = ?, manager_id = ?, is_active = ? 
-            WHERE id = ?");
-        
-        $update_stmt->execute([
-            $branch_code,
-            $branch_name,
-            $location,
-            $phone,
-            $email,
-            $manager_id > 0 ? $manager_id : null,
-            $is_active,
-            $branch_id
+
+        // Uniqueness
+        $stmt = $db->prepare("SELECT COUNT(*) FROM branches WHERE branch_name = ? AND id != ?");
+        $stmt->execute([$branch_name, $id]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Branch name already exists.');
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM branches WHERE branch_code = ? AND id != ?");
+        $stmt->execute([$branch_code, $id]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Branch code already exists.');
+
+        // Manager validation
+        $manager_id_val = $manager_id > 0 ? $manager_id : null;
+
+        // Update
+        $stmt = $db->prepare("
+            UPDATE branches SET
+                branch_name = ?,
+                branch_code = ?,
+                location = ?,
+                phone = ?,
+                email = ?,
+                address = ?,
+                manager_id = ?,
+                is_active = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([
+            $branch_name, $branch_code, $location ?: null, $phone ?: null,
+            $email ?: null, $address ?: null, $manager_id_val, $is_active, $id
         ]);
-        
-        // Log activity
-        logActivity($user_id, 'Edit Branch', 'Branches', $branch_id, '', 'Updated branch: ' . $branch_name);
-        
+
+        // Log
+        if (function_exists('logActivity')) {
+            logActivity(
+                $user_id,
+                'Edit Branch',
+                'Branches',
+                $id,
+                $branch['branch_code'],
+                'Updated branch: ' . $branch_name
+            );
+        }
+
+        $db->commit();
+
         $_SESSION['success_message'] = 'Branch "' . $branch_name . '" updated successfully!';
-        header('Location: view.php?id=' . $branch_id);
+        header('Location: view.php?id=' . $id);
         exit();
-        
+
     } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
-        $show_error = true;
-        
-        // Refresh branch data after error
-        $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-        $stmt->execute([$branch_id]);
-        $edit_branch = $stmt->fetch();
+        $form_data = $_POST;
     }
 }
+
+// ============================================================
+// FORM VALUES
+// ============================================================
+$form_name     = $form_data['branch_name'] ?? $branch['branch_name'] ?? '';
+$form_code     = $form_data['branch_code'] ?? $branch['branch_code'] ?? '';
+$form_location = $form_data['location']    ?? $branch['location']    ?? '';
+$form_phone    = $form_data['phone']       ?? $branch['phone']       ?? '';
+$form_email    = $form_data['email']       ?? $branch['email']       ?? '';
+$form_address  = $form_data['address']     ?? $branch['address']     ?? '';
+$form_manager  = isset($form_data['manager_id'])
+               ? intval($form_data['manager_id'])
+               : intval($branch['manager_id'] ?? 0);
+
+$form_is_active = isset($form_data['is_active'])
+                ? 1
+                : intval($branch['is_active'] ?? 1);
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
@@ -151,941 +171,948 @@ include_once '../../includes/admin_topbar.php';
 
 <div class="main-wrapper">
     <div class="main-content">
-        
-        <!-- ============================================================
-        PERSISTENT RED BRANCH STATUS CARD
-        ============================================================ -->
-        <div class="branch-status-card">
-            <div class="branch-status-icon">
-                <i class="fas fa-edit"></i>
-            </div>
-            <div class="branch-status-info">
-                <span class="branch-status-label">Editing Branch</span>
-                <span class="branch-status-name"><?php echo htmlspecialchars($edit_branch['branch_name']); ?></span>
-                <span class="branch-status-code"><?php echo htmlspecialchars($edit_branch['branch_code']); ?></span>
-                <?php if (!empty($edit_branch['location'])): ?>
-                    <span class="branch-status-location">
-                        <i class="fas fa-map-marker-alt"></i>
-                        <?php echo htmlspecialchars($edit_branch['location']); ?>
-                    </span>
-                <?php endif; ?>
-            </div>
-            <div class="branch-status-stats">
-                <div class="status-stat-item">
-                    <span class="status-stat-number"><?php echo $provider_count; ?></span>
-                    <span class="status-stat-label">Providers</span>
-                </div>
-            </div>
-            <a href="view.php?id=<?php echo $branch_id; ?>" class="btn-back-card">
-                <i class="fas fa-arrow-left"></i>
-                <span>Back to View</span>
-            </a>
-        </div>
 
-        <!-- ===== PAGE HEADER ===== -->
+        <!-- PAGE HEADER -->
         <div class="page-header">
-            <div class="page-header-left">
+            <div class="header-left">
                 <h2><i class="fas fa-edit"></i> Edit Branch</h2>
-                <span class="page-subtitle">ID: #<?php echo $branch_id; ?></span>
+                <p class="text-muted">
+                    <i class="fas fa-tag"></i>
+                    <?php echo htmlspecialchars($branch['branch_code'] ?? 'N/A'); ?>
+                    &nbsp;·&nbsp;
+                    <?php echo htmlspecialchars($branch['branch_name']); ?>
+                </p>
             </div>
-            <div class="page-header-right">
-                <a href="view.php?id=<?php echo $branch_id; ?>" class="btn btn-view">
+            <div class="header-right">
+                <a href="view.php?id=<?php echo $id; ?>" class="btn btn-back">
                     <i class="fas fa-eye"></i> View
+                </a>
+                <a href="index.php" class="btn btn-back">
+                    <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
         </div>
 
-        <!-- ============================================================
-        SUCCESS/ERROR MESSAGES
-        ============================================================ -->
-        <?php if ($show_error && !empty($error_message)): ?>
+        <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo $error_message; ?></span>
+                <i class="fas fa-exclamation-circle"></i>
+                <span><?php echo htmlspecialchars($error_message); ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        FORM
-        ============================================================ -->
-        <div class="form-container">
-            <form method="POST" action="" class="main-form" id="branchForm" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="edit_branch">
-                
-                <!-- ===== BASIC INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
-                        <span class="section-badge">Required fields marked with *</span>
+        <form method="POST" action="" id="branchForm" onsubmit="return validateForm()">
+            <input type="hidden" name="action" value="update_branch">
+
+            <!-- ============================================================
+            MAIN CARD
+            ============================================================ -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon">
+                            <i class="fas fa-store-alt"></i>
+                        </div>
+                        <div>
+                            <h3>Branch Information</h3>
+                            <p>Update branch details below</p>
+                        </div>
                     </div>
-                    
+                    <div class="form-card-badge">
+                        <i class="fas fa-pen-to-square"></i> Editing
+                    </div>
+                </div>
+
+                <div class="form-card-body">
+
+                    <!-- Row: Name + Code -->
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="branch_code">Branch Code <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-tag"></i></span>
-                                <input type="text" id="branch_code" name="branch_code" 
-                                       value="<?php echo htmlspecialchars($edit_branch['branch_code']); ?>" 
-                                       class="form-control" placeholder="e.g., DSM" required>
-                            </div>
-                            <small>Unique code for the branch (e.g., DSM, KND, MBZ)</small>
+                            <label>Branch Name <span class="required">*</span></label>
+                            <input type="text" name="branch_name" id="branchName"
+                                   class="form-control"
+                                   value="<?php echo htmlspecialchars($form_name); ?>"
+                                   placeholder="e.g. Kariakoo Branch"
+                                   required
+                                   oninput="updatePreview()">
                         </div>
                         <div class="form-group">
-                            <label for="branch_name">Branch Name <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <input type="text" id="branch_name" name="branch_name" 
-                                       value="<?php echo htmlspecialchars($edit_branch['branch_name']); ?>" 
-                                       class="form-control" placeholder="e.g., Dar es Salaam Branch" required>
+                            <label>Branch Code <span class="required">*</span></label>
+                            <input type="text" name="branch_code" id="branchCode"
+                                   class="form-control code-input"
+                                   value="<?php echo htmlspecialchars($form_code); ?>"
+                                   placeholder="e.g. KRK001"
+                                   required
+                                   oninput="updatePreview()">
+                            <p class="field-hint">
+                                <i class="fas fa-exclamation-triangle" style="color:#F59E0B;"></i>
+                                Changing the code may affect existing reports.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Row: Location + Phone -->
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Location</label>
+                            <input type="text" name="location" id="branchLocation"
+                                   class="form-control"
+                                   value="<?php echo htmlspecialchars($form_location); ?>"
+                                   placeholder="e.g. Kariakoo, Dar es Salaam"
+                                   oninput="updatePreview()">
+                        </div>
+                        <div class="form-group">
+                            <label>Phone</label>
+                            <input type="text" name="phone" id="branchPhone"
+                                   class="form-control"
+                                   value="<?php echo htmlspecialchars($form_phone); ?>"
+                                   placeholder="+255 7XX XXX XXX"
+                                   oninput="updatePreview()">
+                        </div>
+                    </div>
+
+                    <!-- Row: Email + Manager -->
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Email</label>
+                            <input type="email" name="email" class="form-control"
+                                   value="<?php echo htmlspecialchars($form_email); ?>"
+                                   placeholder="e.g. kariakoo@wakala.co.tz">
+                        </div>
+                        <div class="form-group">
+                            <label>Branch Manager</label>
+                            <select name="manager_id" id="branchManager" class="form-control"
+                                    onchange="updatePreview()">
+                                <option value="0">— No Manager —</option>
+                                <?php foreach ($branch_employees as $e): ?>
+                                    <option value="<?php echo $e['id']; ?>"
+                                        <?php echo $form_manager == $e['id'] ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($e['full_name']); ?>
+                                        (<?php echo htmlspecialchars($e['employee_id'] ?? '-'); ?>)
+                                        — <?php echo ucfirst($e['role'] ?? 'employee'); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if (count($branch_employees) === 0): ?>
+                                <p class="field-hint">
+                                    <i class="fas fa-info-circle"></i>
+                                    No employees assigned to this branch yet.
+                                </p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- Row: Address -->
+                    <div class="form-row">
+                        <div class="form-group full-width">
+                            <label>Physical Address</label>
+                            <input type="text" name="address" class="form-control"
+                                   value="<?php echo htmlspecialchars($form_address); ?>"
+                                   placeholder="e.g. Plot 45, Msimbazi Street, Kariakoo">
+                        </div>
+                    </div>
+
+                    <!-- Status Toggle -->
+                    <div class="status-toggle-row">
+                        <div class="status-toggle-info">
+                            <div class="status-toggle-icon <?php echo $form_is_active ? 'icon-active' : 'icon-inactive'; ?>">
+                                <i class="fas fa-<?php echo $form_is_active ? 'check-circle' : 'times-circle'; ?>" id="statusIcon"></i>
                             </div>
-                            <small>Full name of the branch</small>
+                            <div>
+                                <span class="status-toggle-title" id="statusTitle">
+                                    <?php echo $form_is_active ? 'Branch is Active' : 'Branch is Inactive'; ?>
+                                </span>
+                                <span class="status-toggle-desc">
+                                    Inactive branches are hidden from dropdowns and reports.
+                                </span>
+                            </div>
+                        </div>
+                        <label class="toggle-switch-wrapper">
+                            <input type="checkbox" name="is_active" value="1"
+                                   id="isActiveToggle"
+                                   <?php echo $form_is_active ? 'checked' : ''; ?>
+                                   onchange="updateStatusLabel(); updatePreview();">
+                            <span class="toggle-switch"></span>
+                            <span class="toggle-label" id="toggleLabel">
+                                <?php echo $form_is_active ? 'Active' : 'Inactive'; ?>
+                            </span>
+                        </label>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- ============================================================
+            LIVE PREVIEW
+            ============================================================ -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon">
+                            <i class="fas fa-eye"></i>
+                        </div>
+                        <div>
+                            <h3>Live Preview</h3>
+                            <p>How the branch card will look</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- ===== CONTACT INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-address-card"></i> Contact Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="location">Location</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-map-marker-alt"></i></span>
-                                <input type="text" id="location" name="location" 
-                                       value="<?php echo htmlspecialchars($edit_branch['location'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., Dar es Salaam, Tanzania">
+                <div class="form-card-body">
+                    <div class="preview-center">
+                        <div class="preview-branch-card" id="previewCard">
+                            <div class="preview-card-header">
+                                <div class="preview-card-header-left">
+                                    <div class="preview-icon">
+                                        <i class="fas fa-store"></i>
+                                    </div>
+                                    <div class="preview-card-title">
+                                        <div class="preview-name" id="previewName">
+                                            <?php echo htmlspecialchars($form_name ?: 'Branch Name'); ?>
+                                        </div>
+                                        <?php if (!empty($form_code)): ?>
+                                            <div class="preview-code" id="previewCode">
+                                                <?php echo htmlspecialchars($form_code); ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="preview-code" id="previewCode">CODE</div>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <span class="preview-status-pill <?php echo $form_is_active ? 'active' : 'inactive'; ?>"
+                                      id="previewStatusPill">
+                                    <i class="fas fa-<?php echo $form_is_active ? 'check-circle' : 'times-circle'; ?>" id="previewStatusIcon"></i>
+                                    <span id="previewStatusText"><?php echo $form_is_active ? 'Active' : 'Inactive'; ?></span>
+                                </span>
                             </div>
-                            <small>Physical address of the branch</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="phone">Phone Number</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-phone"></i></span>
-                                <input type="text" id="phone" name="phone" 
-                                       value="<?php echo htmlspecialchars($edit_branch['phone'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., +255 700 000 000">
-                            </div>
-                            <small>Contact phone number</small>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="email">Email Address</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-envelope"></i></span>
-                                <input type="email" id="email" name="email" 
-                                       value="<?php echo htmlspecialchars($edit_branch['email'] ?? ''); ?>" 
-                                       class="form-control" placeholder="e.g., branch@wakala.com">
-                            </div>
-                            <small>Official email address for the branch</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="manager_id">Branch Manager</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user-tie"></i></span>
-                                <select id="manager_id" name="manager_id" class="form-control">
-                                    <option value="0">Select Manager</option>
-                                    <?php foreach ($edit_employees as $emp): ?>
-                                        <option value="<?php echo $emp['id']; ?>" <?php echo ($edit_branch['manager_id'] == $emp['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($emp['full_name']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <small>Assign a manager to this branch</small>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- ===== STATUS & ADDITIONAL ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-cog"></i> Status &amp; Additional</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="is_active">Branch Status</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-power-off"></i></span>
-                                <select id="is_active" name="is_active" class="form-control">
-                                    <option value="1" <?php echo ($edit_branch['is_active'] == 1) ? 'selected' : ''; ?>>Active</option>
-                                    <option value="0" <?php echo ($edit_branch['is_active'] == 0) ? 'selected' : ''; ?>>Inactive</option>
-                                </select>
+                            <?php if (!empty($form_location)): ?>
+                            <div class="preview-location" id="previewLocationRow">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <span id="previewLocation"><?php echo htmlspecialchars($form_location); ?></span>
                             </div>
-                            <small>Active branches are visible and operational</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Branch Info</label>
-                            <div class="info-display">
-                                <div class="info-item">
-                                    <span class="info-label">Created:</span>
-                                    <span class="info-value"><?php echo date('d M Y H:i', strtotime($edit_branch['created_at'])); ?></span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">Last Updated:</span>
-                                    <span class="info-value"><?php echo date('d M Y H:i', strtotime($edit_branch['updated_at'])); ?></span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">Providers:</span>
-                                    <span class="info-value"><?php echo $provider_count; ?> assigned</span>
-                                </div>
+                            <?php else: ?>
+                            <div class="preview-location" id="previewLocationRow" style="display:none;">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <span id="previewLocation"></span>
                             </div>
-                        </div>
-                    </div>
-                </div>
+                            <?php endif; ?>
 
-                <!-- ===== FORM ACTIONS ===== -->
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Update Branch
-                    </button>
-                    <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                        <i class="fas fa-undo"></i> Reset Changes
-                    </button>
-                    <a href="view.php?id=<?php echo $branch_id; ?>" class="btn btn-cancel">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
+                            <div class="preview-meta">
+                                <?php if (!empty($form_phone)): ?>
+                                <div class="preview-meta-item" id="previewPhoneRow">
+                                    <i class="fas fa-phone"></i>
+                                    <span id="previewPhone"><?php echo htmlspecialchars($form_phone); ?></span>
+                                </div>
+                                <?php else: ?>
+                                <div class="preview-meta-item" id="previewPhoneRow" style="display:none;">
+                                    <i class="fas fa-phone"></i>
+                                    <span id="previewPhone"></span>
+                                </div>
+                                <?php endif; ?>
+
+                                <?php if (!empty($form_email)): ?>
+                                <div class="preview-meta-item" id="previewEmailRow">
+                                    <i class="fas fa-envelope"></i>
+                                    <span id="previewEmail"><?php echo htmlspecialchars($form_email); ?></span>
+                                </div>
+                                <?php else: ?>
+                                <div class="preview-meta-item" id="previewEmailRow" style="display:none;">
+                                    <i class="fas fa-envelope"></i>
+                                    <span id="previewEmail"></span>
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </form>
-        </div>
+            </div>
+
+            <!-- ============================================================
+            WARNING BANNER
+            ============================================================ -->
+            <div class="warning-banner">
+                <div class="warning-icon">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <div class="warning-text">
+                    <strong>Important:</strong>
+                    Changing the branch code affects how this branch is referenced in reports.
+                    Make sure other systems use the new code if you change it.
+                </div>
+            </div>
+
+            <!-- ============================================================
+            FORM ACTIONS
+            ============================================================ -->
+            <div class="form-actions">
+                <a href="view.php?id=<?php echo $id; ?>" class="btn btn-secondary-large">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="button" class="btn btn-reset-large" onclick="resetForm()">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+                <button type="submit" class="btn btn-submit-large" id="submitBtn">
+                    <i class="fas fa-save"></i> Save Changes
+                </button>
+            </div>
+
+        </form>
 
     </div>
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-STYLES
-============================================================ -->
 <style>
 /* ============================================================
-   CSS VARIABLES
+   GLOBAL
    ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-content {
+    overflow-x: hidden !important; max-width: 100% !important;
+    width: 100% !important; padding: 16px 20px !important;
+}
+
 :root {
-    --form-bg: #f3f4f6;
-    --form-card-bg: #FFFFFF;
-    --form-text: #1F2937;
-    --form-text-secondary: #6B7280;
-    --form-text-light: #9CA3AF;
-    --form-border: #E5E7EB;
-    --form-input-bg: #F9FAFB;
-    --form-hover: #F3F4F6;
-    --form-shadow: rgba(0,0,0,0.06);
-    --form-shadow-lg: rgba(0,0,0,0.12);
-    --form-success-bg: #D1FAE5;
-    --form-success-text: #065F46;
-    --form-success-border: #A7F3D0;
-    --form-danger-bg: #FEE2E2;
-    --form-danger-text: #991B1B;
-    --form-danger-border: #FECACA;
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-input: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --red-primary: #DC2626;
+    --red-dark: #B91C1C;
 }
-
 html.dark-mode {
-    --form-bg: #0f172a;
-    --form-card-bg: #1E293B;
-    --form-text: #F1F5F9;
-    --form-text-secondary: #94A3B8;
-    --form-text-light: #64748B;
-    --form-border: #334155;
-    --form-input-bg: #374151;
-    --form-hover: #2D3A4F;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.5);
-    --form-success-bg: #065F46;
-    --form-success-text: #D1FAE5;
-    --form-success-border: #047857;
-    --form-danger-bg: #7F1D1D;
-    --form-danger-text: #FEE2E2;
-    --form-danger-border: #991B1B;
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
 }
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+.main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-body {
-    background: var(--form-bg) !important;
-    color: var(--form-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper { background: var(--form-bg) !important; }
-.main-content { background: var(--form-bg) !important; }
-
-/* ============================================================
-   PERSISTENT RED BRANCH STATUS CARD
-   ============================================================ */
-.branch-status-card {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    padding: 18px 24px;
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
-    border-radius: 12px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.35);
-    position: relative;
-    overflow: hidden;
-    animation: slideDown 0.3s ease forwards;
-    flex-wrap: wrap;
-}
-
-.branch-status-card::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    right: -10%;
-    width: 250px;
-    height: 250px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.branch-status-card::after {
-    content: '';
-    position: absolute;
-    bottom: -60%;
-    left: 20%;
-    width: 200px;
-    height: 200px;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.branch-status-icon {
-    width: 56px;
-    height: 56px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 24px;
-    color: #FFFFFF;
-    flex-shrink: 0;
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    position: relative;
-    z-index: 1;
-}
-
-.branch-status-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    position: relative;
-    z-index: 1;
-    flex: 1;
-}
-
-.branch-status-label {
-    font-size: 11px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.7);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.branch-status-name {
-    font-size: 20px;
-    font-weight: 700;
-    color: #FFFFFF;
-    letter-spacing: 0.3px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.branch-status-code {
-    font-size: 12px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.85);
-    padding: 3px 12px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.branch-status-location {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.7);
-}
-
-.branch-status-stats {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    position: relative;
-    z-index: 1;
-}
-
-.status-stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.status-stat-number {
-    font-size: 20px;
-    font-weight: 700;
-    color: #FFFFFF;
-    line-height: 1.2;
-}
-
-.status-stat-label {
-    font-size: 9px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.6);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.btn-back-card {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #FFFFFF;
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.3s ease;
-    position: relative;
-    z-index: 1;
-}
-
-.btn-back-card:hover {
-    background: rgba(255, 255, 255, 0.2);
-    color: #FFFFFF;
-}
-
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
+/* PAGE HEADER */
 .page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 18px; flex-wrap: wrap; gap: 12px;
 }
-
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
+.page-header .header-left h2 i { color: var(--red-primary); margin-right: 10px; }
+.page-header .header-left .text-muted {
+    font-size: 13px; color: var(--text-muted);
+    margin: 4px 0 0 0;
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'Courier New', monospace; font-weight: 600;
 }
+.header-right { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--form-text);
-    margin: 0;
-}
-
-.page-header-left h2 i { color: #DC2626; margin-right: 8px; }
-
-.page-subtitle {
-    font-size: 13px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 3px 12px;
-    border-radius: 12px;
-}
-
-.btn-view {
-    background: #DBEAFE;
-    color: #1D4ED8;
-    padding: 9px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+.btn {
+    padding: 10px 20px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
     transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+}
+.btn-back {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-back:hover {
+    background: #FEF2F2; color: var(--red-primary);
+    border-color: var(--red-primary); transform: translateY(-2px);
 }
 
-.btn-view:hover {
-    background: #BFDBFE;
-    transform: translateY(-1px);
-}
-
-html.dark-mode .btn-view {
-    background: #1E3A5F;
-    color: #60A5FA;
-}
-
-html.dark-mode .btn-view:hover {
-    background: #3B82F6;
-    color: #FFFFFF;
-}
-
-/* ============================================================
-   ALERTS
-   ============================================================ */
+/* ALERTS */
 .alert {
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    position: relative;
+    padding: 14px 18px; border-radius: 10px;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 12px;
     animation: slideDown 0.4s ease forwards;
 }
-
-.alert-danger {
-    background: var(--form-danger-bg);
-    color: var(--form-danger-text);
-    border: 1px solid var(--form-danger-border);
-}
-
-.alert-success {
-    background: var(--form-success-bg);
-    color: var(--form-success-text);
-    border: 1px solid var(--form-success-border);
-}
-
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 .alert i { font-size: 20px; flex-shrink: 0; }
-.alert span { flex: 1; }
-
-.alert-close {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-}
-
-.alert-close:hover { opacity: 1; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
 
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ============================================================
-   FORM CONTAINER
-   ============================================================ */
-.form-container {
-    background: var(--form-card-bg);
-    border-radius: 12px;
-    box-shadow: 0 1px 3px var(--form-shadow);
-    border: 1px solid var(--form-border);
+/* FORM CARDS */
+.form-card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    border: 1.5px solid var(--border-color);
+    margin-bottom: 20px;
     overflow: hidden;
-    transition: all 0.3s ease;
-    animation: fadeInUp 0.4s ease forwards;
+    box-shadow: 0 4px 16px var(--shadow-color);
 }
-
-.form-section {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--form-border);
-    transition: all 0.3s ease;
+.form-card-header {
+    padding: 18px 26px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px; color: #FFFFFF;
+    position: relative; overflow: hidden;
 }
-
-.form-section:last-child {
-    border-bottom: none;
+.form-card-header::before {
+    content: ''; position: absolute;
+    top: -50%; right: -10%;
+    width: 250px; height: 250px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%; pointer-events: none;
 }
-
-.section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-}
-
-.section-header h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--form-text);
-    margin: 0;
-}
-
-.section-header h3 i {
-    color: #DC2626;
-    margin-right: 8px;
-}
-
-.section-badge {
-    font-size: 11px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 2px 12px;
+.form-card-header-left { display: flex; align-items: center; gap: 14px; position: relative; z-index: 1; }
+.form-card-icon {
+    width: 48px; height: 48px;
+    background: rgba(255,255,255,0.2);
     border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #FFFFFF; flex-shrink: 0;
+    border: 1.5px solid rgba(255,255,255,0.3);
 }
-
-/* ============================================================
-   FORM ROWS
-   ============================================================ */
-.form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+.form-card-header h3 { font-size: 17px; font-weight: 800; margin: 0 0 2px 0; color: #FFFFFF; }
+.form-card-header p { font-size: 12px; margin: 0; color: rgba(255,255,255,0.85); font-weight: 500; }
+.form-card-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.2);
+    color: #FFFFFF; border-radius: 20px;
+    font-size: 12px; font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.3);
+    position: relative; z-index: 1;
 }
+.form-card-body { padding: 26px; }
 
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
+/* FORM ELEMENTS */
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.form-group.full-width { grid-column: 1 / -1; }
 .form-group label {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.form-group label .required { color: #DC2626; }
+.form-control {
+    padding: 12px 16px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
     font-size: 13px;
-    font-weight: 600;
-    color: var(--form-text);
-}
-
-.form-group label .required {
-    color: #DC2626;
-    font-weight: 700;
-}
-
-.input-group {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.input-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--form-text-light);
-    font-size: 14px;
-    z-index: 1;
-    pointer-events: none;
-}
-
-.input-group .form-control {
-    padding: 10px 14px 10px 40px;
-    border-radius: 8px;
-    border: 1px solid var(--form-border);
-    font-size: 14px;
-    outline: none;
-    transition: all 0.3s ease;
+    color: var(--text-primary);
+    background: var(--bg-input);
     font-family: 'Inter', sans-serif;
-    background: var(--form-input-bg);
-    color: var(--form-text);
+    transition: all 0.3s ease;
     width: 100%;
 }
-
-.input-group .form-control::placeholder {
-    color: var(--form-text-light);
+.form-control:focus {
+    outline: none; border-color: var(--red-primary);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+    background: var(--bg-card);
 }
-
-.input-group .form-control:focus {
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.1);
-    background: var(--form-card-bg);
+.form-control::placeholder { color: var(--text-light); font-size: 12px; }
+.code-input {
+    font-family: 'Courier New', monospace !important;
+    font-weight: 800 !important;
+    letter-spacing: 1px;
+    color: var(--red-primary) !important;
+    text-transform: uppercase;
 }
-
-.input-group select.form-control {
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
-    cursor: pointer;
+select.form-control { cursor: pointer; }
+.field-hint {
+    font-size: 11px; color: var(--text-muted);
+    margin: 4px 0 0 0;
+    display: flex; align-items: center; gap: 5px;
+    font-weight: 500; line-height: 1.5;
 }
+.field-hint i { font-size: 10px; color: var(--red-primary); }
 
-html.dark-mode .input-group select.form-control {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239CA3AF' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-
-.input-group select.form-control option {
-    background: var(--form-card-bg);
-    color: var(--form-text);
-}
-
-.form-group small {
-    font-size: 12px;
-    color: var(--form-text-secondary);
-    margin-top: 2px;
-    line-height: 1.5;
-}
-
-/* ============================================================
-   INFO DISPLAY
-   ============================================================ */
-.info-display {
-    background: var(--form-hover);
-    border-radius: 8px;
-    padding: 12px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border: 1px solid var(--form-border);
-    height: 100%;
-    justify-content: center;
-}
-
-.info-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 2px 0;
-}
-
-.info-label {
-    font-size: 12px;
-    color: var(--form-text-secondary);
-}
-
-.info-value {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--form-text);
-}
-
-/* ============================================================
-   FORM ACTIONS
-   ============================================================ */
-.form-actions {
-    display: flex;
-    gap: 12px;
-    padding: 16px 24px;
-    border-top: 1px solid var(--form-border);
-    background: var(--form-hover);
+/* STATUS TOGGLE */
+.status-toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 20px;
+    padding: 18px 22px;
+    background: var(--bg-input);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
     flex-wrap: wrap;
+    margin-top: 8px;
+}
+.status-toggle-info {
+    display: flex; align-items: center; gap: 14px;
+    min-width: 0; flex: 1;
+}
+.status-toggle-icon {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+    flex-shrink: 0;
+}
+.status-toggle-icon.icon-active {
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+    color: #059669;
+    border: 2px solid #6EE7B7;
+}
+.status-toggle-icon.icon-inactive {
+    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+    color: #DC2626;
+    border: 2px solid #FCA5A5;
+}
+html.dark-mode .status-toggle-icon.icon-active {
+    background: #065F46; color: #34D399; border-color: #10B981;
+}
+html.dark-mode .status-toggle-icon.icon-inactive {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+}
+.status-toggle-title {
+    display: block;
+    font-size: 15px; font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 3px;
+}
+.status-toggle-desc {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
 }
 
-.btn {
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    border: none;
+.toggle-switch-wrapper {
+    display: inline-flex; align-items: center; gap: 12px;
+    cursor: pointer; user-select: none;
+    flex-shrink: 0;
+}
+.toggle-switch-wrapper input[type="checkbox"] {
+    position: absolute; opacity: 0; pointer-events: none;
+}
+.toggle-switch {
+    width: 56px; height: 30px;
+    background: #D1D5DB;
+    border-radius: 15px;
+    position: relative;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.toggle-switch::before {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 24px; height: 24px;
+    background: #FFFFFF;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.toggle-switch-wrapper input[type="checkbox"]:checked + .toggle-switch {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+}
+.toggle-switch-wrapper input[type="checkbox"]:checked + .toggle-switch::before {
+    transform: translateX(26px);
+}
+.toggle-label {
+    font-size: 14px; font-weight: 800;
+    color: var(--text-primary);
+    min-width: 60px;
+}
+html.dark-mode .toggle-switch { background: #475569; }
+
+/* LIVE PREVIEW */
+.preview-center {
+    display: flex; justify-content: center; padding: 20px 0;
+}
+.preview-branch-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+}
+.preview-card-header {
+    display: flex; justify-content: space-between;
+    align-items: flex-start;
+    padding: 14px 16px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    gap: 10px;
+    position: relative; overflow: hidden;
+}
+.preview-card-header::before {
+    content: ''; position: absolute;
+    top: -40%; right: -15%;
+    width: 140px; height: 140px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%; pointer-events: none;
+}
+.preview-card-header-left {
+    display: flex; align-items: center; gap: 10px;
+    min-width: 0; flex: 1;
+    position: relative; z-index: 1;
+}
+.preview-icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.22);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: #FFFFFF;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.preview-card-title { min-width: 0; flex: 1; }
+.preview-name {
+    font-size: 15px; font-weight: 800;
+    color: #FFFFFF;
+    margin-bottom: 4px;
+    line-height: 1.2;
+    word-break: break-word;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.preview-code {
+    display: inline-block;
+    font-size: 10px; font-weight: 800;
+    color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 2px 8px; border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.4px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.preview-status-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 9.5px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    position: relative; z-index: 1;
+}
+.preview-status-pill.active {
+    background: rgba(255, 255, 255, 0.22);
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+.preview-status-pill.inactive {
+    background: rgba(0, 0, 0, 0.2);
+    color: #FCA5A5;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+}
+.preview-status-pill i { font-size: 8px; }
+
+.preview-location {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-input);
+    border-bottom: 1px solid var(--border-color);
+}
+.preview-location i { color: #DC2626; font-size: 11px; }
+.preview-location span {
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; min-width: 0;
+}
+
+.preview-meta {
+    display: flex; flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+}
+.preview-meta-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.preview-meta-item i {
+    color: #DC2626;
+    font-size: 11px;
+    width: 14px; text-align: center;
+    flex-shrink: 0;
+}
+.preview-meta-item span {
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* WARNING BANNER */
+.warning-banner {
+    display: flex; gap: 14px;
+    padding: 18px 22px;
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    border: 2px solid #FCD34D;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    align-items: center;
+}
+html.dark-mode .warning-banner {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 100%);
+    border-color: #D97706;
+}
+.warning-icon {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    color: #D97706;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(217, 119, 6, 0.2);
+}
+html.dark-mode .warning-icon { background: #1e293b; }
+.warning-text {
+    font-size: 13px;
+    color: #78350F;
+    line-height: 1.5;
+    flex: 1;
+}
+html.dark-mode .warning-text { color: #FDE68A; }
+.warning-text strong { font-weight: 800; }
+
+/* FORM ACTIONS */
+.form-actions {
+    display: flex; gap: 12px;
+    padding: 22px 26px;
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    flex-wrap: wrap; justify-content: flex-end;
+    position: sticky; bottom: 16px; z-index: 10;
+}
+.btn-secondary-large, .btn-reset-large, .btn-submit-large {
+    padding: 13px 26px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
     cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    text-decoration: none;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
+    white-space: nowrap;
+    min-width: 140px;
+    justify-content: center;
 }
-
-.btn-submit {
-    background: #DC2626;
-    color: white;
+.btn-secondary-large {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
 }
-
-.btn-submit:hover {
-    background: #B91C1C;
+.btn-secondary-large:hover {
+    background: var(--bg-body);
+    color: var(--text-primary);
     transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(220,38,38,0.35);
+}
+.btn-reset-large {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-reset-large:hover {
+    background: #FEF3C7; color: #D97706;
+    border-color: #FDE68A;
+    transform: translateY(-2px);
+}
+html.dark-mode .btn-reset-large:hover {
+    background: #5F3A1E; color: #FBBF24; border-color: #D97706;
+}
+.btn-submit-large {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+}
+.btn-submit-large:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5);
+}
+.btn-submit-large:disabled {
+    opacity: 0.6; cursor: not-allowed; transform: none;
 }
 
-.btn-submit:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
+/* RESPONSIVE */
+@media (max-width: 1024px) {
+    .form-row { grid-template-columns: 1fr; }
 }
-
-.btn-reset {
-    background: var(--form-card-bg);
-    color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
-}
-
-.btn-reset:hover {
-    background: var(--form-border);
-    color: var(--form-text);
-}
-
-.btn-cancel {
-    background: var(--form-card-bg);
-    color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
-}
-
-.btn-cancel:hover {
-    background: #FEE2E2;
-    color: #991B1B;
-    border-color: #FECACA;
-}
-
-html.dark-mode .btn-cancel:hover {
-    background: #7F1D1D;
-    color: #FEE2E2;
-    border-color: #991B1B;
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 768px) {
-    .branch-status-card {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 16px 18px;
-    }
-    
-    .branch-status-info {
-        width: 100%;
-    }
-    
-    .branch-status-stats {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .btn-back-card {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
-    }
-    
-    .form-row {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-    
-    .form-section {
-        padding: 16px 14px;
-    }
-    
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        justify-content: center;
-        width: 100%;
-    }
-    
-    .section-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 6px;
-    }
-}
+    .main-content { padding: 12px !important; }
+    .form-card-body { padding: 18px; }
+    .form-card-header { padding: 16px 20px; }
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .page-header .header-right { width: 100%; }
+    .page-header .header-right .btn { flex: 1; justify-content: center; }
 
+    .status-toggle-row { flex-direction: column; align-items: flex-start; }
+    .toggle-switch-wrapper { width: 100%; justify-content: space-between; }
+
+    .form-actions { flex-direction: column; position: static; padding: 16px; }
+    .btn-secondary-large, .btn-reset-large, .btn-submit-large { width: 100%; }
+}
 @media (max-width: 480px) {
-    .branch-status-name {
-        font-size: 16px;
-    }
-    
-    .branch-status-icon {
-        width: 44px;
-        height: 44px;
-        font-size: 18px;
-    }
-    
-    .page-header-left h2 {
-        font-size: 17px;
-    }
-    
-    .input-group .form-control {
-        padding: 8px 12px 8px 36px;
-        font-size: 13px;
-    }
-    
-    .input-icon {
-        left: 10px;
-        font-size: 13px;
-    }
-    
-    .btn {
-        padding: 8px 16px;
-        font-size: 13px;
-    }
+    .form-card-header h3 { font-size: 15px; }
+    .status-toggle-icon { width: 44px; height: 44px; font-size: 20px; }
 }
 </style>
 
 <script>
 // ============================================================
-// VALIDATE FORM
+// LIVE PREVIEW
+// ============================================================
+function updatePreview() {
+    var name = (document.getElementById('branchName')?.value || '').trim();
+    var code = (document.getElementById('branchCode')?.value || '').trim();
+    var location = (document.getElementById('branchLocation')?.value || '').trim();
+    var phone = (document.getElementById('branchPhone')?.value || '').trim();
+    var isActive = document.getElementById('isActiveToggle')?.checked;
+
+    // Name
+    var nameEl = document.getElementById('previewName');
+    if (nameEl) nameEl.textContent = name || 'Branch Name';
+
+    // Code
+    var codeEl = document.getElementById('previewCode');
+    if (codeEl) codeEl.textContent = (code || 'CODE').toUpperCase();
+
+    // Location
+    var locRow = document.getElementById('previewLocationRow');
+    var locEl = document.getElementById('previewLocation');
+    if (locRow && locEl) {
+        if (location) {
+            locEl.textContent = location;
+            locRow.style.display = 'flex';
+        } else {
+            locRow.style.display = 'none';
+        }
+    }
+
+    // Phone
+    var phoneRow = document.getElementById('previewPhoneRow');
+    var phoneEl = document.getElementById('previewPhone');
+    if (phoneRow && phoneEl) {
+        if (phone) {
+            phoneEl.textContent = phone;
+            phoneRow.style.display = 'flex';
+        } else {
+            phoneRow.style.display = 'none';
+        }
+    }
+
+    // Email
+    var email = (document.querySelector('input[name="email"]')?.value || '').trim();
+    var emailRow = document.getElementById('previewEmailRow');
+    var emailEl = document.getElementById('previewEmail');
+    if (emailRow && emailEl) {
+        if (email) {
+            emailEl.textContent = email;
+            emailRow.style.display = 'flex';
+        } else {
+            emailRow.style.display = 'none';
+        }
+    }
+
+    // Status pill
+    var pill = document.getElementById('previewStatusPill');
+    var pillIcon = document.getElementById('previewStatusIcon');
+    var pillText = document.getElementById('previewStatusText');
+    if (pill && pillIcon && pillText) {
+        if (isActive) {
+            pill.className = 'preview-status-pill active';
+            pillIcon.className = 'fas fa-check-circle';
+            pillText.textContent = 'Active';
+        } else {
+            pill.className = 'preview-status-pill inactive';
+            pillIcon.className = 'fas fa-times-circle';
+            pillText.textContent = 'Inactive';
+        }
+    }
+}
+
+// ============================================================
+// STATUS LABEL
+// ============================================================
+function updateStatusLabel() {
+    var toggle = document.getElementById('isActiveToggle');
+    var label = document.getElementById('toggleLabel');
+    var title = document.getElementById('statusTitle');
+    var icon = document.getElementById('statusIcon');
+    var iconBox = document.querySelector('.status-toggle-icon');
+
+    if (!toggle) return;
+    var isActive = toggle.checked;
+
+    if (label) label.textContent = isActive ? 'Active' : 'Inactive';
+    if (title) title.textContent = isActive ? 'Branch is Active' : 'Branch is Inactive';
+
+    if (icon) {
+        icon.className = isActive ? 'fas fa-check-circle' : 'fas fa-times-circle';
+    }
+    if (iconBox) {
+        iconBox.className = 'status-toggle-icon ' + (isActive ? 'icon-active' : 'icon-inactive');
+    }
+}
+
+// ============================================================
+// RESET
+// ============================================================
+function resetForm() {
+    if (!confirm('Reset all changes back to the original values?')) return;
+    window.location.href = window.location.pathname + '?id=<?php echo $id; ?>';
+}
+
+// ============================================================
+// VALIDATION
 // ============================================================
 function validateForm() {
-    var branchCode = document.getElementById('branch_code');
-    var branchName = document.getElementById('branch_name');
-    
-    if (!branchCode || branchCode.value.trim() === '') {
-        alert('Please enter a branch code.');
-        if (branchCode) branchCode.focus();
-        return false;
-    }
-    
-    if (!branchName || branchName.value.trim() === '') {
-        alert('Please enter a branch name.');
-        if (branchName) branchName.focus();
-        return false;
-    }
-    
-    var submitBtn = document.getElementById('submitBtn');
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
-    submitBtn.disabled = true;
-    
+    var name = document.getElementById('branchName').value.trim();
+    var code = document.getElementById('branchCode').value.trim();
+
+    if (name === '') { alert('Please enter the branch name.'); return false; }
+    if (code === '') { alert('Please enter the branch code.'); return false; }
+
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     return true;
 }
 
 // ============================================================
-// CONFIRM RESET
-// ============================================================
-function confirmReset() {
-    return confirm('Are you sure you want to reset the form? All entered data will be lost.');
-}
-
-// ============================================================
-// DARK MODE SYNC
+// INIT
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
+    updateStatusLabel();
+    updatePreview();
+
+    // Email input live-sync
+    var emailInput = document.querySelector('input[name="email"]');
+    if (emailInput) {
+        emailInput.addEventListener('input', updatePreview);
+    }
+
     function syncDarkMode() {
         var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
+        var isDark = localStorage.getItem('darkMode') === 'true' || localStorage.getItem('darkMode') === 'enabled';
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
     }
-    
     syncDarkMode();
-    
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
-    
-    // Auto-hide error alert
-    var errorAlert = document.querySelector('.alert-danger');
-    if (errorAlert) {
-        setTimeout(function() {
-            errorAlert.style.display = 'none';
-        }, 8000);
-    }
+    document.addEventListener('darkModeChanged', function() { syncDarkMode(); });
 });
 </script>
+
 </body>
 </html>

@@ -2,1032 +2,941 @@
 // ================================================================
 // FILE: modules/employees/add.php
 // WAKALA FINANCIAL SYSTEM - ADD EMPLOYEE
-// WITH FULL DARK MODE SUPPORT
+// RED THEME + AUTO ID + REFEREES
+// PROFILE PICTURE: MAX 15MB
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+if (session_status() === PHP_SESSION_NONE) session_start();
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// CHECK PERMISSION
-// ============================================================
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
 
-// ============================================================
-// GET USER DATA
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
-
-// ============================================================
-// GET BRANCHES FOR DROPDOWN
-// ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
-$branches = $stmt->fetchAll();
+$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ============================================================
-// GET ROLES
-// ============================================================
-$roles = ['employee', 'admin', 'super_admin'];
-
-// ============================================================
-// HANDLE FORM SUBMISSION
-// ============================================================
 $error_message = '';
-$show_error = false;
-$success_message = '';
-$show_success = false;
+$form_data     = [];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_employee') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_employee') {
     try {
-        $full_name = trim($_POST['full_name'] ?? '');
-        $email = trim($_POST['email'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $username = trim($_POST['username'] ?? '');
-        $password = $_POST['password'] ?? '';
-        $role = $_POST['role'] ?? 'employee';
-        $branch_id = intval($_POST['branch_id'] ?? 0);
-        $base_salary = floatval(str_replace(',', '', $_POST['base_salary'] ?? 0));
-        $hire_date = $_POST['hire_date'] ?? date('Y-m-d');
-        $employment_status = $_POST['employment_status'] ?? 'active';
-        $address = trim($_POST['address'] ?? '');
-        $emergency_contact = trim($_POST['emergency_contact'] ?? '');
+        $db->beginTransaction();
+
+        $full_name       = trim($_POST['full_name'] ?? '');
+        $employee_code   = trim($_POST['employee_id'] ?? '');
+        $email           = trim($_POST['email'] ?? '');
+        $phone           = trim($_POST['phone'] ?? '');
+        $gender          = $_POST['gender'] ?? '';
+        $dob             = $_POST['date_of_birth'] ?? null;
+        $username        = trim($_POST['username'] ?? '');
+        $address         = trim($_POST['address'] ?? '');
+        $branch_id       = intval($_POST['branch_id'] ?? 0);
+        $role_input      = $_POST['role'] ?? 'employee';
+        $position        = trim($_POST['position'] ?? '');
+        $base_salary     = floatval(str_replace(',', '', $_POST['base_salary'] ?? 0));
+        $hire_date       = $_POST['hire_date'] ?? date('Y-m-d');
+        $employment_stat = $_POST['employment_status'] ?? 'active';
+        $emergency_name  = trim($_POST['emergency_contact'] ?? '');
         $emergency_phone = trim($_POST['emergency_phone'] ?? '');
-        $is_active = intval($_POST['is_active'] ?? 1);
-        
-        // Validate
-        if (empty($full_name)) {
-            throw new Exception('Please enter full name.');
+        $password        = $_POST['password'] ?? '';
+        $password_conf   = $_POST['password_confirmation'] ?? '';
+
+        if ($full_name === '')      throw new Exception('Full name is required.');
+        if ($employee_code === '')  throw new Exception('Employee ID is required (auto-generated from branch).');
+        if ($email === '')          throw new Exception('Email is required.');
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) throw new Exception('Invalid email format.');
+        if ($username === '')       throw new Exception('Username is required.');
+        if (!preg_match('/^[a-zA-Z0-9._-]{3,50}$/', $username)) {
+            throw new Exception('Username must be 3–50 characters (letters, numbers, dot, dash, underscore only).');
         }
-        if (empty($email)) {
-            throw new Exception('Please enter email.');
+        if ($phone === '')          throw new Exception('Phone number is required.');
+        if ($branch_id <= 0)        throw new Exception('Please select a branch.');
+        if ($password === '')       throw new Exception('Password is required.');
+        if (strlen($password) < 6)  throw new Exception('Password must be at least 6 characters.');
+        if ($password !== $password_conf) throw new Exception('Passwords do not match.');
+
+        if (!in_array($role_input, ['employee', 'admin', 'super_admin'])) $role_input = 'employee';
+        if (!in_array($employment_stat, ['active', 'terminated', 'suspended', 'on_leave'])) $employment_stat = 'active';
+
+        $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ? AND is_active = 1");
+        $stmt->execute([$branch_id]);
+        $branch_row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$branch_row) throw new Exception('Invalid branch selected.');
+        $branch_name = $branch_row['branch_name'];
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM employees WHERE email = ?");
+        $stmt->execute([$email]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Email already exists.');
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM employees WHERE employee_id = ?");
+        $stmt->execute([$employee_code]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Employee ID already exists. Refresh to get the latest ID.');
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM employees WHERE username = ?");
+        $stmt->execute([$username]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Username already exists. Please choose another.');
+
+        if ($phone !== '') {
+            $stmt = $db->prepare("SELECT COUNT(*) FROM employees WHERE phone = ?");
+            $stmt->execute([$phone]);
+            if ($stmt->fetchColumn() > 0) throw new Exception('Phone number already exists.');
         }
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            throw new Exception('Please enter a valid email address.');
-        }
-        if (empty($username)) {
-            throw new Exception('Please enter username.');
-        }
-        if (empty($password)) {
-            throw new Exception('Please enter password.');
-        }
-        if (strlen($password) < 6) {
-            throw new Exception('Password must be at least 6 characters.');
-        }
-        if ($branch_id <= 0) {
-            throw new Exception('Please select a branch.');
-        }
-        
-        // Check if email already exists
-        $check_stmt = $db->prepare("SELECT id FROM employees WHERE email = ?");
-        $check_stmt->execute([$email]);
-        if ($check_stmt->fetch()) {
-            throw new Exception('Email "' . $email . '" already exists. Please use a different email.');
-        }
-        
-        // Check if username already exists
-        $check_stmt = $db->prepare("SELECT id FROM employees WHERE username = ?");
-        $check_stmt->execute([$username]);
-        if ($check_stmt->fetch()) {
-            throw new Exception('Username "' . $username . '" already exists. Please use a different username.');
-        }
-        
-        // Get branch name
-        $branch_name = '';
-        foreach ($branches as $b) {
-            if ($b['id'] == $branch_id) {
-                $branch_name = $b['branch_name'];
-                break;
+
+        $profile_pic_path = null;
+        if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] === UPLOAD_ERR_OK) {
+            $allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+            $mime    = mime_content_type($_FILES['profile_pic']['tmp_name']);
+
+            if (!in_array($mime, $allowed)) {
+                throw new Exception('Profile picture must be JPG, PNG, GIF or WEBP.');
             }
+
+            // ⭐ 15MB LIMIT
+            if ($_FILES['profile_pic']['size'] > 15 * 1024 * 1024) {
+                throw new Exception('Profile picture must not exceed 15MB.');
+            }
+
+            $ext = strtolower(pathinfo($_FILES['profile_pic']['name'], PATHINFO_EXTENSION));
+            $filename = 'emp_' . time() . '_' . mt_rand(1000, 9999) . '.' . $ext;
+            $upload_dir = '../../uploads/employees/';
+            if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
+
+            $target = $upload_dir . $filename;
+            if (!move_uploaded_file($_FILES['profile_pic']['tmp_name'], $target)) {
+                throw new Exception('Failed to upload profile picture.');
+            }
+            $profile_pic_path = 'uploads/employees/' . $filename;
         }
-        
-        // Generate employee ID
-        $stmt = $db->query("SELECT COUNT(*) as count FROM employees");
-        $count = $stmt->fetch()['count'] ?? 0;
-        $employee_id = 'EMP-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
-        
-        // Hash password
+
         $password_hash = password_hash($password, PASSWORD_DEFAULT);
-        
-        // Insert employee
-        $insert_stmt = $db->prepare("INSERT INTO employees 
-            (employee_id, full_name, email, phone, username, password_hash, role, branch, branch_id, 
-             base_salary, hire_date, employment_status, address, emergency_contact, emergency_phone, is_active) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        
-        $insert_stmt->execute([
-            $employee_id,
-            $full_name,
-            $email,
-            $phone,
-            $username,
-            $password_hash,
-            $role,
-            $branch_name,
-            $branch_id,
-            $base_salary,
-            $hire_date,
-            $employment_status,
-            $address,
-            $emergency_contact,
-            $emergency_phone,
-            $is_active
+
+        $stmt = $db->prepare("
+            INSERT INTO employees
+            (employee_id, full_name, email, phone, gender, date_of_birth,
+             username, password_hash, role, branch, branch_id, profile_pic,
+             position, base_salary, salary_currency, hire_date,
+             employment_status, emergency_contact, emergency_phone,
+             address, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
+        ");
+        $stmt->execute([
+            $employee_code, $full_name, $email, $phone ?: null,
+            $gender ?: null, $dob ?: null, $username, $password_hash,
+            $role_input, $branch_name, $branch_id, $profile_pic_path,
+            $position ?: null, $base_salary ?: 0, 'TSh', $hire_date,
+            $employment_stat, $emergency_name ?: null, $emergency_phone ?: null,
+            $address ?: null
         ]);
-        
+
         $new_employee_id = $db->lastInsertId();
-        
-        logActivity($user_id, 'Add Employee', 'Employees', $new_employee_id, '', 'Added employee: ' . $full_name);
-        
+
+        $referee_names     = $_POST['referee_name']         ?? [];
+        $referee_phones    = $_POST['referee_phone']        ?? [];
+        $referee_relations = $_POST['referee_relationship'] ?? [];
+        $referee_addresses = $_POST['referee_address']      ?? [];
+
+        for ($i = 0; $i < count($referee_names); $i++) {
+            $r_name  = trim($referee_names[$i]     ?? '');
+            $r_phone = trim($referee_phones[$i]    ?? '');
+            $r_rel   = trim($referee_relations[$i] ?? '');
+            $r_addr  = trim($referee_addresses[$i] ?? '');
+
+            if ($r_name === '') continue;
+
+            $stmt = $db->prepare("
+                INSERT INTO employee_referees
+                (employee_id, referee_name, referee_phone, relationship, address, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $new_employee_id, $r_name,
+                $r_phone ?: null, $r_rel ?: null, $r_addr ?: null
+            ]);
+        }
+
+        if (function_exists('logActivity')) {
+            logActivity($user_id, 'Add Employee', 'Employees', $new_employee_id, '',
+                'Added new employee: ' . $full_name . ' (' . $employee_code . ')');
+        }
+
+        $db->commit();
         $_SESSION['success_message'] = 'Employee "' . $full_name . '" added successfully!';
         header('Location: index.php');
         exit();
-        
+
     } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
-        $show_error = true;
+        $form_data = $_POST;
     }
 }
 
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-DASHBOARD CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
-        
+
         <div class="page-header">
-            <div class="page-header-left">
-                <h2><i class="fas fa-user-plus"></i> Add Employee</h2>
-                <span class="page-subtitle">Create a new employee record</span>
+            <div class="header-left">
+                <h2><i class="fas fa-user-plus"></i> Add New Employee</h2>
+                <p class="text-muted">Fill in the employee details and referees below</p>
             </div>
-            <div class="page-header-right">
-                <a href="index.php" class="btn btn-back">
-                    <i class="fas fa-arrow-left"></i> Back to List
+            <div class="header-right">
+                <a href="index.php" class="btn-back">
+                    <i class="fas fa-arrow-left"></i> Back to Employees
                 </a>
             </div>
         </div>
 
-        <?php if ($show_error && !empty($error_message)): ?>
+        <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo $error_message; ?></span>
+                <i class="fas fa-exclamation-circle"></i>
+                <span><?php echo htmlspecialchars($error_message); ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
-        <div class="form-container">
-            <form method="POST" action="" class="main-form" id="employeeForm" enctype="multipart/form-data" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="add_employee">
-                
-                <!-- ===== PERSONAL INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-user"></i> Personal Information</h3>
-                        <span class="section-badge">Required fields marked with *</span>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="full_name">Full Name <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user"></i></span>
-                                <input type="text" id="full_name" name="full_name" 
-                                       value="<?php echo isset($_POST['full_name']) ? htmlspecialchars($_POST['full_name']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., John Doe" required>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="email">Email <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-envelope"></i></span>
-                                <input type="email" id="email" name="email" 
-                                       value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., john@wakala.com" required>
-                            </div>
+        <form method="POST" action="" enctype="multipart/form-data" id="employeeForm" onsubmit="return validateForm()">
+            <input type="hidden" name="action" value="add_employee">
+
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon"><i class="fas fa-user-tie"></i></div>
+                        <div>
+                            <h3>Employee Information</h3>
+                            <p>Basic personal and work details</p>
                         </div>
                     </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="phone">Phone Number</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-phone"></i></span>
-                                <input type="text" id="phone" name="phone" 
-                                       value="<?php echo isset($_POST['phone']) ? htmlspecialchars($_POST['phone']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., +255 700 000 000">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="address">Address</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-map-marker-alt"></i></span>
-                                <input type="text" id="address" name="address" 
-                                       value="<?php echo isset($_POST['address']) ? htmlspecialchars($_POST['address']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., Dar es Salaam, Tanzania">
-                            </div>
-                        </div>
+                    <div class="form-card-badge">
+                        <i class="fas fa-id-badge"></i> New Employee
                     </div>
                 </div>
 
-                <!-- ===== ACCOUNT INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-key"></i> Account Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="username">Username <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user-tag"></i></span>
-                                <input type="text" id="username" name="username" 
-                                       value="<?php echo isset($_POST['username']) ? htmlspecialchars($_POST['username']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., johndoe" required>
-                            </div>
+                <div class="form-card-body">
+
+                    <div class="profile-upload-section">
+                        <div class="profile-upload-preview" id="profilePreview">
+                            <i class="fas fa-user"></i>
+                            <img id="profilePreviewImg" style="display:none;" alt="Preview">
                         </div>
-                        <div class="form-group">
-                            <label for="password">Password <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-lock"></i></span>
-                                <input type="password" id="password" name="password" 
-                                       class="form-control" placeholder="Min 6 characters" required>
-                            </div>
-                            <small>Password must be at least 6 characters</small>
+                        <div class="profile-upload-info">
+                            <label class="btn-upload" for="profile_pic">
+                                <i class="fas fa-camera"></i> Choose Profile Picture
+                            </label>
+                            <input type="file" name="profile_pic" id="profile_pic"
+                                   accept="image/*" onchange="previewProfilePic(this)" style="display:none;">
+                            <p class="upload-hint">JPG, PNG, GIF or WEBP · Max 15MB</p>
                         </div>
                     </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="role">Role <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user-shield"></i></span>
-                                <select id="role" name="role" class="form-control" required>
-                                    <option value="employee" <?php echo (isset($_POST['role']) && $_POST['role'] == 'employee') ? 'selected' : ''; ?>>Employee</option>
-                                    <option value="admin" <?php echo (isset($_POST['role']) && $_POST['role'] == 'admin') ? 'selected' : ''; ?>>Admin</option>
-                                    <?php if ($role == 'super_admin'): ?>
-                                        <option value="super_admin" <?php echo (isset($_POST['role']) && $_POST['role'] == 'super_admin') ? 'selected' : ''; ?>>Super Admin</option>
-                                    <?php endif; ?>
-                                </select>
+                            <label>Branch <span class="required">*</span></label>
+                            <select name="branch_id" id="branchSelect" class="form-control" required
+                                    onchange="onBranchChange(this.value)">
+                                <option value="">Select Branch...</option>
+                                <?php foreach ($branches as $b): ?>
+                                    <option value="<?php echo $b['id']; ?>"
+                                        data-code="<?php echo htmlspecialchars($b['branch_code'] ?? ''); ?>"
+                                        <?php echo (intval($form_data['branch_id'] ?? 0) === intval($b['id'])) ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                                        <?php if (!empty($b['branch_code'])): ?>
+                                            — <?php echo htmlspecialchars($b['branch_code']); ?>
+                                        <?php endif; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                Employee ID <span class="required">*</span>
+                                <span class="auto-badge"><i class="fas fa-magic"></i> Auto</span>
+                            </label>
+                            <div class="auto-id-wrapper">
+                                <input type="text" name="employee_id" id="employeeIdInput"
+                                       class="form-control auto-id-input"
+                                       placeholder="Select branch to generate ID..."
+                                       value="<?php echo htmlspecialchars($form_data['employee_id'] ?? ''); ?>"
+                                       readonly required>
+                                <button type="button" class="refresh-id-btn"
+                                        onclick="refreshEmployeeId()" title="Regenerate ID">
+                                    <i class="fas fa-sync-alt" id="refreshIdIcon"></i>
+                                </button>
+                            </div>
+                            <p class="field-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Auto-generated from branch code. Format: <code>BRANCH-EMP-0001</code>
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Full Name <span class="required">*</span></label>
+                            <input type="text" name="full_name" class="form-control"
+                                   placeholder="e.g. John Doe"
+                                   value="<?php echo htmlspecialchars($form_data['full_name'] ?? ''); ?>" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Username <span class="required">*</span></label>
+                            <input type="text" name="username" class="form-control"
+                                   placeholder="e.g. jdoe"
+                                   pattern="[a-zA-Z0-9._-]{3,50}"
+                                   value="<?php echo htmlspecialchars($form_data['username'] ?? ''); ?>" required>
+                            <p class="field-hint"><i class="fas fa-info-circle"></i> Used for login. 3–50 chars.</p>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Email <span class="required">*</span></label>
+                            <input type="email" name="email" class="form-control"
+                                   placeholder="e.g. john@example.com"
+                                   value="<?php echo htmlspecialchars($form_data['email'] ?? ''); ?>" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Phone <span class="required">*</span></label>
+                            <input type="text" name="phone" class="form-control"
+                                   placeholder="+255 7XX XXX XXX"
+                                   value="<?php echo htmlspecialchars($form_data['phone'] ?? ''); ?>" required>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Gender</label>
+                            <select name="gender" class="form-control">
+                                <option value="">Select...</option>
+                                <option value="male"   <?php echo (($form_data['gender'] ?? '') === 'male')   ? 'selected' : ''; ?>>Male</option>
+                                <option value="female" <?php echo (($form_data['gender'] ?? '') === 'female') ? 'selected' : ''; ?>>Female</option>
+                                <option value="other"  <?php echo (($form_data['gender'] ?? '') === 'other')  ? 'selected' : ''; ?>>Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Date of Birth</label>
+                            <input type="date" name="date_of_birth" class="form-control"
+                                   value="<?php echo htmlspecialchars($form_data['date_of_birth'] ?? ''); ?>">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group full-width">
+                            <label>Residential Address</label>
+                            <input type="text" name="address" class="form-control"
+                                   placeholder="e.g. Kinondoni, Dar es Salaam"
+                                   value="<?php echo htmlspecialchars($form_data['address'] ?? ''); ?>">
+                        </div>
+                    </div>
+
+                    <div class="section-divider">
+                        <span><i class="fas fa-briefcase"></i> Work Information</span>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Role <span class="required">*</span></label>
+                            <select name="role" class="form-control" required>
+                                <option value="employee"    <?php echo (($form_data['role'] ?? 'employee') === 'employee')    ? 'selected' : ''; ?>>Employee</option>
+                                <option value="admin"       <?php echo (($form_data['role'] ?? '') === 'admin')       ? 'selected' : ''; ?>>Admin</option>
+                                <option value="super_admin" <?php echo (($form_data['role'] ?? '') === 'super_admin') ? 'selected' : ''; ?>>Super Admin</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Employment Status</label>
+                            <select name="employment_status" class="form-control">
+                                <option value="active"     <?php echo (($form_data['employment_status'] ?? 'active') === 'active')     ? 'selected' : ''; ?>>Active</option>
+                                <option value="on_leave"   <?php echo (($form_data['employment_status'] ?? '') === 'on_leave')   ? 'selected' : ''; ?>>On Leave</option>
+                                <option value="suspended"  <?php echo (($form_data['employment_status'] ?? '') === 'suspended')  ? 'selected' : ''; ?>>Suspended</option>
+                                <option value="terminated" <?php echo (($form_data['employment_status'] ?? '') === 'terminated') ? 'selected' : ''; ?>>Terminated</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Position</label>
+                            <input type="text" name="position" class="form-control"
+                                   placeholder="e.g. Cashier"
+                                   value="<?php echo htmlspecialchars($form_data['position'] ?? ''); ?>">
+                        </div>
+                        <div class="form-group">
+                            <label>Base Salary (TSh)</label>
+                            <input type="text" name="base_salary" id="salaryInput" class="form-control"
+                                   placeholder="e.g. 500,000" inputmode="numeric"
+                                   value="<?php echo htmlspecialchars($form_data['base_salary'] ?? ''); ?>"
+                                   oninput="formatMoneyInput(this)">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Hire Date</label>
+                            <input type="date" name="hire_date" class="form-control"
+                                   value="<?php echo htmlspecialchars($form_data['hire_date'] ?? date('Y-m-d')); ?>">
+                        </div>
+                    </div>
+
+                    <div class="section-divider">
+                        <span><i class="fas fa-phone-volume"></i> Emergency Contact</span>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Emergency Contact Name</label>
+                            <input type="text" name="emergency_contact" class="form-control"
+                                   placeholder="e.g. Mary Doe"
+                                   value="<?php echo htmlspecialchars($form_data['emergency_contact'] ?? ''); ?>">
+                        </div>
+                        <div class="form-group">
+                            <label>Emergency Phone</label>
+                            <input type="text" name="emergency_phone" class="form-control"
+                                   placeholder="+255 7XX XXX XXX"
+                                   value="<?php echo htmlspecialchars($form_data['emergency_phone'] ?? ''); ?>">
+                        </div>
+                    </div>
+
+                    <div class="section-divider">
+                        <span><i class="fas fa-lock"></i> Account Security</span>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Password <span class="required">*</span></label>
+                            <div class="password-wrapper">
+                                <input type="password" name="password" id="password" class="form-control"
+                                       placeholder="At least 6 characters" minlength="6" required>
+                                <button type="button" class="toggle-password" onclick="togglePassword('password', this)">
+                                    <i class="fas fa-eye"></i>
+                                </button>
                             </div>
                         </div>
                         <div class="form-group">
-                            <label for="branch_id">Branch <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <select id="branch_id" name="branch_id" class="form-control" required>
-                                    <option value="">Select Branch</option>
-                                    <?php foreach ($branches as $b): ?>
-                                        <option value="<?php echo $b['id']; ?>" <?php echo (isset($_POST['branch_id']) && $_POST['branch_id'] == $b['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($b['branch_name']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                            <label>Confirm Password <span class="required">*</span></label>
+                            <div class="password-wrapper">
+                                <input type="password" name="password_confirmation" id="password_confirmation"
+                                       class="form-control" placeholder="Repeat password" minlength="6" required>
+                                <button type="button" class="toggle-password" onclick="togglePassword('password_confirmation', this)">
+                                    <i class="fas fa-eye"></i>
+                                </button>
                             </div>
                         </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon"><i class="fas fa-users"></i></div>
+                        <div>
+                            <h3>Referees</h3>
+                            <p>Provide at least 2 referees</p>
+                        </div>
+                    </div>
+                    <div class="form-card-badge">
+                        <i class="fas fa-user-check"></i> 2 Referees
                     </div>
                 </div>
 
-                <!-- ===== EMPLOYMENT INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-briefcase"></i> Employment Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="base_salary">Base Salary</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-money-bill"></i></span>
-                                <input type="text" id="base_salary" name="base_salary" 
-                                       value="<?php echo isset($_POST['base_salary']) ? htmlspecialchars($_POST['base_salary']) : '0'; ?>" 
-                                       class="form-control money-input" 
-                                       placeholder="0.00"
-                                       oninput="formatMoneyInput(this)">
+                <div class="form-card-body">
+                    <div class="referees-grid">
+                        <?php for ($r = 0; $r < 2; $r++): ?>
+                        <div class="referee-card">
+                            <div class="referee-card-header">
+                                <div class="referee-number"><?php echo $r + 1; ?></div>
+                                <h4>Referee #<?php echo $r + 1; ?></h4>
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="hire_date">Hire Date</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
-                                <input type="date" id="hire_date" name="hire_date" 
-                                       value="<?php echo isset($_POST['hire_date']) ? htmlspecialchars($_POST['hire_date']) : date('Y-m-d'); ?>" 
-                                       class="form-control">
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="employment_status">Employment Status</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user-check"></i></span>
-                                <select id="employment_status" name="employment_status" class="form-control">
-                                    <option value="active" <?php echo (isset($_POST['employment_status']) && $_POST['employment_status'] == 'active') ? 'selected' : ''; ?>>Active</option>
-                                    <option value="on_leave" <?php echo (isset($_POST['employment_status']) && $_POST['employment_status'] == 'on_leave') ? 'selected' : ''; ?>>On Leave</option>
-                                    <option value="suspended" <?php echo (isset($_POST['employment_status']) && $_POST['employment_status'] == 'suspended') ? 'selected' : ''; ?>>Suspended</option>
-                                    <option value="terminated" <?php echo (isset($_POST['employment_status']) && $_POST['employment_status'] == 'terminated') ? 'selected' : ''; ?>>Terminated</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="is_active">Status</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-power-off"></i></span>
-                                <select id="is_active" name="is_active" class="form-control">
-                                    <option value="1" <?php echo (isset($_POST['is_active']) && $_POST['is_active'] == 1) ? 'selected' : ''; ?>>Active</option>
-                                    <option value="0" <?php echo (isset($_POST['is_active']) && $_POST['is_active'] == 0) ? 'selected' : ''; ?>>Inactive</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- ===== EMERGENCY CONTACT ===== -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-phone-alt"></i> Emergency Contact</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="emergency_contact">Emergency Contact Name</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-user"></i></span>
-                                <input type="text" id="emergency_contact" name="emergency_contact" 
-                                       value="<?php echo isset($_POST['emergency_contact']) ? htmlspecialchars($_POST['emergency_contact']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., Jane Doe">
+                            <div class="form-group">
+                                <label>Full Name <?php echo $r === 0 ? '<span class="required">*</span>' : ''; ?></label>
+                                <input type="text" name="referee_name[]" class="form-control"
+                                       placeholder="e.g. <?php echo $r === 0 ? 'Jane Smith' : 'Robert Johnson'; ?>"
+                                       value="<?php echo htmlspecialchars($form_data['referee_name'][$r] ?? ''); ?>">
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="emergency_phone">Emergency Phone</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-phone"></i></span>
-                                <input type="text" id="emergency_phone" name="emergency_phone" 
-                                       value="<?php echo isset($_POST['emergency_phone']) ? htmlspecialchars($_POST['emergency_phone']) : ''; ?>" 
-                                       class="form-control" placeholder="e.g., +255 700 000 111">
-                            </div>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- ===== FORM ACTIONS ===== -->
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Add Employee
-                    </button>
-                    <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                        <i class="fas fa-undo"></i> Reset Form
-                    </button>
-                    <a href="index.php" class="btn btn-cancel">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
+                            <div class="form-group">
+                                <label>Phone Number <?php echo $r === 0 ? '<span class="required">*</span>' : ''; ?></label>
+                                <input type="text" name="referee_phone[]" class="form-control"
+                                       placeholder="+255 7XX XXX XXX"
+                                       value="<?php echo htmlspecialchars($form_data['referee_phone'][$r] ?? ''); ?>">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Relationship</label>
+                                <div class="combo-wrapper">
+                                    <input type="text" name="referee_relationship[]"
+                                           class="form-control combo-input"
+                                           list="relationshipList<?php echo $r; ?>"
+                                           placeholder="Select or type..."
+                                           autocomplete="off"
+                                           value="<?php echo htmlspecialchars($form_data['referee_relationship'][$r] ?? ''); ?>">
+                                    <datalist id="relationshipList<?php echo $r; ?>">
+                                        <option value="Friend">
+                                        <option value="Former Employer">
+                                        <option value="Colleague">
+                                        <option value="Teacher">
+                                        <option value="Relative">
+                                        <option value="Neighbor">
+                                        <option value="Business Partner">
+                                        <option value="Supervisor">
+                                        <option value="Other">
+                                    </datalist>
+                                    <i class="fas fa-chevron-down combo-arrow"></i>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Address</label>
+                                <input type="text" name="referee_address[]" class="form-control"
+                                       placeholder="e.g. <?php echo $r === 0 ? 'Mikocheni' : 'Kariakoo'; ?>"
+                                       value="<?php echo htmlspecialchars($form_data['referee_address'][$r] ?? ''); ?>">
+                            </div>
+                        </div>
+                        <?php endfor; ?>
+                    </div>
                 </div>
-            </form>
-        </div>
+            </div>
+
+            <div class="form-actions">
+                <a href="index.php" class="btn btn-secondary-large">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="button" class="btn btn-reset-large" onclick="resetForm()">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+                <button type="submit" class="btn btn-submit-large" id="submitBtn">
+                    <i class="fas fa-save"></i> Save Employee
+                </button>
+            </div>
+
+        </form>
 
     </div>
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-DASHBOARD STYLES - WITH FULL DARK MODE SUPPORT
-============================================================ -->
 <style>
 /* ============================================================
-   DARK MODE VARIABLES
+   Same styles as before, red theme
    ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
+
 :root {
-    --form-bg: #FFFFFF;
-    --form-text: #1F2937;
-    --form-text-secondary: #6B7280;
-    --form-text-light: #9CA3AF;
-    --form-border: #E5E7EB;
-    --form-card-bg: #FFFFFF;
-    --form-card-header: #FAFBFC;
-    --form-input-bg: #F9FAFB;
-    --form-hover: #F3F4F6;
-    --form-shadow: rgba(0,0,0,0.06);
-    --form-shadow-lg: rgba(0,0,0,0.12);
-    --form-dropdown-bg: #FFFFFF;
-    --form-dropdown-border: #E5E7EB;
-    --form-success-bg: #D1FAE5;
-    --form-success-text: #065F46;
-    --form-success-border: #A7F3D0;
-    --form-danger-bg: #FEE2E2;
-    --form-danger-text: #991B1B;
-    --form-danger-border: #FECACA;
+    --bg-body: #f3f4f6; --bg-card: #ffffff; --bg-input: #f9fafb;
+    --text-primary: #1f2937; --text-secondary: #374151;
+    --text-muted: #6b7280; --text-light: #9ca3af;
+    --border-color: #e5e7eb; --shadow-color: rgba(0,0,0,0.06);
+    --red-primary: #DC2626; --red-dark: #B91C1C;
 }
-
 html.dark-mode {
-    --form-bg: #1F2937;
-    --form-text: #F9FAFB;
-    --form-text-secondary: #9CA3AF;
-    --form-text-light: #6B7280;
-    --form-border: #374151;
-    --form-card-bg: #1F2937;
-    --form-card-header: #374151;
-    --form-input-bg: #374151;
-    --form-hover: #374151;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.4);
-    --form-dropdown-bg: #1F2937;
-    --form-dropdown-border: #374151;
-    --form-success-bg: #065F46;
-    --form-success-text: #D1FAE5;
-    --form-success-border: #047857;
-    --form-danger-bg: #7F1D1D;
-    --form-danger-text: #FEE2E2;
-    --form-danger-border: #991B1B;
+    --bg-body: #0f172a; --bg-card: #1e293b; --bg-input: #334155;
+    --text-primary: #f1f5f9; --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8; --text-light: #64748b;
+    --border-color: #334155;
 }
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+.main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* Apply Dark Mode to Full Page */
-body {
-    background: var(--form-bg) !important;
-    color: var(--form-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper {
-    background: var(--form-bg) !important;
-    transition: background 0.3s ease;
-}
-
-.main-content {
-    background: var(--form-bg) !important;
-    transition: background 0.3s ease;
-}
-
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
-}
-
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--form-text);
-    margin: 0;
-    transition: color 0.3s ease;
-}
-
-.page-header-left h2 i {
-    color: #3B82F6;
-    margin-right: 8px;
-}
-
-.page-subtitle {
-    font-size: 13px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 3px 12px;
-    border-radius: 12px;
-    transition: all 0.3s ease;
-}
-
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
+.page-header .header-left h2 i { color: var(--red-primary); margin-right: 10px; }
+.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 4px 0 0 0; }
 .btn-back {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s ease;
+    padding: 10px 20px; background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color); border-radius: 10px;
+    font-weight: 600; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px;
+    text-decoration: none; transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif; white-space: nowrap;
 }
+.btn-back:hover { background: #FEE2E2; color: var(--red-primary); border-color: var(--red-primary); transform: translateY(-2px); }
 
-.btn-back:hover {
-    background: var(--form-border);
-    color: var(--form-text);
+.alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
+
+.form-card { background: var(--bg-card); border-radius: 16px; border: 1.5px solid var(--border-color); margin-bottom: 20px; overflow: hidden; box-shadow: 0 4px 16px var(--shadow-color); }
+.form-card-header {
+    padding: 18px 26px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px; color: #FFFFFF;
+    position: relative; overflow: hidden;
 }
-
-/* ============================================================
-   ALERTS
-   ============================================================ */
-.alert {
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    position: relative;
-    animation: slideDown 0.4s ease forwards;
-    transition: all 0.3s ease;
+.form-card-header::before {
+    content: ''; position: absolute;
+    top: -50%; right: -10%;
+    width: 250px; height: 250px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%; pointer-events: none;
 }
-
-.alert-success {
-    background: var(--form-success-bg);
-    color: var(--form-success-text);
-    border: 1px solid var(--form-success-border);
-}
-
-.alert-danger {
-    background: var(--form-danger-bg);
-    color: var(--form-danger-text);
-    border: 1px solid var(--form-danger-border);
-}
-
-.alert i {
-    font-size: 20px;
-    flex-shrink: 0;
-}
-
-.alert span {
-    flex: 1;
-}
-
-.alert-close {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-}
-
-.alert-close:hover {
-    opacity: 1;
-}
-
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* ============================================================
-   FORM CONTAINER
-   ============================================================ */
-.form-container {
-    background: var(--form-card-bg);
+.form-card-header-left { display: flex; align-items: center; gap: 14px; position: relative; z-index: 1; }
+.form-card-icon {
+    width: 48px; height: 48px;
+    background: rgba(255,255,255,0.2);
     border-radius: 12px;
-    box-shadow: 0 1px 3px var(--form-shadow);
-    border: 1px solid var(--form-border);
-    overflow: hidden;
-    transition: all 0.3s ease;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #FFFFFF; flex-shrink: 0;
+    border: 1.5px solid rgba(255,255,255,0.3);
 }
-
-/* ============================================================
-   FORM SECTIONS
-   ============================================================ */
-.form-section {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--form-border);
-    transition: all 0.3s ease;
+.form-card-header h3 { font-size: 17px; font-weight: 800; margin: 0 0 2px 0; color: #FFFFFF; }
+.form-card-header p { font-size: 12px; margin: 0; color: rgba(255,255,255,0.85); font-weight: 500; }
+.form-card-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.2); color: #FFFFFF;
+    border-radius: 20px; font-size: 12px; font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.3);
+    position: relative; z-index: 1;
 }
+.form-card-body { padding: 26px; }
 
-.form-section:last-child {
-    border-bottom: none;
-}
-
-.section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-}
-
-.section-header h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--form-text);
-    margin: 0;
-}
-
-.section-header h3 i {
-    color: #3B82F6;
-    margin-right: 8px;
-}
-
-.section-badge {
-    font-size: 11px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 2px 12px;
-    border-radius: 12px;
-}
-
-/* ============================================================
-   FORM ROWS
-   ============================================================ */
-.form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-}
-
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.form-group.full-width { grid-column: 1 / -1; }
 .form-group label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--form-text);
-    transition: color 0.3s ease;
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-
-.form-group label .required {
-    color: #DC2626;
-    font-weight: 700;
+.form-group label .required { color: #DC2626; }
+.auto-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px;
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    color: #92400E;
+    border-radius: 6px; font-size: 9px; font-weight: 800;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    border: 1px solid #FCD34D;
 }
-
-.input-group {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.input-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--form-text-light);
-    font-size: 14px;
-    z-index: 1;
-    pointer-events: none;
-    transition: color 0.3s ease;
-}
-
-.input-group .form-control {
-    padding: 10px 14px 10px 40px;
-    border-radius: 8px;
-    border: 1px solid var(--form-border);
-    font-size: 14px;
-    outline: none;
-    transition: all 0.3s ease;
+.form-control {
+    padding: 12px 16px; border: 1.5px solid var(--border-color);
+    border-radius: 10px; font-size: 13px;
+    color: var(--text-primary); background: var(--bg-input);
     font-family: 'Inter', sans-serif;
-    background: var(--form-input-bg);
-    color: var(--form-text);
-    width: 100%;
+    transition: all 0.3s ease; width: 100%;
 }
-
-.input-group .form-control::placeholder {
-    color: var(--form-text-light);
+.form-control:focus {
+    outline: none; border-color: var(--red-primary);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+    background: var(--bg-card);
 }
-
-.input-group .form-control:focus {
-    border-color: #3B82F6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+.field-hint {
+    font-size: 11px; color: var(--text-muted);
+    margin: 4px 0 0 0;
+    display: flex; align-items: center; gap: 5px;
+    font-weight: 500; line-height: 1.5;
 }
-
-.input-group .form-control:focus + .input-icon,
-.input-group .form-control:focus ~ .input-icon {
-    color: #3B82F6;
+.field-hint i { font-size: 10px; color: var(--red-primary); }
+.field-hint code {
+    background: var(--bg-input); padding: 1px 6px; border-radius: 4px;
+    font-family: 'Courier New', monospace; font-size: 10px;
+    color: var(--red-primary); border: 1px solid var(--border-color);
 }
-
-.input-group select.form-control {
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
-}
-
-html.dark-mode .input-group select.form-control {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239CA3AF' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-
-.input-group select.form-control option {
-    background: var(--form-dropdown-bg);
-    color: var(--form-text);
-}
-
-.form-group small {
-    font-size: 12px;
-    color: var(--form-text-secondary);
-    margin-top: 2px;
-    transition: color 0.3s ease;
-}
-
-/* ============================================================
-   MONEY INPUT
-   ============================================================ */
-.money-input {
-    font-weight: 600;
-    letter-spacing: 0.5px;
-}
-
-.money-input:focus {
-    border-color: #3B82F6 !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2) !important;
-}
-
-/* ============================================================
-   FORM ACTIONS
-   ============================================================ */
-.form-actions {
-    display: flex;
-    gap: 12px;
-    padding: 16px 24px;
-    border-top: 1px solid var(--form-border);
-    background: var(--form-card-header);
-    transition: all 0.3s ease;
-}
-
-.btn {
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-}
-
-.btn-submit {
-    background: #3B82F6;
-    color: white;
-}
-
-.btn-submit:hover {
-    background: #2563EB;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-
-.btn-submit:disabled {
-    opacity: 0.6;
+.auto-id-wrapper { display: flex; gap: 6px; align-items: stretch; }
+.auto-id-input {
+    flex: 1;
+    font-family: 'Courier New', monospace !important;
+    font-weight: 800 !important;
+    font-size: 14px !important;
+    letter-spacing: 1px;
+    color: var(--red-primary) !important;
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%) !important;
+    border-color: #FCA5A5 !important;
     cursor: not-allowed;
-    transform: none;
+}
+.refresh-id-btn {
+    padding: 0 16px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF; border: none; border-radius: 10px;
+    cursor: pointer; font-size: 14px;
+    transition: all 0.3s ease; flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(220, 38, 38, 0.3);
+}
+.refresh-id-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(220, 38, 38, 0.5); }
+.refresh-id-btn.spinning i { animation: spin 0.8s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.password-wrapper { position: relative; display: flex; align-items: center; }
+.password-wrapper .form-control { padding-right: 46px; }
+.toggle-password {
+    position: absolute; right: 12px; top: 50%;
+    transform: translateY(-50%);
+    background: transparent; border: none;
+    color: var(--text-muted); cursor: pointer;
+    font-size: 14px; padding: 6px; border-radius: 6px;
+}
+.toggle-password:hover { color: var(--red-primary); background: rgba(220, 38, 38, 0.1); }
+
+.combo-wrapper { position: relative; display: flex; align-items: center; }
+.combo-input { padding-right: 42px; }
+.combo-arrow {
+    position: absolute; right: 16px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted); font-size: 12px;
+    pointer-events: none;
+}
+.combo-input:focus ~ .combo-arrow { color: var(--red-primary); }
+
+.profile-upload-section {
+    display: flex; align-items: center; gap: 24px;
+    padding: 20px;
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    border: 2px dashed #FCA5A5;
+    border-radius: 14px; margin-bottom: 24px;
+}
+html.dark-mode .profile-upload-section {
+    background: linear-gradient(135deg, #5F1E1E 0%, #7F1D1D 100%);
+    border-color: #DC2626;
+}
+.profile-upload-preview {
+    width: 96px; height: 96px;
+    border-radius: 50%; background: #FFFFFF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 42px; color: #FCA5A5;
+    flex-shrink: 0;
+    border: 3px solid #DC2626;
+    box-shadow: 0 4px 16px rgba(220, 38, 38, 0.2);
+    overflow: hidden; position: relative;
+}
+.profile-upload-preview img { width: 100%; height: 100%; object-fit: cover; }
+.profile-upload-info { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+.btn-upload {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF; border-radius: 10px;
+    font-size: 13px; font-weight: 700;
+    cursor: pointer; transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+    align-self: flex-start;
+    font-family: 'Inter', sans-serif;
+}
+.btn-upload:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(220, 38, 38, 0.5); }
+.upload-hint { font-size: 11px; color: var(--text-muted); margin: 0; font-weight: 500; }
+
+.section-divider { display: flex; align-items: center; gap: 12px; margin: 24px 0 18px 0; }
+.section-divider::before,
+.section-divider::after {
+    content: ''; flex: 1; height: 1.5px;
+    background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+.section-divider span {
+    font-size: 12px; font-weight: 800;
+    color: var(--red-primary);
+    text-transform: uppercase; letter-spacing: 1.2px;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 8px; white-space: nowrap;
 }
 
-.btn-reset {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
+.referees-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.referee-card {
+    background: var(--bg-input); border: 2px solid var(--border-color);
+    border-radius: 14px; padding: 20px; transition: all 0.3s ease;
 }
-
-.btn-reset:hover {
-    background: var(--form-border);
-    color: var(--form-text);
+.referee-card:hover { border-color: #FCA5A5; box-shadow: 0 6px 20px rgba(220, 38, 38, 0.1); }
+.referee-card-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px; padding-bottom: 14px;
+    border-bottom: 1.5px dashed var(--border-color);
 }
-
-.btn-cancel {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
+.referee-number {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; font-size: 15px; flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(220, 38, 38, 0.3);
 }
+.referee-card-header h4 { margin: 0; font-size: 15px; font-weight: 800; }
+.referee-card .form-group { margin-bottom: 12px; }
+.referee-card .form-group:last-child { margin-bottom: 0; }
+.referee-card .form-group label { font-size: 11px; }
 
-.btn-cancel:hover {
-    background: #FEE2E2;
-    color: #991B1B;
+.form-actions {
+    display: flex; gap: 12px;
+    padding: 22px 26px;
+    background: var(--bg-card); border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    flex-wrap: wrap; justify-content: flex-end;
+    position: sticky; bottom: 16px; z-index: 10;
 }
+.btn-secondary-large, .btn-reset-large, .btn-submit-large {
+    padding: 13px 26px; border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    text-decoration: none; transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif; white-space: nowrap;
+    min-width: 140px; justify-content: center;
+}
+.btn-secondary-large {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-secondary-large:hover { background: #F3F4F6; color: var(--text-primary); transform: translateY(-2px); }
+.btn-reset-large {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-reset-large:hover { background: #FEF3C7; color: #D97706; border-color: #FDE68A; transform: translateY(-2px); }
+.btn-submit-large {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+}
+.btn-submit-large:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5); }
+.btn-submit-large:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 1024px) {
-    .form-row {
-        grid-template-columns: 1fr 1fr;
-    }
+    .form-row { grid-template-columns: 1fr; }
+    .referees-grid { grid-template-columns: 1fr; }
 }
-
 @media (max-width: 768px) {
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
-    }
-    
-    .form-row {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-    
-    .form-section {
-        padding: 16px 14px;
-    }
-    
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        justify-content: center;
-        width: 100%;
-    }
-    
-    .section-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 6px;
-    }
-}
-
-@media (max-width: 480px) {
-    .page-header-left h2 {
-        font-size: 17px;
-    }
-    
-    .page-subtitle {
-        font-size: 11px;
-        padding: 2px 10px;
-    }
-    
-    .input-group .form-control {
-        padding: 8px 12px 8px 36px;
-        font-size: 13px;
-    }
-    
-    .input-icon {
-        left: 10px;
-        font-size: 13px;
-    }
-    
-    .btn {
-        padding: 8px 16px;
-        font-size: 13px;
-    }
-    
-    .alert {
-        padding: 10px 14px;
-        font-size: 13px;
-    }
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.form-container {
-    animation: fadeInUp 0.4s ease forwards;
-}
-
-.alert {
-    animation: slideDown 0.4s ease forwards;
+    .main-content { padding: 12px !important; }
+    .form-card-body { padding: 18px; }
+    .form-card-header { padding: 16px 20px; }
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .page-header .header-right .btn-back { width: 100%; justify-content: center; }
+    .profile-upload-section { flex-direction: column; text-align: center; }
+    .btn-upload { align-self: center; }
+    .form-actions { flex-direction: column; position: static; padding: 16px; }
+    .btn-secondary-large, .btn-reset-large, .btn-submit-large { width: 100%; }
 }
 </style>
 
 <script>
-// ============================================================
-// FORMAT MONEY INPUT
-// ============================================================
-function formatMoneyInput(input) {
-    var value = input.value.replace(/[^0-9.]/g, '');
-    var parts = value.split('.');
-    var integerPart = parts[0] || '';
-    var decimalPart = parts[1] || '';
-    
-    if (integerPart.length > 0) {
-        integerPart = parseInt(integerPart).toLocaleString('en-US');
+function onBranchChange(branchId) {
+    var input = document.getElementById('employeeIdInput');
+    if (!branchId || branchId <= 0) {
+        input.value = '';
+        input.placeholder = 'Select branch to generate ID...';
+        return;
     }
-    
-    if (decimalPart.length > 2) {
-        decimalPart = decimalPart.substring(0, 2);
-    }
-    
-    var formatted = integerPart;
-    if (decimalPart.length > 0) {
-        formatted += '.' + decimalPart;
-    }
-    
-    input.value = formatted;
+    input.value = 'Generating...';
+    input.placeholder = 'Generating...';
+    fetch('get_next_id.php?branch_id=' + encodeURIComponent(branchId))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) input.value = data.employee_id;
+            else { input.value = ''; input.placeholder = 'Error: ' + (data.error || 'Could not generate ID'); }
+        })
+        .catch(function() {
+            input.value = '';
+            input.placeholder = 'Network error. Click refresh.';
+        });
 }
-
-// ============================================================
-// VALIDATE FORM
-// ============================================================
-function validateForm() {
-    var fullName = document.getElementById('full_name');
-    if (!fullName || fullName.value.trim() === '') {
-        alert('Please enter full name.');
-        if (fullName) fullName.focus();
-        return false;
-    }
-    
-    var email = document.getElementById('email');
-    if (!email || email.value.trim() === '') {
-        alert('Please enter email.');
-        if (email) email.focus();
-        return false;
-    }
-    
-    var username = document.getElementById('username');
-    if (!username || username.value.trim() === '') {
-        alert('Please enter username.');
-        if (username) username.focus();
-        return false;
-    }
-    
-    var password = document.getElementById('password');
-    if (!password || password.value.trim() === '') {
-        alert('Please enter password.');
-        if (password) password.focus();
-        return false;
-    }
-    
-    if (password.value.length < 6) {
-        alert('Password must be at least 6 characters.');
-        password.focus();
-        return false;
-    }
-    
-    var branch = document.getElementById('branch_id');
-    if (!branch || branch.value === '') {
-        alert('Please select a branch.');
-        if (branch) branch.focus();
-        return false;
-    }
-    
-    var submitBtn = document.getElementById('submitBtn');
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
-    submitBtn.disabled = true;
-    
-    return true;
+function refreshEmployeeId() {
+    var select = document.getElementById('branchSelect');
+    var btn = document.querySelector('.refresh-id-btn');
+    if (!select.value) { alert('Please select a branch first.'); return; }
+    btn.classList.add('spinning');
+    onBranchChange(select.value);
+    setTimeout(function() { btn.classList.remove('spinning'); }, 1000);
 }
-
-// ============================================================
-// CONFIRM RESET
-// ============================================================
-function confirmReset() {
-    return confirm('Are you sure you want to reset the form? All entered data will be lost.');
-}
-
-// ============================================================
-// DARK MODE SYNC
-// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    function syncDarkMode() {
-        var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
-    }
-    
-    syncDarkMode();
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
-    });
-    
-    var errorAlert = document.querySelector('.alert-danger');
-    if (errorAlert) {
-        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+    var select = document.getElementById('branchSelect');
+    var input  = document.getElementById('employeeIdInput');
+    if (select && select.value && (!input.value || input.value.trim() === '')) {
+        onBranchChange(select.value);
     }
 });
+function previewProfilePic(input) {
+    if (input.files && input.files[0]) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var img = document.getElementById('profilePreviewImg');
+            var placeholder = document.querySelector('#profilePreview i');
+            img.src = e.target.result;
+            img.style.display = 'block';
+            if (placeholder) placeholder.style.display = 'none';
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+function togglePassword(fieldId, btn) {
+    var field = document.getElementById(fieldId);
+    var icon = btn.querySelector('i');
+    if (!field) return;
+    if (field.type === 'password') { field.type = 'text'; icon.classList.remove('fa-eye'); icon.classList.add('fa-eye-slash'); }
+    else { field.type = 'password'; icon.classList.remove('fa-eye-slash'); icon.classList.add('fa-eye'); }
+}
+function formatMoneyInput(input) {
+    var cursorPos = input.selectionStart;
+    var oldLength = input.value.length;
+    var value = input.value.replace(/[^0-9]/g, '');
+    if (value === '') { input.value = ''; return; }
+    value = value.replace(/^0+/, '') || '0';
+    if (value.length > 15) value = value.substring(0, 15);
+    var formatted = '', count = 0;
+    for (var i = value.length - 1; i >= 0; i--) {
+        if (count > 0 && count % 3 === 0) formatted = ',' + formatted;
+        formatted = value[i] + formatted;
+        count++;
+    }
+    input.value = formatted;
+    var newCursorPos = cursorPos + (formatted.length - oldLength);
+    try { input.setSelectionRange(newCursorPos, newCursorPos); } catch (e) {}
+}
+function validateForm() {
+    var fullName = document.querySelector('input[name="full_name"]').value.trim();
+    var empId    = document.getElementById('employeeIdInput').value.trim();
+    var email    = document.querySelector('input[name="email"]').value.trim();
+    var username = document.querySelector('input[name="username"]').value.trim();
+    var phone    = document.querySelector('input[name="phone"]').value.trim();
+    var branch   = document.getElementById('branchSelect').value;
+    var password = document.getElementById('password').value;
+    var passwordConf = document.getElementById('password_confirmation').value;
+    if (branch === '')       { alert('Please select a branch.'); return false; }
+    if (empId === '' || empId === 'Generating...') { alert('Employee ID is still generating. Please wait or click refresh.'); return false; }
+    if (fullName === '')     { alert('Please enter the full name.'); return false; }
+    if (username === '')     { alert('Please enter the username.'); return false; }
+    if (email === '')        { alert('Please enter the email.'); return false; }
+    if (phone === '')        { alert('Please enter the phone number.'); return false; }
+    if (password.length < 6) { alert('Password must be at least 6 characters.'); return false; }
+    if (password !== passwordConf) { alert('Passwords do not match.'); return false; }
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    return true;
+}
+function resetForm() {
+    if (!confirm('Clear all fields?')) return;
+    document.getElementById('employeeForm').reset();
+    var img = document.getElementById('profilePreviewImg');
+    var placeholder = document.querySelector('#profilePreview i');
+    img.style.display = 'none'; img.src = '';
+    if (placeholder) placeholder.style.display = 'block';
+    document.getElementById('employeeIdInput').value = '';
+    document.getElementById('employeeIdInput').placeholder = 'Select branch to generate ID...';
+}
 </script>
+
 </body>
 </html>

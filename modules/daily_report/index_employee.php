@@ -2,10 +2,14 @@
 // ================================================================
 // FILE: modules/daily_report/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD
-// ✅ FLOAT: kutoka providers zake TU (user_providers)
-// ✅ CASH: kutoka employees.cash_allocation (yake)
-// ✅ NEW: Transactions table ya providers zake
-// ✅ NEW: Action button = VIEW tu
+// ✅ FLOAT: kutoka providers ZOTE za branch (sio zake tu)
+// ✅ CASH: kutoka daily_reports.current_cash (branch cash)
+// ✅ Transactions: ZAKE TU (employee_id = current user)
+// ✅ Providers: ZOTE za branch yake
+// ✅ REMOVED: "My Reports" section
+// ✅ REMOVED: "Generate Report" button (auto-generated from morning report)
+// ✅ NEW: Search filter in My Transactions header (RED background)
+// ✅ NEW: Summary card "My Transactions" - inaonyesha idadi ya transactions
 // ✅ Uses shared employee_sidebar.php & employee_header.php
 // ================================================================
 
@@ -43,7 +47,6 @@ if (!$employee) {
 }
 
 $employee_branch_id = $employee['branch_id'] ?? 0;
-$employee_cash_allocation = floatval($employee['cash_allocation'] ?? 0);
 
 // ============================================================
 // HANDLE AJAX REQUESTS (Deposit/Withdrawal)
@@ -52,7 +55,9 @@ if (isset($_POST['ajax_action'])) {
     header('Content-Type: application/json');
     
     try {
+        // ============================================================
         // GET PROVIDER FLOAT
+        // ============================================================
         if ($_POST['ajax_action'] === 'get_provider_float') {
             $provider_id = intval($_POST['provider_id'] ?? 0);
             $branch_id = intval($_POST['branch_id'] ?? 0);
@@ -62,18 +67,16 @@ if (isset($_POST['ajax_action'])) {
                 exit();
             }
             
-            // Security check
             $stmt = $db->prepare("
-                SELECT 1 FROM user_providers 
-                WHERE user_id = ? AND provider_id = ? AND branch_id = ? AND is_active = 1
+                SELECT 1 FROM branch_providers 
+                WHERE branch_id = ? AND provider_id = ? AND is_active = 1
             ");
-            $stmt->execute([$user_id, $provider_id, $branch_id]);
+            $stmt->execute([$branch_id, $provider_id]);
             if (!$stmt->fetch()) {
-                echo json_encode(['success' => false, 'message' => 'Hauna ruhusa kwa provider huyu.']);
+                echo json_encode(['success' => false, 'message' => 'Provider haipo kwenye branch yako.']);
                 exit();
             }
             
-            // Float
             $stmt = $db->prepare("
                 SELECT drp.current_float
                 FROM daily_report_providers drp
@@ -87,11 +90,15 @@ if (isset($_POST['ajax_action'])) {
             $drp = $stmt->fetch(PDO::FETCH_ASSOC);
             $current_float = floatval($drp['current_float'] ?? 0);
             
-            // Cash
-            $stmt = $db->prepare("SELECT COALESCE(cash_allocation, 0) as cash FROM employees WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $emp_cash = $stmt->fetch(PDO::FETCH_ASSOC);
-            $current_cash = floatval($emp_cash['cash'] ?? 0);
+            $stmt = $db->prepare("
+                SELECT current_cash FROM daily_reports 
+                WHERE branch_id = ? 
+                ORDER BY report_date DESC, id DESC 
+                LIMIT 1
+            ");
+            $stmt->execute([$branch_id]);
+            $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_cash = floatval($dr_cash['current_cash'] ?? 0);
             
             echo json_encode([
                 'success' => true,
@@ -103,7 +110,9 @@ if (isset($_POST['ajax_action'])) {
             exit();
         }
         
+        // ============================================================
         // ADD TRANSACTION
+        // ============================================================
         if ($_POST['ajax_action'] === 'add_transaction') {
             $branch_id = intval($_POST['branch_id'] ?? 0);
             $provider_id = intval($_POST['provider_id'] ?? 0);
@@ -119,14 +128,13 @@ if (isset($_POST['ajax_action'])) {
                 throw new Exception('Hauna ruhusa kufanya transaction kwa branch nyingine.');
             }
             
-            // Security
             $stmt = $db->prepare("
-                SELECT 1 FROM user_providers 
-                WHERE user_id = ? AND provider_id = ? AND branch_id = ? AND is_active = 1
+                SELECT 1 FROM branch_providers 
+                WHERE branch_id = ? AND provider_id = ? AND is_active = 1
             ");
-            $stmt->execute([$user_id, $provider_id, $branch_id]);
+            $stmt->execute([$branch_id, $provider_id]);
             if (!$stmt->fetch()) {
-                throw new Exception('Hauna ruhusa kwa provider huyu.');
+                throw new Exception('Provider haipo kwenye branch yako.');
             }
             
             if ($amount <= 0) throw new Exception('Amount must be greater than 0.');
@@ -158,18 +166,12 @@ if (isset($_POST['ajax_action'])) {
             $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$latest_dr) {
-                throw new Exception('Hakuna daily report. Tafadhali tengeneza daily report kwanza.');
+                throw new Exception('Hakuna daily report. Tafadhali tengeneza morning report kwanza.');
             }
             
             $daily_report_id = $latest_dr['id'];
+            $current_cash = floatval($latest_dr['current_cash'] ?? 0);
             
-            // Current cash
-            $stmt = $db->prepare("SELECT COALESCE(cash_allocation, 0) as cash FROM employees WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $emp_cash = $stmt->fetch(PDO::FETCH_ASSOC);
-            $current_cash = floatval($emp_cash['cash'] ?? 0);
-            
-            // Current float
             $stmt = $db->prepare("
                 SELECT * FROM daily_report_providers 
                 WHERE daily_report_id = ? AND provider_id = ?
@@ -200,7 +202,6 @@ if (isset($_POST['ajax_action'])) {
                 $current_float = floatval($mr_provider['float_balance'] ?? 0);
             }
             
-            // MANTIKI
             if ($transaction_type === 'withdrawal') {
                 $new_float = $current_float - $amount;
                 $new_cash = $current_cash + $amount;
@@ -221,7 +222,6 @@ if (isset($_POST['ajax_action'])) {
             $prefix = $transaction_type === 'deposit' ? 'DEP' : 'WTH';
             $transaction_number = $prefix . '-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
-            // Insert transaction
             $stmt = $db->prepare("
                 INSERT INTO transactions 
                 (transaction_number, transaction_type, employee_id, branch_id, branch,
@@ -247,7 +247,6 @@ if (isset($_POST['ajax_action'])) {
             
             $transaction_id = $db->lastInsertId();
             
-            // Update float
             if ($dr_provider) {
                 $stmt = $db->prepare("
                     UPDATE daily_report_providers 
@@ -283,13 +282,22 @@ if (isset($_POST['ajax_action'])) {
                 ]);
             }
             
-            // Update cash
             $stmt = $db->prepare("
-                UPDATE employees 
-                SET cash_allocation = ?, updated_at = NOW()
+                UPDATE daily_reports 
+                SET current_cash = ?,
+                    current_capital = ?,
+                    total_deposits = total_deposits + ?,
+                    total_withdrawals = total_withdrawals + ?,
+                    updated_at = NOW()
                 WHERE id = ?
             ");
-            $stmt->execute([$new_cash, $user_id]);
+            $stmt->execute([
+                $new_cash,
+                $new_capital,
+                $transaction_type === 'deposit' ? $amount : 0,
+                $transaction_type === 'withdrawal' ? $amount : 0,
+                $daily_report_id
+            ]);
             
             logActivity(
                 $user_id,
@@ -348,78 +356,7 @@ $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 
 try {
     // ============================================================
-    // GET REPORTS ZANGU TU
-    // ============================================================
-    $sql = "SELECT 
-                dr.id as report_id,
-                dr.report_number,
-                dr.report_date,
-                dr.created_at,
-                dr.net_profit,
-                dr.current_capital,
-                e.full_name as employee_name,
-                b.branch_name as branch_name,
-                b.branch_code as branch_code,
-                drp.id as provider_row_id,
-                drp.provider_id,
-                drp.provider_code,
-                drp.provider_name,
-                drp.morning_float,
-                drp.morning_cash,
-                drp.current_float,
-                drp.current_cash,
-                drp.total_deposits as provider_deposits,
-                drp.total_withdrawals as provider_withdrawals
-            FROM daily_reports dr
-            LEFT JOIN employees e ON dr.employee_id = e.id
-            LEFT JOIN branches b ON dr.branch_id = b.id
-            LEFT JOIN daily_report_providers drp ON dr.id = drp.daily_report_id
-            WHERE dr.employee_id = ?
-            AND dr.report_date BETWEEN ? AND ?";
-    $params = [$user_id, $from_date, $to_date];
-
-    $sql .= " ORDER BY dr.report_date DESC, dr.id DESC, drp.provider_name ASC";
-
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $report_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $reports = [];
-    foreach ($report_rows as $row) {
-        $rid = $row['report_id'];
-        if (!isset($reports[$rid])) {
-            $reports[$rid] = [
-                'id' => $row['report_id'],
-                'report_number' => $row['report_number'],
-                'report_date' => $row['report_date'],
-                'branch_name' => $row['branch_name'],
-                'branch_code' => $row['branch_code'],
-                'employee_name' => $row['employee_name'],
-                'created_at' => $row['created_at'],
-                'net_profit' => $row['net_profit'],
-                'current_capital' => $row['current_capital'],
-                'providers' => []
-            ];
-        }
-        if (!empty($row['provider_id'])) {
-            $reports[$rid]['providers'][] = [
-                'id' => $row['provider_row_id'],
-                'provider_id' => $row['provider_id'],
-                'provider_code' => $row['provider_code'],
-                'provider_name' => $row['provider_name'],
-                'morning_float' => $row['morning_float'],
-                'morning_cash' => $row['morning_cash'],
-                'current_float' => $row['current_float'],
-                'current_cash' => $row['current_cash'],
-                'total_deposits' => $row['provider_deposits'],
-                'total_withdrawals' => $row['provider_withdrawals']
-            ];
-        }
-    }
-    $reports = array_values($reports);
-
-    // ============================================================
-    // ✅ GET ALL MY TRANSACTIONS (Kutoka providers zangu)
+    // ✅ GET MY TRANSACTIONS TU (employee_id = current user)
     // ============================================================
     $sql_transactions = "
         SELECT 
@@ -428,19 +365,15 @@ try {
             p.icon_class,
             p.color_code
         FROM transactions t
-        INNER JOIN user_providers up 
-            ON t.provider_id = up.provider_id 
-            AND up.user_id = ? 
-            AND up.branch_id = ?
-            AND up.is_active = 1
         LEFT JOIN providers p ON t.provider_id = p.id
         WHERE t.branch_id = ?
+        AND t.employee_id = ?
         AND DATE(t.transaction_date) BETWEEN ? AND ?
         ORDER BY t.created_at DESC
         LIMIT 100
     ";
     $stmt = $db->prepare($sql_transactions);
-    $stmt->execute([$user_id, $employee_branch_id, $employee_branch_id, $from_date, $to_date]);
+    $stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
     $my_transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Summary ya transactions
@@ -454,48 +387,35 @@ try {
         }
     }
 
-    // ============================================================
-    // SUMMARY - Reports zangu
-    // ============================================================
-    $sql_summary = "SELECT 
-            COUNT(*) as total_reports,
-            COALESCE(SUM(total_deposits), 0) as total_deposits,
-            COALESCE(SUM(total_withdrawals), 0) as total_withdrawals,
-            COALESCE(SUM(net_profit), 0) as total_profit
-            FROM daily_reports
-            WHERE employee_id = ?
-            AND report_date BETWEEN ? AND ?";
-    
-    $stmt = $db->prepare($sql_summary);
-    $stmt->execute([$user_id, $from_date, $to_date]);
-    $summary = $stmt->fetch(PDO::FETCH_ASSOC);
+    // ✅ Idadi ya transactions zangu
+    $my_transactions_count = count($my_transactions);
 
     // ============================================================
-    // ✅ TOTAL FLOAT — kutoka providers zake TU
+    // ✅ TOTAL FLOAT — kutoka providers ZOTE za branch
     // ============================================================
     $sql_float = "SELECT 
                     COALESCE(SUM(drp.current_float), 0) as total_float
                   FROM daily_report_providers drp
                   INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                  INNER JOIN user_providers up 
-                      ON drp.provider_id = up.provider_id 
-                      AND up.user_id = ? 
-                      AND up.branch_id = ?
-                      AND up.is_active = 1
                   WHERE dr.branch_id = ?
                   AND dr.report_date BETWEEN ? AND ?";
     $stmt = $db->prepare($sql_float);
-    $stmt->execute([$user_id, $employee_branch_id, $employee_branch_id, $from_date, $to_date]);
+    $stmt->execute([$employee_branch_id, $from_date, $to_date]);
     $float_result = $stmt->fetch(PDO::FETCH_ASSOC);
     $total_float = floatval($float_result['total_float'] ?? 0);
 
     // ============================================================
-    // ✅ TOTAL CASH — kutoka employees.cash_allocation (realtime)
+    // ✅ TOTAL CASH — kutoka daily_reports.current_cash (branch cash)
     // ============================================================
-    $stmt = $db->prepare("SELECT COALESCE(cash_allocation, 0) as cash FROM employees WHERE id = ?");
-    $stmt->execute([$user_id]);
-    $emp_cash_current = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_cash = floatval($emp_cash_current['cash'] ?? 0);
+    $stmt = $db->prepare("
+        SELECT current_cash FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$employee_branch_id]);
+    $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_cash = floatval($dr_cash['current_cash'] ?? 0);
 
     // ============================================================
     // ✅ TOTAL CAPITAL = Float + Cash
@@ -503,7 +423,7 @@ try {
     $total_capital = $total_float + $total_cash;
 
     // ============================================================
-    // PROVIDERS ZANGU TU — kwa Modal
+    // PROVIDERS ZOTE ZA BRANCH — kwa Modal
     // ============================================================
     $providers_for_modal = [];
     if ($employee_branch_id > 0) {
@@ -520,24 +440,18 @@ try {
                 ON p.id = bp.provider_id 
                 AND bp.branch_id = ?
                 AND bp.is_active = 1
-            INNER JOIN user_providers up 
-                ON p.id = up.provider_id 
-                AND up.user_id = ? 
-                AND up.branch_id = ?
-                AND up.is_active = 1
             WHERE p.is_active = 1
             ORDER BY p.display_order, p.provider_name
         ");
-        $stmt->execute([$employee_branch_id, $user_id, $employee_branch_id]);
+        $stmt->execute([$employee_branch_id]);
         $providers_for_modal = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
 } catch (PDOException $e) {
     error_log("Error: " . $e->getMessage());
-    $reports = [];
     $providers_for_modal = [];
     $my_transactions = [];
-    $summary = ['total_reports'=>0,'total_deposits'=>0,'total_withdrawals'=>0,'total_profit'=>0];
+    $my_transactions_count = 0;
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
@@ -589,7 +503,7 @@ include_once '../../includes/employee_topbar.php';
             <div class="capital-compact-content">
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-coins"></i> My Float
+                        <i class="fas fa-coins"></i> Branch Float
                     </span>
                     <span class="capital-compact-value capital-float-value" id="totalFloatDisplay">
                         <?php echo formatCurrency($total_float); ?>
@@ -597,7 +511,7 @@ include_once '../../includes/employee_topbar.php';
                 </div>
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-money-bill-wave"></i> My Cash
+                        <i class="fas fa-money-bill-wave"></i> Branch Cash
                     </span>
                     <span class="capital-compact-value capital-cash-value" id="totalCashDisplay">
                         <?php echo formatCurrency($total_cash); ?>
@@ -605,7 +519,7 @@ include_once '../../includes/employee_topbar.php';
                 </div>
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-building"></i> My Total Capital
+                        <i class="fas fa-building"></i> Branch Total Capital
                     </span>
                     <span class="capital-compact-value capital-capital-value" id="totalCapitalDisplay">
                         <?php echo formatCurrency($total_capital); ?>
@@ -613,21 +527,20 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
             <div class="capital-compact-badge">
-                <i class="fas fa-user"></i> My Allocation
+                <i class="fas fa-store"></i> Branch Capital
             </div>
         </div>
 
-        <!-- Page Header -->
+        <!-- Page Header (Generate button REMOVED) -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> My Daily Reports</h2>
-                <p class="text-muted">Reports zangu za kila siku</p>
+                <h2><i class="fas fa-exchange-alt" style="color:#bb0404;"></i> My Transactions</h2>
+                <p class="text-muted">
+                    <i class="fas fa-info-circle"></i> 
+                    Daily report inaundwa automatically baada ya ku-submit morning report
+                </p>
             </div>
             <div class="header-right">
-                <a href="add_employee.php?date=<?php echo date('Y-m-d'); ?>" class="btn btn-generate">
-                    <i class="fas fa-plus-circle"></i> Generate Report
-                </a>
-                
                 <button type="button" class="btn btn-deposit" onclick="openTransactionModal('deposit')">
                     <i class="fas fa-arrow-down"></i> Add Deposit
                 </button>
@@ -640,16 +553,18 @@ include_once '../../includes/employee_topbar.php';
 
         <!-- Summary Cards -->
         <div class="summary-cards">
-            <div class="summary-card summary-card-reports">
+            <!-- ✅ CARD 1: MY TRANSACTIONS (count) - BADALA YA "My Reports" -->
+            <div class="summary-card summary-card-transactions">
                 <div class="summary-icon-wrapper summary-icon-blue">
-                    <i class="fas fa-file-invoice"></i>
+                    <i class="fas fa-exchange-alt"></i>
                 </div>
                 <div class="summary-info">
-                    <span class="summary-label">My Reports</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_reports'] ?? 0); ?></span>
+                    <span class="summary-label">My Transactions</span>
+                    <span class="summary-value"><?php echo number_format($my_transactions_count); ?></span>
                 </div>
             </div>
             
+            <!-- ✅ CARD 2: MY DEPOSITS (amount) -->
             <div class="summary-card summary-card-deposits">
                 <div class="summary-icon-wrapper summary-icon-green">
                     <i class="fas fa-arrow-down"></i>
@@ -660,6 +575,7 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
             
+            <!-- ✅ CARD 3: MY WITHDRAWALS (amount) -->
             <div class="summary-card summary-card-withdrawals">
                 <div class="summary-icon-wrapper summary-icon-red">
                     <i class="fas fa-arrow-up"></i>
@@ -690,15 +606,29 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-        ✅ SECTION 1: MY TRANSACTIONS (NEW)
+        MY TRANSACTIONS (ZAKE TU) - WITH RED HEADER + SEARCH
         ============================================================ -->
         <div class="section-container">
-            <div class="section-header">
+            <!-- RED HEADER WITH SEARCH -->
+            <div class="section-header-red">
                 <h3>
-                    <i class="fas fa-exchange-alt" style="color:#2563EB;"></i>
+                    <i class="fas fa-exchange-alt"></i>
                     My Transactions
-                    <span class="section-count"><?php echo count($my_transactions); ?></span>
+                    <span class="section-count-red"><?php echo count($my_transactions); ?></span>
                 </h3>
+                
+                <!-- SEARCH FILTER -->
+                <div class="search-input-group-red">
+                    <i class="fas fa-search"></i>
+                    <input type="text" 
+                           id="txnSearchInput" 
+                           placeholder="Search provider, reference, amount..."
+                           oninput="onTxnSearch(this)">
+                    <button type="button" id="txnSearchClear" onclick="clearTxnSearch()" style="display:none;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <span class="search-count-red" id="txnSearchCount" style="display:none;">0</span>
+                </div>
             </div>
             
             <?php if (count($my_transactions) > 0): ?>
@@ -715,15 +645,25 @@ include_once '../../includes/employee_topbar.php';
                             <th>Description</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="txnTableBody">
                         <?php $i = 1; foreach ($my_transactions as $txn): 
                             $is_deposit = $txn['transaction_type'] === 'deposit';
                             $color = $txn['color_code'] ?? '#0B5ED7';
                             $icon = $txn['icon_class'] ?? 'fas fa-university';
                             $txn_datetime = $txn['created_at'] ?? $txn['transaction_date'];
+                            
+                            // Search data
+                            $txn_search = strtolower(
+                                ($txn['provider_name'] ?? '') . ' ' .
+                                ($txn['reference_number'] ?? '') . ' ' .
+                                ($txn['description'] ?? '') . ' ' .
+                                ($txn['transaction_number'] ?? '') . ' ' .
+                                $txn['amount'] . ' ' .
+                                $txn['transaction_type']
+                            );
                         ?>
-                            <tr>
-                                <td><?php echo $i++; ?></td>
+                            <tr class="txn-row" data-search="<?php echo htmlspecialchars($txn_search); ?>">
+                                <td class="row-num"><?php echo $i++; ?></td>
                                 <td>
                                     <span class="txn-date">
                                         <i class="far fa-calendar"></i>
@@ -762,156 +702,24 @@ include_once '../../includes/employee_topbar.php';
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+                
+                <!-- No Results Message -->
+                <div class="no-txn-results" id="noTxnResults" style="display:none;">
+                    <i class="fas fa-search-minus"></i>
+                    <p>No transactions match your search</p>
+                    <button type="button" class="btn btn-reset" onclick="clearTxnSearch()">
+                        <i class="fas fa-times"></i> Clear Search
+                    </button>
+                </div>
             </div>
             <?php else: ?>
                 <div class="empty-txn">
                     <i class="fas fa-inbox"></i>
                     <p>Hakuna transactions bado. Anza kwa ku-add deposit au withdrawal.</p>
-                </div>
-            <?php endif; ?>
-        </div>
-
-        <!-- ============================================================
-        ✅ SECTION 2: REPORTS (Providers zangu + View button)
-        ============================================================ -->
-        <div class="section-container">
-            <div class="section-header">
-                <h3>
-                    <i class="fas fa-file-alt" style="color:#bb0404;"></i>
-                    My Reports
-                    <span class="section-count"><?php echo count($reports); ?></span>
-                </h3>
-                
-                <div class="search-input-group-small">
-                    <i class="fas fa-search"></i>
-                    <input type="text" 
-                           id="searchInput" 
-                           placeholder="Search report..."
-                           oninput="onGlobalSearch(this)">
-                </div>
-            </div>
-
-            <?php if (count($reports) > 0): ?>
-                <div id="reportsContainer">
-                    <?php foreach ($reports as $report): 
-                        $provider_names = array_map(function($p) { return $p['provider_name']; }, $report['providers']);
-                        $search_data = strtolower(
-                            ($report['report_number'] ?? '') . ' ' .
-                            implode(' ', $provider_names) . ' ' .
-                            date('d M Y', strtotime($report['report_date'] ?? 'now'))
-                        );
-                    ?>
-                        <div class="report-group" 
-                             data-report-id="<?php echo $report['id']; ?>"
-                             data-search="<?php echo htmlspecialchars($search_data); ?>">
-                            
-                            <div class="report-group-header">
-                                <div class="report-header-left">
-                                    <div class="report-icon">
-                                        <i class="fas fa-file-alt"></i>
-                                    </div>
-                                    <div class="report-header-info">
-                                        <div class="report-header-title">
-                                            <span class="report-label">Report:</span>
-                                            <span class="report-number"><?php echo htmlspecialchars($report['report_number']); ?></span>
-                                        </div>
-                                        <div class="report-header-meta">
-                                            <span class="meta-item">
-                                                <i class="fas fa-calendar"></i>
-                                                <?php echo date('d M Y', strtotime($report['report_date'])); ?>
-                                            </span>
-                                            <span class="meta-item">
-                                                <i class="fas fa-store-alt"></i>
-                                                <?php echo htmlspecialchars($report['branch_name'] ?? 'Main'); ?>
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="report-header-right">
-                                    <div class="report-stat">
-                                        <span class="stat-label">Providers</span>
-                                        <span class="stat-value"><?php echo count($report['providers']); ?></span>
-                                    </div>
-                                    <div class="report-header-actions">
-                                        <!-- ✅ VIEW BUTTON TU -->
-                                        <a href="view_employee.php?id=<?php echo $report['id']; ?>" class="btn-view-report">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <?php if (!empty($report['providers'])): ?>
-                            <div class="providers-table-wrapper">
-                                <table class="providers-table">
-                                    <thead>
-                                        <tr>
-                                            <th>#</th>
-                                            <th>Provider</th>
-                                            <th>Code</th>
-                                            <th class="text-right">Morning Float</th>
-                                            <th class="text-right">Current Float</th>
-                                            <th class="text-right">Deposits</th>
-                                            <th class="text-right">Withdrawals</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <?php 
-                                        $i = 1; 
-                                        $sum_float = 0;
-                                        $sum_current_float = 0;
-                                        $sum_deposits = 0;
-                                        $sum_withdrawals = 0;
-                                        foreach ($report['providers'] as $p): 
-                                            $sum_float += floatval($p['morning_float']);
-                                            $sum_current_float += floatval($p['current_float']);
-                                            $sum_deposits += floatval($p['total_deposits']);
-                                            $sum_withdrawals += floatval($p['total_withdrawals']);
-                                        ?>
-                                            <tr>
-                                                <td><?php echo $i++; ?></td>
-                                                <td><?php echo htmlspecialchars($p['provider_name']); ?></td>
-                                                <td><span class="code-badge"><?php echo htmlspecialchars($p['provider_code']); ?></span></td>
-                                                <td class="text-right">
-                                                    <span class="amount-float"><?php echo formatCurrency($p['morning_float']); ?></span>
-                                                </td>
-                                                <td class="text-right">
-                                                    <span class="amount-float-bold"><?php echo formatCurrency($p['current_float']); ?></span>
-                                                </td>
-                                                <td class="text-right">
-                                                    <span class="amount-deposit">+ <?php echo formatCurrency($p['total_deposits']); ?></span>
-                                                </td>
-                                                <td class="text-right">
-                                                    <span class="amount-withdrawal">- <?php echo formatCurrency($p['total_withdrawals']); ?></span>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                        <tr class="totals-row">
-                                            <td colspan="3"><strong>TOTAL</strong></td>
-                                            <td class="text-right"><strong><?php echo formatCurrency($sum_float); ?></strong></td>
-                                            <td class="text-right"><strong><?php echo formatCurrency($sum_current_float); ?></strong></td>
-                                            <td class="text-right"><strong class="amount-deposit">+ <?php echo formatCurrency($sum_deposits); ?></strong></td>
-                                            <td class="text-right"><strong class="amount-withdrawal">- <?php echo formatCurrency($sum_withdrawals); ?></strong></td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <?php endif; ?>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-                
-                <div class="no-search-results" id="noSearchResults" style="display:none;">
-                    <i class="fas fa-search-minus"></i>
-                    <h3>No results found</h3>
-                </div>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-inbox"></i>
-                    <h3>Hakuna reports bado</h3>
-                    <a href="add_employee.php" class="btn btn-generate">
-                        <i class="fas fa-plus-circle"></i> Generate Report
-                    </a>
+                    <p style="margin-top: 8px; font-size: 12px; color: var(--text-light);">
+                        <i class="fas fa-info-circle"></i> 
+                        Daily report inaundwa automatically baada ya ku-submit morning report
+                    </p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1170,8 +978,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 /* BUTTONS */
 .btn { padding: 8px 16px; border: none; border-radius: 8px; font-weight: 600; font-size: 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; font-family: 'Inter', sans-serif; white-space: nowrap; }
-.btn-generate { background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%); color: white; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3); }
-.btn-generate:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(124, 58, 237, 0.4); color: white; }
 .btn-deposit { background: #059669; color: white; }
 .btn-deposit:hover { background: #047857; transform: translateY(-1px); color: white; }
 .btn-withdrawal { background: #DC2626; color: white; }
@@ -1185,13 +991,21 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 18px; width: 100%; }
 .summary-card { background: var(--bg-card); border-radius: 14px; padding: 18px 22px; border: 1.5px solid var(--border-color); display: flex; align-items: center; gap: 16px; transition: all 0.3s ease; box-shadow: 0 2px 8px var(--shadow-color); min-width: 0; }
 .summary-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px var(--shadow-hover); }
-.summary-card-reports { border-left: 4px solid #1D4ED8; }
+
+/* ✅ NEW: Transactions Card - Purple/Blue */
+.summary-card-transactions { border-left: 4px solid #7C3AED; }
 .summary-card-deposits { border-left: 4px solid #059669; }
 .summary-card-withdrawals { border-left: 4px solid #DC2626; }
+
 .summary-icon-wrapper { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
-.summary-icon-blue { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1D4ED8; }
+.summary-icon-blue { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #7C3AED; }
 .summary-icon-green { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: #059669; }
 .summary-icon-red { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #DC2626; }
+
+html.dark-mode .summary-icon-blue { background: linear-gradient(135deg, #4C1D95, #5B21B6); color: #C4B5FD; }
+html.dark-mode .summary-icon-green { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; }
+html.dark-mode .summary-icon-red { background: linear-gradient(135deg, #7F1D1D, #991B1B); color: #FCA5A5; }
+
 .summary-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .summary-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; }
 .summary-value { font-size: 22px; font-weight: 900; color: var(--text-primary); font-family: 'Inter', 'Courier New', monospace; word-break: break-word; }
@@ -1204,51 +1018,177 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .form-control { padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px; color: var(--text-primary); background: var(--bg-input); }
 
 /* ============================================================
-   SECTION CONTAINER (NEW)
+   SECTION CONTAINER
    ============================================================ */
 .section-container {
     background: var(--bg-card);
     border-radius: 14px;
     border: 1.5px solid var(--border-color);
-    padding: 20px 22px;
     margin-bottom: 18px;
     box-shadow: 0 2px 8px var(--shadow-color);
     width: 100%;
+    overflow: hidden;
 }
-.section-header {
+
+/* ============================================================
+   RED SECTION HEADER WITH SEARCH
+   ============================================================ */
+.section-header-red {
+    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
+    padding: 16px 22px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    margin-bottom: 16px;
     flex-wrap: wrap;
+    color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(187, 4, 4, 0.25);
+    position: relative;
+    overflow: hidden;
 }
-.section-header h3 {
+
+.section-header-red::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 200px;
+    height: 200px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.section-header-red h3 {
     font-size: 16px;
     font-weight: 800;
     margin: 0;
     display: flex;
     align-items: center;
     gap: 10px;
+    color: #FFFFFF;
+    position: relative;
+    z-index: 1;
 }
-.section-count {
+
+.section-header-red h3 i {
+    color: #FCD34D;
+    font-size: 18px;
+}
+
+.section-count-red {
     font-size: 12px;
     font-weight: 800;
-    background: #DBEAFE;
-    color: #1D4ED8;
+    background: rgba(255, 255, 255, 0.25);
+    color: #FFFFFF;
     padding: 4px 12px;
     border-radius: 12px;
     margin-left: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(4px);
 }
-html.dark-mode .section-count { background: #1E3A5F; color: #60A5FA; }
+
+/* Search Input kwenye Red Header */
+.search-input-group-red {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    padding: 8px 14px;
+    width: 320px;
+    max-width: 100%;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    position: relative;
+    z-index: 1;
+}
+
+.search-input-group-red:focus-within {
+    background: #FFFFFF;
+    border-color: #FCD34D;
+    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
+}
+
+.search-input-group-red i {
+    color: #bb0404;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.search-input-group-red input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 4px 0;
+    font-size: 13px;
+    color: #1F2937;
+    outline: none;
+    min-width: 0;
+    font-family: 'Inter', sans-serif;
+}
+
+.search-input-group-red input::placeholder {
+    color: #9CA3AF;
+    font-size: 12px;
+}
+
+.search-input-group-red button {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #FEE2E2;
+    color: #DC2626;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.search-input-group-red button:hover {
+    background: #DC2626;
+    color: #FFFFFF;
+    transform: scale(1.1);
+}
+
+.search-count-red {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 9px;
+    background: #FCD34D;
+    color: #78350F;
+    border-radius: 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Dark mode for red header */
+html.dark-mode .search-input-group-red {
+    background: rgba(30, 41, 59, 0.95);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+html.dark-mode .search-input-group-red input {
+    color: #F1F5F9;
+}
+
+html.dark-mode .search-input-group-red input::placeholder {
+    color: #64748B;
+}
 
 /* ============================================================
-   TRANSACTIONS TABLE (NEW)
+   TRANSACTIONS TABLE
    ============================================================ */
 .txn-table-wrapper {
     overflow-x: auto;
     width: 100%;
     -webkit-overflow-scrolling: touch;
+    padding: 0;
 }
 .txn-table {
     width: 100%;
@@ -1268,11 +1208,30 @@ html.dark-mode .section-count { background: #1E3A5F; color: #60A5FA; }
     white-space: nowrap;
 }
 .txn-table thead th.text-right { text-align: right; }
-.txn-table tbody tr { border-bottom: 1px solid var(--border-color); }
+.txn-table tbody tr { border-bottom: 1px solid var(--border-color); transition: background 0.2s ease; }
 .txn-table tbody tr:hover { background: var(--bg-table-hover); }
 .txn-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
 .txn-table tbody td { padding: 11px 14px; color: var(--text-primary); vertical-align: middle; }
 .txn-table tbody td.text-right { text-align: right; }
+.txn-table tbody tr:last-child { border-bottom: none; }
+
+.txn-row.hidden-by-search {
+    display: none !important;
+}
+
+.row-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--bg-table-hover);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
 
 .txn-date { font-size: 11px; font-weight: 600; color: var(--text-secondary); display: inline-block; line-height: 1.3; }
 .txn-date small { font-size: 10px; color: var(--text-muted); }
@@ -1326,6 +1285,7 @@ html.dark-mode .txn-amount.withdrawal { color: #FCA5A5; }
     display: block;
 }
 
+/* Empty State */
 .empty-txn {
     text-align: center;
     padding: 40px 20px;
@@ -1339,93 +1299,30 @@ html.dark-mode .txn-amount.withdrawal { color: #FCA5A5; }
 }
 .empty-txn p { font-size: 13px; margin: 0; }
 
+/* No Results */
+.no-txn-results {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+}
+
+.no-txn-results i {
+    font-size: 48px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 12px;
+}
+
+.no-txn-results p {
+    font-size: 14px;
+    margin: 0 0 16px 0;
+    color: var(--text-muted);
+}
+
 /* ============================================================
-   SEARCH SMALL
+   TRANSACTION MODAL
    ============================================================ */
-.search-input-group-small {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg-input);
-    border: 1.5px solid var(--border-color);
-    border-radius: 8px;
-    padding: 6px 12px;
-    width: 280px;
-    max-width: 100%;
-}
-.search-input-group-small i { color: #bb0404; font-size: 12px; }
-.search-input-group-small input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    padding: 4px 0;
-    font-size: 12px;
-    color: var(--text-primary);
-    outline: none;
-    min-width: 0;
-}
-
-/* REPORT GROUP */
-.report-group {
-    background: var(--bg-card); border-radius: 12px;
-    border: 1px solid var(--border-color); margin-bottom: 16px;
-    overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); width: 100%;
-}
-.report-group.hidden-by-search { display: none !important; }
-.report-group-header {
-    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
-    padding: 14px 20px; display: flex; justify-content: space-between;
-    align-items: center; gap: 16px; flex-wrap: wrap; color: #FFFFFF;
-}
-.report-header-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
-.report-icon {
-    width: 42px; height: 42px; background: rgba(255,255,255,0.15);
-    border-radius: 10px; display: flex; align-items: center;
-    justify-content: center; font-size: 18px; color: #FFFFFF; flex-shrink: 0;
-}
-.report-header-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
-.report-label { font-size: 11px; font-weight: 600; opacity: 0.7; text-transform: uppercase; }
-.report-number { font-size: 16px; font-weight: 800; color: #FFFFFF; font-family: 'Courier New', monospace; word-break: break-word; }
-.report-header-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.meta-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgba(255,255,255,0.85); }
-.report-header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.report-stat { display: flex; flex-direction: column; align-items: center; padding: 6px 14px; background: rgba(255,255,255,0.12); border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); }
-.report-stat .stat-label { font-size: 9px; font-weight: 600; opacity: 0.7; text-transform: uppercase; }
-.report-stat .stat-value { font-size: 14px; font-weight: 800; color: #FFFFFF; }
-.btn-view-report { padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; background: rgba(255,255,255,0.2); color: #FFFFFF; border: 1px solid rgba(255,255,255,0.2); transition: all 0.2s ease; }
-.btn-view-report:hover { background: #FFFFFF; color: #bb0404; }
-
-/* PROVIDERS TABLE */
-.providers-table-wrapper { overflow-x: auto; width: 100%; -webkit-overflow-scrolling: touch; }
-.providers-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 800px; }
-.providers-table thead tr { background: var(--bg-table-even); }
-.providers-table thead th { padding: 11px 14px; text-align: left; font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; border-bottom: 2px solid var(--border-color); white-space: nowrap; }
-.providers-table thead th.text-right { text-align: right; }
-.providers-table tbody tr { border-bottom: 1px solid var(--border-color); }
-.providers-table tbody tr:hover { background: var(--bg-table-hover); }
-.providers-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
-.providers-table tbody td { padding: 11px 14px; color: var(--text-primary); }
-.providers-table tbody td.text-right { text-align: right; }
-.code-badge { display: inline-block; padding: 3px 10px; background: #DBEAFE; color: #1D4ED8; border-radius: 8px; font-size: 10px; font-weight: 700; font-family: 'Courier New', monospace; }
-html.dark-mode .code-badge { background: #1E3A5F; color: #60A5FA; }
-.amount-float { padding: 3px 10px; background: #DBEAFE; color: #1D4ED8; border-radius: 6px; font-weight: 700; font-size: 12px; font-family: 'Courier New', monospace; }
-.amount-float-bold { padding: 3px 10px; background: #BFDBFE; color: #1E40AF; border-radius: 6px; font-weight: 800; font-size: 12px; font-family: 'Courier New', monospace; }
-.amount-deposit { padding: 3px 10px; background: #DCFCE7; color: #15803D; border-radius: 6px; font-weight: 700; font-size: 12px; font-family: 'Courier New', monospace; }
-.amount-withdrawal { padding: 3px 10px; background: #FEE2E2; color: #991B1B; border-radius: 6px; font-weight: 700; font-size: 12px; font-family: 'Courier New', monospace; }
-.totals-row { background: linear-gradient(135deg, #F3F4F6 0%, #E5E7EB 100%) !important; border-top: 2px solid #bb0404; }
-.totals-row td { padding: 12px 14px; font-weight: 700; }
-
-/* EMPTY STATE */
-.empty-state, .no-search-results {
-    text-align: center; padding: 60px 20px;
-    background: var(--bg-card); border-radius: 12px;
-    border: 1px solid var(--border-color); width: 100%;
-}
-.empty-state i, .no-search-results i { font-size: 56px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 16px; }
-.empty-state h3, .no-search-results h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
-.empty-state p, .no-search-results p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
-
-/* TRANSACTION MODAL */
 .txn-modal-overlay {
     display: none; position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -1504,10 +1401,18 @@ html.dark-mode .txn-balance-label { color: #FCD34D; }
     .capital-card-compact { flex-direction: column; align-items: stretch; padding: 16px 18px; gap: 14px; }
     .capital-compact-content { grid-template-columns: 1fr; gap: 12px; }
     .capital-compact-value { font-size: 20px; }
-    .search-input-group-small { width: 100%; }
-    .report-group-header { flex-direction: column; align-items: flex-start; }
-    .report-header-right { width: 100%; justify-content: space-between; }
-    .section-header { flex-direction: column; align-items: flex-start; }
+    
+    .section-header-red {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .section-header-red h3 {
+        justify-content: center;
+    }
+    .search-input-group-red {
+        width: 100%;
+    }
+    
     .txn-modal { max-width: 95vw; max-height: 95vh; }
     .txn-balance-preview { grid-template-columns: 1fr; }
     .txn-form-actions { flex-direction: column; }
@@ -1558,6 +1463,72 @@ function formatMoney(num) {
 function parseMoney(str) {
     if (!str) return 0;
     return parseFloat(String(str).replace(/,/g, '')) || 0;
+}
+
+// ============================================================
+// TRANSACTION SEARCH
+// ============================================================
+function onTxnSearch(input) {
+    const searchTerm = input.value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.txn-row');
+    const clearBtn = document.getElementById('txnSearchClear');
+    const countBadge = document.getElementById('txnSearchCount');
+    const noResults = document.getElementById('noTxnResults');
+    
+    if (clearBtn) {
+        clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
+    }
+    
+    if (searchTerm.length === 0) {
+        rows.forEach(row => row.classList.remove('hidden-by-search'));
+        
+        let idx = 1;
+        rows.forEach(row => {
+            const numCell = row.querySelector('.row-num');
+            if (numCell) numCell.textContent = idx++;
+        });
+        
+        if (countBadge) countBadge.style.display = 'none';
+        if (noResults) noResults.style.display = 'none';
+        return;
+    }
+    
+    let matchCount = 0;
+    rows.forEach(row => {
+        const searchData = row.getAttribute('data-search') || '';
+        if (searchData.includes(searchTerm)) {
+            row.classList.remove('hidden-by-search');
+            matchCount++;
+        } else {
+            row.classList.add('hidden-by-search');
+        }
+    });
+    
+    let visibleIdx = 1;
+    rows.forEach(row => {
+        if (!row.classList.contains('hidden-by-search')) {
+            const numCell = row.querySelector('.row-num');
+            if (numCell) numCell.textContent = visibleIdx++;
+        }
+    });
+    
+    if (countBadge) {
+        countBadge.style.display = 'inline-block';
+        countBadge.textContent = matchCount;
+    }
+    
+    if (noResults) {
+        noResults.style.display = matchCount === 0 ? 'block' : 'none';
+    }
+}
+
+function clearTxnSearch() {
+    const input = document.getElementById('txnSearchInput');
+    if (input) {
+        input.value = '';
+        onTxnSearch(input);
+        input.focus();
+    }
 }
 
 // ============================================================
@@ -1733,36 +1704,35 @@ function showModalMessage(message, type) {
 }
 
 // ============================================================
-// SEARCH
+// KEYBOARD SHORTCUTS
 // ============================================================
-function onGlobalSearch(input) {
-    const searchTerm = input.value.toLowerCase().trim();
-    const groups = document.querySelectorAll('.report-group');
-    
-    if (searchTerm.length === 0) {
-        groups.forEach(g => g.classList.remove('hidden-by-search'));
-        return;
-    }
-    
-    groups.forEach(group => {
-        const searchData = group.getAttribute('data-search') || '';
-        if (searchData.includes(searchTerm)) {
-            group.classList.remove('hidden-by-search');
-        } else {
-            group.classList.add('hidden-by-search');
-        }
-    });
-}
-
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         const overlay = document.getElementById('txnModalOverlay');
         if (overlay && overlay.classList.contains('show')) {
             closeTransactionModal();
+            return;
+        }
+        
+        const searchInput = document.getElementById('txnSearchInput');
+        if (searchInput && searchInput.value.length > 0 && document.activeElement === searchInput) {
+            clearTxnSearch();
+        }
+    }
+    
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        const input = document.getElementById('txnSearchInput');
+        if (input) {
+            input.focus();
+            input.select();
         }
     }
 });
 
+// ============================================================
+// DARK MODE SYNC
+// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     function syncDarkMode() {
         var html = document.documentElement;

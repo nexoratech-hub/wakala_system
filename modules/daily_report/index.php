@@ -2,11 +2,12 @@
 // ================================================================
 // FILE: modules/daily_report/index.php
 // WAKALA FINANCIAL SYSTEM - DAILY REPORTS
-// ✅ FIXED: Only 3 buttons per provider: View, Edit, Delete
-// ✅ View → view_provider_transactions.php (page)
-// ✅ Edit → edit_provider.php (page)
-// ✅ Delete → delete_provider.php
-// ✅ Add Deposit/Withdrawal buttons in Page Header (modal)
+// ✅ REMOVED: Generate button
+// ✅ REMOVED: Employee column from providers table
+// ✅ NEW: Total Transactions card (with count)
+// ✅ NEW: Transaction count in Deposits/Withdrawals cards
+// ✅ IMPROVED: Beautiful providers table CSS
+// ✅ IMPROVED: Provider icons with dynamic colors
 // ================================================================
 
 require_once '../../config/config.php';
@@ -146,7 +147,7 @@ if (isset($_POST['ajax_action'])) {
             $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$latest_dr) {
-                throw new Exception('Hakuna daily report. Tafadhali tengeneza daily report kwanza.');
+                throw new Exception('Hakuna daily report. Tafadhali tengeneza morning report kwanza.');
             }
             
             $daily_report_id = $latest_dr['id'];
@@ -385,11 +386,15 @@ try {
                 drp.current_float,
                 drp.current_cash,
                 drp.total_deposits as provider_deposits,
-                drp.total_withdrawals as provider_withdrawals
+                drp.total_withdrawals as provider_withdrawals,
+                p.icon_class,
+                p.color_code,
+                p.provider_type
             FROM daily_reports dr
             LEFT JOIN employees e ON dr.employee_id = e.id
             LEFT JOIN branches b ON dr.branch_id = b.id
             LEFT JOIN daily_report_providers drp ON dr.id = drp.daily_report_id
+            LEFT JOIN providers p ON drp.provider_id = p.id
             WHERE dr.report_date BETWEEN ? AND ?";
     $params = [$from_date, $to_date];
 
@@ -433,7 +438,10 @@ try {
                 'current_cash' => $row['current_cash'],
                 'total_deposits' => $row['provider_deposits'],
                 'total_withdrawals' => $row['provider_withdrawals'],
-                'employee_name' => $row['employee_name']
+                'employee_name' => $row['employee_name'],
+                'icon_class' => $row['icon_class'] ?? 'fas fa-university',
+                'color_code' => $row['color_code'] ?? '#3B82F6',
+                'provider_type' => $row['provider_type'] ?? 'bank'
             ];
         }
     }
@@ -443,6 +451,9 @@ try {
     $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // SUMMARY - Daily Reports
+    // ============================================================
     $sql_summary = "SELECT 
             COUNT(*) as total_reports,
             SUM(total_deposits) as total_deposits,
@@ -462,6 +473,37 @@ try {
     $stmt->execute($params_summary);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // ✅ COUNT TRANSACTIONS (Deposits & Withdrawals)
+    // ============================================================
+    $deposit_count = 0;
+    $withdrawal_count = 0;
+    $total_transactions_count = 0;
+
+    $sql_txn_count = "SELECT 
+            COUNT(*) as total_count,
+            SUM(CASE WHEN transaction_type = 'deposit' THEN 1 ELSE 0 END) as deposit_count,
+            SUM(CASE WHEN transaction_type = 'withdrawal' THEN 1 ELSE 0 END) as withdrawal_count
+        FROM transactions
+        WHERE DATE(transaction_date) BETWEEN ? AND ?";
+    $params_txn_count = [$from_date, $to_date];
+
+    if ($selected_branch > 0) {
+        $sql_txn_count .= " AND branch_id = ?";
+        $params_txn_count[] = $selected_branch;
+    }
+
+    $stmt = $db->prepare($sql_txn_count);
+    $stmt->execute($params_txn_count);
+    $txn_count_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $total_transactions_count = intval($txn_count_result['total_count'] ?? 0);
+    $deposit_count = intval($txn_count_result['deposit_count'] ?? 0);
+    $withdrawal_count = intval($txn_count_result['withdrawal_count'] ?? 0);
+
+    // ============================================================
+    // TOTAL FLOAT
+    // ============================================================
     $sql_float = "SELECT 
                     COALESCE(SUM(drp.current_float), 0) as total_float
                   FROM daily_report_providers drp
@@ -479,6 +521,9 @@ try {
     $float_result = $stmt->fetch(PDO::FETCH_ASSOC);
     $total_float = floatval($float_result['total_float'] ?? 0);
 
+    // ============================================================
+    // TOTAL CASH
+    // ============================================================
     $sql_cash = "SELECT 
                     COALESCE(SUM(current_cash), 0) as total_cash
                   FROM daily_reports
@@ -496,6 +541,9 @@ try {
     $total_cash = floatval($cash_result['total_cash'] ?? 0);
     $total_capital = $total_float + $total_cash;
 
+    // ============================================================
+    // PROVIDERS FOR MODAL
+    // ============================================================
     $providers_for_modal = [];
     if ($selected_branch > 0) {
         $stmt = $db->prepare("
@@ -524,6 +572,9 @@ try {
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
+    $total_transactions_count = 0;
+    $deposit_count = 0;
+    $withdrawal_count = 0;
 }
 
 include_once '../../includes/admin_header.php';
@@ -600,17 +651,16 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- Page Header -->
+        <!-- Page Header (Generate button REMOVED) -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> Daily Reports</h2>
-                <p class="text-muted">Manage and track daily business reports</p>
+                <p class="text-muted">
+                    <i class="fas fa-info-circle"></i>
+                    Daily report inaundwa automatically baada ya ku-submit morning report
+                </p>
             </div>
             <div class="header-right">
-                <a href="generate.php?date=<?php echo date('Y-m-d'); ?>&branch_id=<?php echo $selected_branch; ?>" class="btn btn-generate">
-                    <i class="fas fa-magic"></i> Generate
-                </a>
-                
                 <button type="button" class="btn btn-deposit" onclick="openTransactionModal('deposit')">
                     <i class="fas fa-arrow-down"></i> Add Deposit
                 </button>
@@ -634,19 +684,27 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- Summary Cards -->
+        <!-- ============================================================
+             Summary Cards - UPDATED
+             ============================================================ -->
         <div class="summary-cards">
-            <div class="summary-card summary-card-reports">
-                <div class="summary-icon-wrapper summary-icon-blue">
-                    <i class="fas fa-file-invoice"></i>
+            <!-- ✅ CARD 1: TOTAL TRANSACTIONS (idadi) -->
+            <div class="summary-card summary-card-transactions">
+                <div class="summary-icon-wrapper summary-icon-purple">
+                    <i class="fas fa-exchange-alt"></i>
                 </div>
                 <div class="summary-info">
-                    <span class="summary-label">Total Reports</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_reports'] ?? 0); ?></span>
+                    <span class="summary-label">Total Transactions</span>
+                    <span class="summary-value" id="totalTransactionsDisplay"><?php echo number_format($total_transactions_count); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-info-circle"></i>
+                        All deposits & withdrawals
+                    </span>
                 </div>
                 <div class="summary-card-decoration"></div>
             </div>
             
+            <!-- ✅ CARD 2: TOTAL DEPOSITS (amount + count) -->
             <div class="summary-card summary-card-deposits">
                 <div class="summary-icon-wrapper summary-icon-green">
                     <i class="fas fa-arrow-down"></i>
@@ -654,10 +712,15 @@ include_once '../../includes/admin_topbar.php';
                 <div class="summary-info">
                     <span class="summary-label">Total Deposits</span>
                     <span class="summary-value" id="totalDepositsDisplay"><?php echo formatCurrency($summary['total_deposits'] ?? 0); ?></span>
+                    <span class="summary-sub" id="depositCountDisplay">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($deposit_count); ?> transactions
+                    </span>
                 </div>
                 <div class="summary-card-decoration"></div>
             </div>
             
+            <!-- ✅ CARD 3: TOTAL WITHDRAWALS (amount + count) -->
             <div class="summary-card summary-card-withdrawals">
                 <div class="summary-icon-wrapper summary-icon-red">
                     <i class="fas fa-arrow-up"></i>
@@ -665,6 +728,10 @@ include_once '../../includes/admin_topbar.php';
                 <div class="summary-info">
                     <span class="summary-label">Total Withdrawals</span>
                     <span class="summary-value" id="totalWithdrawalsDisplay"><?php echo formatCurrency($summary['total_withdrawals'] ?? 0); ?></span>
+                    <span class="summary-sub" id="withdrawalCountDisplay">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($withdrawal_count); ?> transactions
+                    </span>
                 </div>
                 <div class="summary-card-decoration"></div>
             </div>
@@ -790,7 +857,7 @@ include_once '../../includes/admin_topbar.php';
                             <table class="providers-table" data-report-id="<?php echo $report['id']; ?>">
                                 <thead>
                                     <tr class="table-search-row">
-                                        <th colspan="10" class="table-search-cell">
+                                        <th colspan="9" class="table-search-cell">
                                             <div class="table-search-row-content">
                                                 <div class="table-search-wrapper">
                                                     <i class="fas fa-search table-search-icon"></i>
@@ -828,13 +895,12 @@ include_once '../../includes/admin_topbar.php';
                                             </div>
                                         </th>
                                     </tr>
-                                    <!-- COLUMN HEADERS -->
+                                    <!-- COLUMN HEADERS (Employee column REMOVED) -->
                                     <tr>
                                         <th style="width: 50px;">#</th>
                                         <th>Date</th>
                                         <th>Provider</th>
                                         <th>Code</th>
-                                        <th>Employee</th>
                                         <th class="text-right">Morning Float</th>
                                         <th class="text-right">Current Float</th>
                                         <th class="text-right">Deposits</th>
@@ -856,6 +922,8 @@ include_once '../../includes/admin_topbar.php';
                                         $sum_withdrawals += floatval($p['total_withdrawals']);
                                         
                                         $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code'] . ' ' . ($p['employee_name'] ?? ''));
+                                        $provider_color = $p['color_code'] ?? '#3B82F6';
+                                        $provider_icon = $p['icon_class'] ?? 'fas fa-university';
                                     ?>
                                         <tr class="provider-row" 
                                             data-provider-id="<?php echo $p['provider_id']; ?>"
@@ -866,13 +934,14 @@ include_once '../../includes/admin_topbar.php';
                                             <td class="row-number"><?php echo $i++; ?></td>
                                             <td>
                                                 <span class="date-cell">
+                                                    <i class="far fa-calendar"></i>
                                                     <?php echo date('d M Y', strtotime($report['report_date'])); ?>
                                                 </span>
                                             </td>
                                             <td>
                                                 <div class="provider-cell">
-                                                    <div class="provider-icon-circle">
-                                                        <i class="fas fa-university"></i>
+                                                    <div class="provider-icon-circle" style="background: <?php echo htmlspecialchars($provider_color); ?>;">
+                                                        <i class="<?php echo htmlspecialchars($provider_icon); ?>"></i>
                                                     </div>
                                                     <span class="provider-name-text">
                                                         <?php echo htmlspecialchars($p['provider_name']); ?>
@@ -882,51 +951,44 @@ include_once '../../includes/admin_topbar.php';
                                             <td>
                                                 <span class="code-badge"><?php echo htmlspecialchars($p['provider_code']); ?></span>
                                             </td>
-                                            <td>
-                                                <span class="employee-name-cell">
-                                                    <i class="fas fa-user"></i>
-                                                    <span class="employee-name-text">
-                                                        <?php echo htmlspecialchars($p['employee_name'] ?? $report['employee_name'] ?? 'N/A'); ?>
-                                                    </span>
-                                                </span>
-                                            </td>
                                             <td class="text-right">
                                                 <span class="amount-float morning-float-cell">
+                                                    <i class="fas fa-sun"></i>
                                                     <?php echo formatCurrency($p['morning_float']); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-float-bold current-float-cell" data-provider-id="<?php echo $p['provider_id']; ?>">
+                                                    <i class="fas fa-coins"></i>
                                                     <?php echo formatCurrency($p['current_float']); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-deposit deposits-cell" data-provider-id="<?php echo $p['provider_id']; ?>">
+                                                    <i class="fas fa-arrow-down"></i>
                                                     + <?php echo formatCurrency($p['total_deposits']); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-withdrawal withdrawals-cell" data-provider-id="<?php echo $p['provider_id']; ?>">
+                                                    <i class="fas fa-arrow-up"></i>
                                                     - <?php echo formatCurrency($p['total_withdrawals']); ?>
                                                 </span>
                                             </td>
                                             <td>
                                                 <div class="provider-actions">
-                                                    <!-- ✅ VIEW - Goes to page -->
                                                     <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $selected_branch; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
                                                        class="btn-provider btn-provider-view" 
                                                        title="View Transactions">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
                                                     
-                                                    <!-- ✅ EDIT - Goes to page -->
                                                     <a href="edit_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $selected_branch; ?>" 
                                                        class="btn-provider btn-provider-edit" 
                                                        title="Edit Provider">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
                                                     
-                                                    <!-- DELETE - Stays as link -->
                                                     <a href="delete_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $selected_branch; ?>" 
                                                        class="btn-provider btn-provider-delete" 
                                                        onclick="return confirm('Are you sure you want to delete provider \'<?php echo addslashes($p['provider_name']); ?>\'?')"
@@ -938,7 +1000,7 @@ include_once '../../includes/admin_topbar.php';
                                         </tr>
                                     <?php endforeach; ?>
                                     <tr class="totals-row">
-                                        <td colspan="5"><strong>TOTAL (<?php echo count($report['providers']); ?> providers)</strong></td>
+                                        <td colspan="4"><strong>TOTAL (<?php echo count($report['providers']); ?> providers)</strong></td>
                                         <td class="text-right"><strong class="amount-float"><?php echo formatCurrency($sum_float); ?></strong></td>
                                         <td class="text-right"><strong class="amount-float-bold"><?php echo formatCurrency($sum_current_float); ?></strong></td>
                                         <td class="text-right"><strong class="amount-deposit">+ <?php echo formatCurrency($sum_deposits); ?></strong></td>
@@ -983,10 +1045,11 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-inbox"></i>
                 <h3>No daily reports found</h3>
-                <p>Generate your first report to see providers breakdown.</p>
-                <a href="generate.php?branch_id=<?php echo $selected_branch; ?>" class="btn btn-generate">
-                    <i class="fas fa-magic"></i> Generate Report
-                </a>
+                <p>Daily reports zinaundwa automatically baada ya ku-submit morning report.</p>
+                <p style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">
+                    <i class="fas fa-info-circle"></i>
+                    Submitting morning report itaunda daily report automatically.
+                </p>
             </div>
         <?php endif; ?>
 
@@ -995,7 +1058,7 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <!-- ============================================================
-   TRANSACTION MODAL (Deposit/Withdrawal) - ONLY FROM HEADER BUTTONS
+   TRANSACTION MODAL
    ============================================================ -->
 <div class="txn-modal-overlay" id="txnModalOverlay" onclick="closeTransactionModal(event)">
     <div class="txn-modal" onclick="event.stopPropagation()">
@@ -1128,7 +1191,7 @@ include_once '../../includes/admin_topbar.php';
 
 <style>
 /* ============================================================
-   SAME STYLES AS BEFORE (with small tweaks)
+   GLOBAL
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
@@ -1270,7 +1333,9 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 2px 10px rgba(252, 211, 77, 0.2);
 }
 
-/* Summary Cards */
+/* ============================================================
+   SUMMARY CARDS - UPDATED
+   ============================================================ */
 .summary-cards {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 16px; margin-bottom: 18px; max-width: 100%;
@@ -1285,9 +1350,14 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .summary-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px var(--shadow-hover); }
-.summary-card-reports { border-left: 4px solid #1D4ED8; }
+
+/* ✅ Card 1: Transactions - Purple */
+.summary-card-transactions { border-left: 4px solid #7C3AED; }
+/* Card 2: Deposits - Green */
 .summary-card-deposits { border-left: 4px solid #059669; }
+/* Card 3: Withdrawals - Red */
 .summary-card-withdrawals { border-left: 4px solid #DC2626; }
+
 .summary-icon-wrapper {
     width: 52px; height: 52px; border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
@@ -1295,10 +1365,44 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 .summary-card:hover .summary-icon-wrapper { transform: scale(1.08) rotate(-4deg); }
-.summary-icon-blue { background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%); color: #1D4ED8; border: 1.5px solid #93C5FD; }
-.summary-icon-green { background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); color: #059669; border: 1.5px solid #6EE7B7; }
-.summary-icon-red { background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%); color: #DC2626; border: 1.5px solid #FCA5A5; }
-.summary-info { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+
+/* ✅ New: Purple icon for transactions */
+.summary-icon-purple { 
+    background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); 
+    color: #7C3AED; 
+    border: 1.5px solid #C4B5FD; 
+}
+.summary-icon-green { 
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); 
+    color: #059669; 
+    border: 1.5px solid #6EE7B7; 
+}
+.summary-icon-red { 
+    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%); 
+    color: #DC2626; 
+    border: 1.5px solid #FCA5A5; 
+}
+
+html.dark-mode .summary-icon-purple { 
+    background: linear-gradient(135deg, #4C1D95 0%, #5B21B6 100%); 
+    color: #C4B5FD; 
+    border-color: #A78BFA; 
+}
+html.dark-mode .summary-icon-green { 
+    background: linear-gradient(135deg, #065F46 0%, #047857 100%); 
+    color: #34D399; 
+    border-color: #10B981; 
+}
+html.dark-mode .summary-icon-red { 
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%); 
+    color: #FCA5A5; 
+    border-color: #DC2626; 
+}
+
+.summary-info { 
+    display: flex; flex-direction: column; min-width: 0; 
+    flex: 1; gap: 2px; 
+}
 .summary-label {
     font-size: 11px; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700;
@@ -1309,6 +1413,27 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     word-break: break-word; font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: -0.3px; line-height: 1.2;
 }
+
+/* ✅ NEW: Small text under value */
+.summary-sub {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    letter-spacing: 0.2px;
+    line-height: 1.3;
+}
+.summary-sub i {
+    font-size: 10px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+html.dark-mode .summary-sub { color: var(--text-muted); }
+html.dark-mode .summary-sub i { color: var(--text-light); }
+
 .summary-card-decoration {
     position: absolute; top: -30px; right: -30px;
     width: 100px; height: 100px; border-radius: 50%;
@@ -1334,8 +1459,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     gap: 6px; transition: all 0.3s ease;
     font-family: 'Inter', sans-serif; white-space: nowrap;
 }
-.btn-generate { background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%); color: white; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3); }
-.btn-generate:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(124, 58, 237, 0.4); color: white; }
 .btn-deposit { background: #059669; color: white; }
 .btn-deposit:hover { background: #047857; transform: translateY(-1px); color: white; }
 .btn-withdrawal { background: #DC2626; color: white; }
@@ -1485,23 +1608,43 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .btn-delete-report { background: rgba(248, 113, 113, 0.25); color: #FECACA; border: 1px solid rgba(248, 113, 113, 0.3); padding: 6px 10px; }
 .btn-delete-report:hover { background: #FCA5A5; color: #7F1D1D; }
 
-/* Providers Table */
+/* ============================================================
+   PROVIDERS TABLE - BEAUTIFUL DESIGN
+   ============================================================ */
 .providers-table-wrapper {
     overflow-x: auto; overflow-y: hidden;
     max-width: 100%; -webkit-overflow-scrolling: touch; scroll-behavior: smooth;
+    background: var(--bg-card);
 }
-.providers-table-wrapper::-webkit-scrollbar { height: 8px; }
-.providers-table-wrapper::-webkit-scrollbar-track { background: var(--bg-table-even); border-radius: 4px; }
-.providers-table-wrapper::-webkit-scrollbar-thumb { background: #bb0404; border-radius: 4px; }
-.providers-table-wrapper::-webkit-scrollbar-thumb:hover { background: #8a0303; }
+.providers-table-wrapper::-webkit-scrollbar { height: 10px; }
+.providers-table-wrapper::-webkit-scrollbar-track { 
+    background: var(--bg-table-even); 
+    border-radius: 5px; 
+    margin: 0 8px;
+}
+.providers-table-wrapper::-webkit-scrollbar-thumb { 
+    background: linear-gradient(135deg, #bb0404, #8a0303); 
+    border-radius: 5px; 
+}
+.providers-table-wrapper::-webkit-scrollbar-thumb:hover { 
+    background: linear-gradient(135deg, #8a0303, #6b0202); 
+}
 
-.providers-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 1200px; }
+.providers-table { 
+    width: 100%; 
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px; 
+    min-width: 1100px; 
+}
 
+/* Search Row */
 .table-search-row { background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important; }
 .table-search-cell {
-    padding: 10px 14px !important;
+    padding: 12px 16px !important;
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important;
     border-bottom: none !important; text-align: center !important;
+    border-radius: 0 !important;
 }
 .table-search-row-content {
     display: flex; align-items: center; justify-content: center;
@@ -1509,32 +1652,42 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .table-search-wrapper {
     position: relative; display: inline-flex;
-    align-items: center; gap: 6px;
-    background: rgba(255, 255, 255, 0.95);
-    border-radius: 8px; padding: 5px 12px;
-    width: 280px; max-width: 100%; flex-shrink: 0; order: 1;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    align-items: center; gap: 8px;
+    background: rgba(255, 255, 255, 0.98);
+    border-radius: 10px; padding: 8px 14px;
+    width: 300px; max-width: 100%; flex-shrink: 0; order: 1;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
 }
-html.dark-mode .table-search-wrapper { background: rgba(30, 41, 59, 0.95); }
-.table-search-icon { color: #bb0404; font-size: 12px; flex-shrink: 0; }
+.table-search-wrapper:focus-within {
+    border-color: #FCD34D;
+    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
+}
+html.dark-mode .table-search-wrapper { 
+    background: rgba(30, 41, 59, 0.98); 
+    border-color: rgba(255, 255, 255, 0.1);
+}
+.table-search-icon { color: #bb0404; font-size: 13px; flex-shrink: 0; }
 .table-search-input {
     flex: 1; border: none; background: transparent;
-    padding: 4px 2px; font-size: 12px;
+    padding: 4px 2px; font-size: 13px;
     font-family: 'Inter', sans-serif; color: #1F2937; outline: none; min-width: 0;
+    font-weight: 500;
 }
 html.dark-mode .table-search-input { color: #F9FAFB; }
-.table-search-input::placeholder { color: #9CA3AF; font-size: 11px; }
+.table-search-input::placeholder { color: #9CA3AF; font-size: 12px; }
 .table-search-clear {
-    width: 18px; height: 18px; border-radius: 50%;
+    width: 22px; height: 22px; border-radius: 50%;
     background: #FEE2E2; color: #DC2626; border: none;
     cursor: pointer; display: flex; align-items: center;
-    justify-content: center; font-size: 8px;
+    justify-content: center; font-size: 10px;
     transition: all 0.2s ease; flex-shrink: 0;
 }
-.table-search-clear:hover { background: #DC2626; color: #FFFFFF; }
+.table-search-clear:hover { background: #DC2626; color: #FFFFFF; transform: scale(1.1); }
 .table-search-count {
-    font-size: 10px; font-weight: 700; padding: 2px 8px;
-    background: #F59E0B; color: #FFFFFF; border-radius: 8px;
+    font-size: 10px; font-weight: 800; padding: 3px 9px;
+    background: #FCD34D; color: #78350F; border-radius: 8px;
     white-space: nowrap; flex-shrink: 0;
 }
 .table-scroll-controls {
@@ -1567,123 +1720,304 @@ html.dark-mode .table-search-input { color: #F9FAFB; }
 }
 .scroll-btn:active { transform: translateY(0); box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3); }
 
-.providers-table thead tr:not(.table-search-row) { background: var(--bg-table-even); }
+/* Column Headers */
+.providers-table thead tr:not(.table-search-row) { 
+    background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%);
+}
+html.dark-mode .providers-table thead tr:not(.table-search-row) {
+    background: linear-gradient(135deg, #334155 0%, #1e293b 100%);
+}
 .providers-table thead th:not(.table-search-cell) {
-    padding: 11px 14px; text-align: left; font-weight: 700;
-    color: var(--text-muted); text-transform: uppercase;
-    font-size: 10px; letter-spacing: 0.5px;
-    border-bottom: 2px solid var(--border-color); white-space: nowrap;
+    padding: 14px 16px; text-align: left; font-weight: 800;
+    color: var(--text-secondary); text-transform: uppercase;
+    font-size: 10px; letter-spacing: 1px;
+    border-bottom: 3px solid #bb0404; white-space: nowrap;
+    position: sticky; top: 0; z-index: 5;
 }
 .providers-table thead th.text-right { text-align: right; }
 
+/* Body Rows */
 .providers-table tbody tr {
     border-bottom: 1px solid var(--border-color);
-    transition: background 0.2s ease;
+    transition: all 0.25s ease;
+    position: relative;
 }
-.providers-table tbody tr:hover { background: var(--bg-table-hover); }
+.providers-table tbody tr:hover { 
+    background: linear-gradient(135deg, rgba(187, 4, 4, 0.04), rgba(187, 4, 4, 0.02));
+    transform: scale(1.001);
+    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.08);
+}
 .providers-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
+.providers-table tbody tr:nth-child(even):hover {
+    background: linear-gradient(135deg, rgba(187, 4, 4, 0.04), rgba(187, 4, 4, 0.02));
+}
 .providers-table tbody td {
-    padding: 11px 14px; color: var(--text-primary); vertical-align: middle;
+    padding: 14px 16px; color: var(--text-primary); vertical-align: middle;
 }
 .providers-table tbody td.text-right { text-align: right; }
 .provider-row.hidden-by-search { display: none !important; }
 
+/* Row Number */
 .row-number {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 26px; height: 26px; border-radius: 50%;
-    background: var(--bg-table-hover); font-size: 11px;
-    font-weight: 700; color: var(--text-secondary);
-    border: 1px solid var(--border-color);
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, #F1F5F9, #E2E8F0);
+    font-size: 11px; font-weight: 800; color: #475569;
+    border: 2px solid #CBD5E1;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
-.date-cell { font-size: 11px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
-.provider-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.provider-icon-circle {
-    width: 32px; height: 32px; border-radius: 50%;
-    background: linear-gradient(135deg, #3B82F6, #2563EB);
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 13px; flex-shrink: 0;
+html.dark-mode .row-number {
+    background: linear-gradient(135deg, #334155, #1e293b);
+    color: #CBD5E1;
+    border-color: #475569;
 }
-.provider-name-text { font-weight: 600; color: var(--text-primary); font-size: 13px; white-space: nowrap; }
-.code-badge {
-    display: inline-block; padding: 3px 10px;
-    background: #DBEAFE; color: #1D4ED8; border-radius: 8px;
-    font-size: 10px; font-weight: 700;
-    font-family: 'Courier New', monospace; letter-spacing: 0.5px; white-space: nowrap;
-}
-html.dark-mode .code-badge { background: #1E3A5F; color: #60A5FA; }
 
-.employee-name-cell {
+/* Date Cell */
+.date-cell { 
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 10px; background: #F3F4F6; color: #374151;
-    border-radius: 8px; font-size: 11px; font-weight: 600;
-    white-space: nowrap; border: 1px solid var(--border-color);
+    font-size: 12px; font-weight: 700; color: var(--text-secondary); 
+    white-space: nowrap;
 }
-.employee-name-cell i { font-size: 10px; color: #bb0404; }
-html.dark-mode .employee-name-cell { background: #334155; color: #CBD5E1; }
+.date-cell i {
+    color: #bb0404;
+    font-size: 11px;
+}
 
+/* Provider Cell */
+.provider-cell { 
+    display: flex; align-items: center; gap: 12px; min-width: 0; 
+}
+.provider-icon-circle {
+    width: 38px; height: 38px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 16px; flex-shrink: 0;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    transition: all 0.3s ease;
+}
+.provider-icon-circle:hover {
+    transform: scale(1.08) rotate(-5deg);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+.provider-name-text { 
+    font-weight: 800; color: var(--text-primary); 
+    font-size: 13px; white-space: nowrap;
+    letter-spacing: 0.2px;
+}
+
+/* Code Badge */
+.code-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 5px 12px;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
+    color: #1D4ED8; 
+    border-radius: 8px;
+    font-size: 11px; font-weight: 800;
+    font-family: 'Courier New', monospace; 
+    letter-spacing: 0.5px; white-space: nowrap;
+    border: 1.5px solid #93C5FD;
+    box-shadow: 0 2px 4px rgba(29, 78, 216, 0.1);
+}
+html.dark-mode .code-badge { 
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
+    color: #93C5FD; 
+    border-color: #3B82F6;
+}
+
+/* Amount Badges - IMPROVED */
 .amount-float {
-    display: inline-block; padding: 3px 10px;
-    background: #DBEAFE; color: #1D4ED8;
-    border-radius: 6px; font-weight: 700; font-size: 12px;
-    font-family: 'Courier New', monospace; border: 1px solid #BFDBFE; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
+    color: #1D4ED8;
+    border-radius: 8px; font-weight: 800; font-size: 12px;
+    font-family: 'Courier New', monospace; 
+    border: 1.5px solid #93C5FD; 
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(29, 78, 216, 0.1);
 }
-html.dark-mode .amount-float { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+.amount-float i { font-size: 10px; opacity: 0.8; }
+html.dark-mode .amount-float { 
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
+    color: #93C5FD; 
+    border-color: #3B82F6;
+}
+
 .amount-float-bold {
-    display: inline-block; padding: 3px 10px;
-    background: #BFDBFE; color: #1E40AF;
-    border-radius: 6px; font-weight: 800; font-size: 12px;
-    font-family: 'Courier New', monospace; border: 1px solid #93C5FD; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, #1E40AF, #2563EB); 
+    color: #FFFFFF;
+    border-radius: 8px; font-weight: 900; font-size: 13px;
+    font-family: 'Courier New', monospace; 
+    border: 1.5px solid #1E40AF; 
+    white-space: nowrap;
+    box-shadow: 0 3px 8px rgba(30, 64, 175, 0.25);
+    letter-spacing: 0.3px;
 }
-html.dark-mode .amount-float-bold { background: #1E40AF; color: #BFDBFE; border-color: #60A5FA; }
+.amount-float-bold i { font-size: 10px; }
+html.dark-mode .amount-float-bold { 
+    background: linear-gradient(135deg, #2563EB, #3B82F6); 
+    color: #FFFFFF; 
+}
+
 .amount-deposit {
-    display: inline-block; padding: 3px 10px;
-    background: #DCFCE7; color: #15803D;
-    border-radius: 6px; font-weight: 700; font-size: 12px;
-    font-family: 'Courier New', monospace; border: 1px solid #BBF7D0; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #DCFCE7, #BBF7D0); 
+    color: #15803D;
+    border-radius: 8px; font-weight: 800; font-size: 12px;
+    font-family: 'Courier New', monospace; 
+    border: 1.5px solid #86EFAC; 
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(21, 128, 61, 0.1);
 }
-html.dark-mode .amount-deposit { background: #14532D; color: #4ADE80; border-color: #16A34A; }
+.amount-deposit i { font-size: 10px; }
+html.dark-mode .amount-deposit { 
+    background: linear-gradient(135deg, #14532D, #166534); 
+    color: #4ADE80; 
+    border-color: #16A34A;
+}
+
 .amount-withdrawal {
-    display: inline-block; padding: 3px 10px;
-    background: #FEE2E2; color: #991B1B;
-    border-radius: 6px; font-weight: 700; font-size: 12px;
-    font-family: 'Courier New', monospace; border: 1px solid #FECACA; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #FEE2E2, #FECACA); 
+    color: #991B1B;
+    border-radius: 8px; font-weight: 800; font-size: 12px;
+    font-family: 'Courier New', monospace; 
+    border: 1.5px solid #FCA5A5; 
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(153, 27, 27, 0.1);
 }
-html.dark-mode .amount-withdrawal { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+.amount-withdrawal i { font-size: 10px; }
+html.dark-mode .amount-withdrawal { 
+    background: linear-gradient(135deg, #7F1D1D, #991B1B); 
+    color: #FCA5A5; 
+    border-color: #DC2626;
+}
 
-.provider-actions { display: flex; gap: 4px; justify-content: center; }
+/* Provider Actions */
+.provider-actions { 
+    display: flex; gap: 6px; justify-content: center; 
+}
 .btn-provider {
-    width: 32px; height: 32px; border-radius: 6px; border: none;
+    width: 36px; height: 36px; border-radius: 10px; border: none;
     display: inline-flex; align-items: center; justify-content: center;
-    cursor: pointer; transition: all 0.2s ease;
-    text-decoration: none; font-size: 13px;
+    cursor: pointer; transition: all 0.25s ease;
+    text-decoration: none; font-size: 14px;
+    position: relative;
+    overflow: hidden;
 }
-.btn-provider-view { background: #DBEAFE; color: #1D4ED8; border: 1px solid #BFDBFE; }
-.btn-provider-view:hover { background: #1D4ED8; color: #FFFFFF; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3); }
-.btn-provider-edit { background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A; }
-.btn-provider-edit:hover { background: #D97706; color: #FFFFFF; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
-.btn-provider-delete { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
-.btn-provider-delete:hover { background: #991B1B; color: #FFFFFF; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(153, 27, 27, 0.3); }
-html.dark-mode .btn-provider-view { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .btn-provider-edit { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
-html.dark-mode .btn-provider-delete { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+.btn-provider::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 0; height: 0;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.4s ease, height 0.4s ease;
+}
+.btn-provider:hover::before {
+    width: 100%; height: 100%;
+}
+.btn-provider-view { 
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
+    color: #1D4ED8; 
+    border: 1.5px solid #93C5FD; 
+    box-shadow: 0 2px 6px rgba(29, 78, 216, 0.15);
+}
+.btn-provider-view:hover { 
+    background: linear-gradient(135deg, #1D4ED8, #2563EB); 
+    color: #FFFFFF; 
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
+}
+.btn-provider-edit { 
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A); 
+    color: #D97706; 
+    border: 1.5px solid #FCD34D; 
+    box-shadow: 0 2px 6px rgba(217, 119, 6, 0.15);
+}
+.btn-provider-edit:hover { 
+    background: linear-gradient(135deg, #D97706, #F59E0B); 
+    color: #FFFFFF; 
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 16px rgba(217, 119, 6, 0.4);
+}
+.btn-provider-delete { 
+    background: linear-gradient(135deg, #FEE2E2, #FECACA); 
+    color: #991B1B; 
+    border: 1.5px solid #FCA5A5; 
+    box-shadow: 0 2px 6px rgba(153, 27, 27, 0.15);
+}
+.btn-provider-delete:hover { 
+    background: linear-gradient(135deg, #991B1B, #DC2626); 
+    color: #FFFFFF; 
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 16px rgba(153, 27, 27, 0.4);
+}
 
+html.dark-mode .btn-provider-view { 
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
+    color: #60A5FA; 
+    border-color: #3B82F6; 
+}
+html.dark-mode .btn-provider-edit { 
+    background: linear-gradient(135deg, #5F3A1E, #78350F); 
+    color: #FBBF24; 
+    border-color: #F59E0B; 
+}
+html.dark-mode .btn-provider-delete { 
+    background: linear-gradient(135deg, #7F1D1D, #991B1B); 
+    color: #FCA5A5; 
+    border-color: #DC2626; 
+}
+
+/* Totals Row */
 .totals-row {
-    background: linear-gradient(135deg, #F3F4F6 0%, #E5E7EB 100%) !important;
-    border-top: 2px solid #bb0404;
+    background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important;
+    border-top: 3px solid #bb0404;
 }
-html.dark-mode .totals-row { background: linear-gradient(135deg, #2d3a4f 0%, #334155 100%) !important; }
-.totals-row td { padding: 12px 14px; font-weight: 700; color: var(--text-primary); border-bottom: none; }
+html.dark-mode .totals-row { 
+    background: linear-gradient(135deg, #334155 0%, #1e293b 100%) !important; 
+}
+.totals-row td { 
+    padding: 16px 16px; 
+    font-weight: 900; 
+    color: var(--text-primary); 
+    border-bottom: none;
+    font-size: 13px;
+}
+.totals-row td strong {
+    font-size: 13px;
+    letter-spacing: 0.3px;
+}
 
+/* Messages */
 .no-providers-message {
-    padding: 24px; text-align: center; color: var(--text-muted);
-    font-size: 13px; display: flex; align-items: center;
-    justify-content: center; gap: 8px; background: var(--bg-table-even);
+    padding: 30px; text-align: center; color: var(--text-muted);
+    font-size: 14px; display: flex; align-items: center;
+    justify-content: center; gap: 10px; background: var(--bg-table-even);
+    font-weight: 500;
+}
+.no-providers-message i {
+    font-size: 20px;
+    color: #bb0404;
+    opacity: 0.6;
 }
 .no-provider-results {
-    text-align: center; padding: 30px 20px; background: var(--bg-table-even);
+    text-align: center; padding: 40px 20px; background: var(--bg-table-even);
 }
-.no-provider-results i { font-size: 36px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 10px; }
-.no-provider-results p { font-size: 13px; color: var(--text-muted); margin: 0 0 12px 0; }
+.no-provider-results i { 
+    font-size: 44px; color: var(--text-light); 
+    opacity: 0.4; display: block; margin-bottom: 12px; 
+}
+.no-provider-results p { 
+    font-size: 14px; color: var(--text-muted); 
+    margin: 0 0 16px 0; font-weight: 500;
+}
 
 .empty-state, .no-search-results {
     text-align: center; padding: 60px 20px;
@@ -1698,7 +2032,7 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #2d3a4f 0%, #33
 .empty-state p, .no-search-results p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
 
 /* ============================================================
-   TRANSACTION MODAL (Only from Header buttons)
+   TRANSACTION MODAL
    ============================================================ */
 .txn-modal-overlay {
     display: none; position: fixed;
@@ -2011,6 +2345,7 @@ html.dark-mode .txn-after-value { color: #A78BFA; }
     .summary-icon-wrapper { width: 44px; height: 44px; font-size: 18px; }
     .summary-value { font-size: 18px; }
     .summary-label { font-size: 10px; }
+    .summary-sub { font-size: 10px; }
     .capital-compact-value { font-size: 17px; }
     .capital-compact-icon { width: 44px; height: 44px; font-size: 18px; }
     .scroll-btn { width: 32px; height: 32px; font-size: 13px; }
@@ -2256,7 +2591,6 @@ async function submitTransaction(event) {
                 closeTransactionModal();
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
-                // Refresh page to get updated values
                 window.location.reload();
             }, 1500);
         } else {
@@ -2311,7 +2645,19 @@ function updateTableRow(txn) {
     });
 }
 
+// ============================================================
+// UPDATE SUMMARY CARDS (With transaction count)
+// ============================================================
 function updateSummaryCards(txn) {
+    // ✅ Update Total Transactions count
+    const totalTxnEl = document.getElementById('totalTransactionsDisplay');
+    if (totalTxnEl) {
+        const currentNum = parseMoney(totalTxnEl.textContent);
+        const newTotal = currentNum + 1;
+        totalTxnEl.textContent = newTotal.toLocaleString();
+        totalTxnEl.style.animation = 'highlight 1s ease';
+    }
+    
     const depositEl = document.getElementById('totalDepositsDisplay');
     const withdrawalEl = document.getElementById('totalWithdrawalsDisplay');
     
@@ -2320,6 +2666,16 @@ function updateSummaryCards(txn) {
         const newTotal = currentNum + parseFloat(txn.amount);
         depositEl.textContent = formatMoney(newTotal);
         depositEl.style.animation = 'highlight 1s ease';
+        
+        // ✅ Update deposit count
+        const depositCountEl = document.getElementById('depositCountDisplay');
+        if (depositCountEl) {
+            const match = depositCountEl.textContent.match(/(\d+)/);
+            if (match) {
+                const newCount = parseInt(match[1]) + 1;
+                depositCountEl.innerHTML = `<i class="fas fa-list"></i> ${newCount.toLocaleString()} transactions`;
+            }
+        }
     }
     
     if (txn.type === 'withdrawal' && withdrawalEl) {
@@ -2327,6 +2683,16 @@ function updateSummaryCards(txn) {
         const newTotal = currentNum + parseFloat(txn.amount);
         withdrawalEl.textContent = formatMoney(newTotal);
         withdrawalEl.style.animation = 'highlight 1s ease';
+        
+        // ✅ Update withdrawal count
+        const withdrawalCountEl = document.getElementById('withdrawalCountDisplay');
+        if (withdrawalCountEl) {
+            const match = withdrawalCountEl.textContent.match(/(\d+)/);
+            if (match) {
+                const newCount = parseInt(match[1]) + 1;
+                withdrawalCountEl.innerHTML = `<i class="fas fa-list"></i> ${newCount.toLocaleString()} transactions`;
+            }
+        }
     }
 }
 

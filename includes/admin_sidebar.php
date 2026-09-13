@@ -1,14 +1,15 @@
 <?php
 // ================================================================
-// FILE: includes/sidebar.php
-// WAKALA SYSTEM - SIDEBAR WITH RED #bb0404
+// FILE: includes/admin_sidebar.php
+// WAKALA SYSTEM - ADMIN SIDEBAR WITH RED #bb0404
 // FIXED: Maintains scroll position after menu click
+// + TRANSFER MENU ADDED
 // ================================================================
 
 // ============================================================
 // GET COMPANY NAME FROM DATABASE
 // ============================================================
-$company_name = 'Wakala System'; // Default name
+$company_name = 'Wakala System';
 
 try {
     global $db;
@@ -24,23 +25,20 @@ try {
     $company_name = 'Wakala System';
 }
 
-// Get user data
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'Employee';
 $user_initial = strtoupper(substr($full_name, 0, 1));
 
-// Get current page for active state
 $current_page = basename($_SERVER['PHP_SELF']);
 $current_dir = basename(dirname($_SERVER['PHP_SELF']));
 ?>
 
 <style>
 /* ============================================================
-   SIDEBAR - RED #bb0404 THEME
+   ADMIN SIDEBAR - RED #bb0404 THEME
    ============================================================ */
 
-/* SIDEBAR CONTAINER - RED #bb0404 */
-.wakala-sidebar {
+.admin-sidebar {
     position: fixed;
     top: 0;
     left: 0;
@@ -55,33 +53,25 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     display: flex;
     flex-direction: column;
     box-shadow: 2px 0 20px rgba(187, 4, 4, 0.4);
-    /* IMPORTANT: Smooth scroll behavior */
     scroll-behavior: smooth;
 }
 
-/* SIDEBAR SCROLLBAR */
-.wakala-sidebar::-webkit-scrollbar {
-    width: 4px;
-}
-.wakala-sidebar::-webkit-scrollbar-track {
-    background: #8a0303;
-}
-.wakala-sidebar::-webkit-scrollbar-thumb {
+.admin-sidebar::-webkit-scrollbar { width: 4px; }
+.admin-sidebar::-webkit-scrollbar-track { background: #8a0303; }
+.admin-sidebar::-webkit-scrollbar-thumb {
     background: #ffffff;
     border-radius: 4px;
 }
 
-/* ============================================================
-   LOGO SECTION - LARGE
-   ============================================================ */
-.wakala-sidebar .sidebar-logo {
+/* LOGO */
+.admin-sidebar .sidebar-logo {
     padding: 20px 16px 16px 16px;
     text-align: center;
     border-bottom: 1px solid rgba(255,255,255,0.15);
     flex-shrink: 0;
 }
 
-.wakala-sidebar .sidebar-logo img {
+.admin-sidebar .sidebar-logo img {
     width: 80px;
     height: 80px;
     border-radius: 50%;
@@ -91,12 +81,12 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     transition: all 0.3s ease;
 }
 
-.wakala-sidebar .sidebar-logo img:hover {
+.admin-sidebar .sidebar-logo img:hover {
     transform: scale(1.05);
     box-shadow: 0 0 35px rgba(255,255,255,0.25);
 }
 
-.wakala-sidebar .sidebar-logo .logo-text {
+.admin-sidebar .sidebar-logo .logo-text {
     font-size: 20px;
     font-weight: 800;
     color: #ffffff;
@@ -105,7 +95,7 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     text-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
-.wakala-sidebar .sidebar-logo .logo-sub {
+.admin-sidebar .sidebar-logo .logo-sub {
     font-size: 11px;
     color: rgba(255,255,255,0.7);
     letter-spacing: 2px;
@@ -113,10 +103,8 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     font-weight: 300;
 }
 
-/* ============================================================
-   USER INFO
-   ============================================================ */
-.wakala-sidebar .sidebar-user {
+/* USER */
+.admin-sidebar .sidebar-user {
     padding: 14px 16px;
     border-bottom: 1px solid rgba(255,255,255,0.15);
     display: flex;
@@ -125,7 +113,7 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     flex-shrink: 0;
 }
 
-.wakala-sidebar .sidebar-user .user-avatar {
+.admin-sidebar .sidebar-user .user-avatar {
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -140,31 +128,29 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     border: 2px solid rgba(255,255,255,0.3);
 }
 
-.wakala-sidebar .sidebar-user .user-name {
+.admin-sidebar .sidebar-user .user-name {
     font-size: 14px;
     font-weight: 600;
     color: #ffffff;
 }
 
-.wakala-sidebar .sidebar-user .user-role {
+.admin-sidebar .sidebar-user .user-role {
     font-size: 11px;
     color: rgba(255,255,255,0.7);
 }
 
-/* ============================================================
-   NAVIGATION MENU
-   ============================================================ */
-.wakala-sidebar .sidebar-nav {
+/* NAV */
+.admin-sidebar .sidebar-nav {
     flex: 1;
     padding: 10px 0 10px 0;
 }
 
-.wakala-sidebar .sidebar-nav .nav-section {
+.admin-sidebar .sidebar-nav .nav-section {
     padding: 0 12px;
     margin-bottom: 4px;
 }
 
-.wakala-sidebar .sidebar-nav .nav-section .section-title {
+.admin-sidebar .sidebar-nav .nav-section .section-title {
     font-size: 10px;
     text-transform: uppercase;
     color: rgba(255,255,255,0.5);
@@ -173,10 +159,7 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     font-weight: 600;
 }
 
-/* ============================================================
-   NAV ITEMS
-   ============================================================ */
-.wakala-sidebar .sidebar-nav .nav-item {
+.admin-sidebar .sidebar-nav .nav-item {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -192,21 +175,18 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     position: relative;
 }
 
-/* HOVER - WHITE */
-.wakala-sidebar .sidebar-nav .nav-item:hover {
+.admin-sidebar .sidebar-nav .nav-item:hover {
     background: rgba(255,255,255,0.15);
     color: #ffffff;
 }
 
-/* ACTIVE - WHITE BACKGROUND */
-.wakala-sidebar .sidebar-nav .nav-item.active {
+.admin-sidebar .sidebar-nav .nav-item.active {
     background: rgba(255,255,255,0.2);
     color: #ffffff;
     font-weight: 600;
 }
 
-/* ACTIVE INDICATOR BAR - WHITE */
-.wakala-sidebar .sidebar-nav .nav-item.active::before {
+.admin-sidebar .sidebar-nav .nav-item.active::before {
     content: '';
     position: absolute;
     left: 0;
@@ -218,16 +198,14 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     border-radius: 0 4px 4px 0;
 }
 
-/* ICONS */
-.wakala-sidebar .sidebar-nav .nav-item i {
+.admin-sidebar .sidebar-nav .nav-item i {
     width: 20px;
     text-align: center;
     font-size: 15px;
     flex-shrink: 0;
 }
 
-/* BADGE */
-.wakala-sidebar .sidebar-nav .nav-item .nav-badge {
+.admin-sidebar .sidebar-nav .nav-item .nav-badge {
     margin-left: auto;
     background: rgba(255,255,255,0.2);
     color: #ffffff;
@@ -239,53 +217,57 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     text-align: center;
 }
 
-/* SUB MENU */
-.wakala-sidebar .sidebar-nav .nav-item.has-sub {
-    cursor: pointer;
+/* NEW BADGE */
+.admin-sidebar .sidebar-nav .nav-item .nav-badge.new-badge {
+    background: #FCD34D;
+    color: #78350F;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 9px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 8px;
 }
 
-.wakala-sidebar .sidebar-nav .nav-item .sub-arrow {
+/* SUB MENU */
+.admin-sidebar .sidebar-nav .nav-item.has-sub { cursor: pointer; }
+
+.admin-sidebar .sidebar-nav .nav-item .sub-arrow {
     margin-left: auto;
     transition: transform 0.3s ease;
     font-size: 11px;
 }
 
-.wakala-sidebar .sidebar-nav .nav-item .sub-arrow.open {
-    transform: rotate(180deg);
-}
+.admin-sidebar .sidebar-nav .nav-item .sub-arrow.open { transform: rotate(180deg); }
 
-.wakala-sidebar .sidebar-nav .sub-menu {
+.admin-sidebar .sidebar-nav .sub-menu {
     padding-left: 20px;
     overflow: hidden;
     max-height: 0;
     transition: max-height 0.3s ease;
 }
 
-.wakala-sidebar .sidebar-nav .sub-menu.open {
-    max-height: 500px;
-}
+.admin-sidebar .sidebar-nav .sub-menu.open { max-height: 500px; }
 
-.wakala-sidebar .sidebar-nav .sub-menu .nav-item {
+.admin-sidebar .sidebar-nav .sub-menu .nav-item {
     padding: 8px 16px;
     font-size: 12px;
     padding-left: 48px;
 }
 
-.wakala-sidebar .sidebar-nav .sub-menu .nav-item i {
+.admin-sidebar .sidebar-nav .sub-menu .nav-item i {
     font-size: 12px;
     width: 16px;
 }
 
-/* ============================================================
-   FOOTER / BOTTOM
-   ============================================================ */
-.wakala-sidebar .sidebar-footer {
+/* FOOTER */
+.admin-sidebar .sidebar-footer {
     padding: 12px 16px;
     border-top: 1px solid rgba(255,255,255,0.15);
     flex-shrink: 0;
 }
 
-.wakala-sidebar .sidebar-footer .logout-btn {
+.admin-sidebar .sidebar-footer .logout-btn {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -298,47 +280,43 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     transition: all 0.2s ease;
 }
 
-.wakala-sidebar .sidebar-footer .logout-btn:hover {
+.admin-sidebar .sidebar-footer .logout-btn:hover {
     background: rgba(255,255,255,0.15);
     color: #ffffff;
 }
 
-.wakala-sidebar .sidebar-footer .logout-btn i {
+.admin-sidebar .sidebar-footer .logout-btn i {
     font-size: 15px;
     width: 20px;
     text-align: center;
 }
 
-/* ============================================================
-   RESPONSIVE - MOBILE
-   ============================================================ */
+/* RESPONSIVE */
 @media (max-width: 768px) {
-    .wakala-sidebar {
+    .admin-sidebar {
         width: 0;
         overflow: hidden;
         transition: width 0.3s ease, box-shadow 0.3s ease;
     }
     
-    .wakala-sidebar.mobile-open {
+    .admin-sidebar.mobile-open {
         width: 280px;
         overflow-y: auto;
         box-shadow: 2px 0 30px rgba(0,0,0,0.5);
     }
     
-    .wakala-sidebar .sidebar-logo img {
+    .admin-sidebar .sidebar-logo img {
         width: 60px;
         height: 60px;
     }
     
-    .wakala-sidebar .sidebar-logo .logo-text {
+    .admin-sidebar .sidebar-logo .logo-text {
         font-size: 16px;
     }
 }
 
-/* ============================================================
-   MOBILE TOGGLE BUTTON
-   ============================================================ */
-.sidebar-toggle-btn {
+/* TOGGLE BUTTON */
+.admin-sidebar-toggle {
     display: none;
     position: fixed;
     top: 12px;
@@ -354,21 +332,17 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     transition: all 0.3s ease;
 }
 
-.sidebar-toggle-btn:hover {
+.admin-sidebar-toggle:hover {
     background: #ffffff;
     color: #bb0404;
 }
 
 @media (max-width: 768px) {
-    .sidebar-toggle-btn {
-        display: block;
-    }
+    .admin-sidebar-toggle { display: block; }
 }
 
-/* ============================================================
-   OVERLAY FOR MOBILE
-   ============================================================ */
-.sidebar-overlay {
+/* OVERLAY */
+.admin-sidebar-overlay {
     display: none;
     position: fixed;
     top: 0;
@@ -380,13 +354,9 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     transition: opacity 0.3s ease;
 }
 
-.sidebar-overlay.active {
-    display: block;
-}
+.admin-sidebar-overlay.active { display: block; }
 
-/* ============================================================
-   MAIN CONTENT OFFSET
-   ============================================================ */
+/* MAIN CONTENT OFFSET */
 .main-wrapper {
     margin-left: 260px;
     min-height: 100vh;
@@ -394,96 +364,79 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
 }
 
 @media (max-width: 768px) {
-    .main-wrapper {
-        margin-left: 0;
-    }
+    .main-wrapper { margin-left: 0; }
 }
 
-/* ============================================================
-   SIDEBAR COLLAPSED STATE
-   ============================================================ */
-.wakala-sidebar.collapsed {
-    width: 72px;
-}
+/* COLLAPSED STATE */
+.admin-sidebar.collapsed { width: 72px; }
 
-.wakala-sidebar.collapsed .sidebar-logo .logo-text,
-.wakala-sidebar.collapsed .sidebar-logo .logo-sub,
-.wakala-sidebar.collapsed .sidebar-user .user-name,
-.wakala-sidebar.collapsed .sidebar-user .user-role,
-.wakala-sidebar.collapsed .sidebar-nav .nav-item span:not(.nav-badge),
-.wakala-sidebar.collapsed .sidebar-footer .logout-btn span {
+.admin-sidebar.collapsed .sidebar-logo .logo-text,
+.admin-sidebar.collapsed .sidebar-logo .logo-sub,
+.admin-sidebar.collapsed .sidebar-user .user-name,
+.admin-sidebar.collapsed .sidebar-user .user-role,
+.admin-sidebar.collapsed .sidebar-nav .nav-item span:not(.nav-badge),
+.admin-sidebar.collapsed .sidebar-footer .logout-btn span {
     display: none;
 }
 
-.wakala-sidebar.collapsed .sidebar-nav .nav-item {
+.admin-sidebar.collapsed .sidebar-nav .nav-item {
     justify-content: center;
     padding: 12px;
 }
 
-.wakala-sidebar.collapsed .sidebar-nav .nav-item i {
+.admin-sidebar.collapsed .sidebar-nav .nav-item i {
     font-size: 18px;
     width: auto;
 }
 
-.wakala-sidebar.collapsed .sidebar-nav .nav-item .nav-badge {
-    display: none;
-}
+.admin-sidebar.collapsed .sidebar-nav .nav-item .nav-badge { display: none; }
+.admin-sidebar.collapsed .sidebar-nav .sub-menu { display: none; }
 
-.wakala-sidebar.collapsed .sidebar-nav .sub-menu {
-    display: none;
-}
-
-.wakala-sidebar.collapsed .sidebar-logo img {
+.admin-sidebar.collapsed .sidebar-logo img {
     width: 44px;
     height: 44px;
 }
 
-.wakala-sidebar.collapsed .sidebar-user .user-avatar {
+.admin-sidebar.collapsed .sidebar-user .user-avatar {
     width: 32px;
     height: 32px;
     font-size: 12px;
 }
 
-.wakala-sidebar.collapsed .sidebar-footer .logout-btn {
+.admin-sidebar.collapsed .sidebar-footer .logout-btn {
     justify-content: center;
 }
 
-.wakala-sidebar.collapsed .sidebar-footer .logout-btn i {
+.admin-sidebar.collapsed .sidebar-footer .logout-btn i {
     font-size: 18px;
 }
 
-.wakala-sidebar.collapsed .sidebar-logo {
+.admin-sidebar.collapsed .sidebar-logo {
     padding: 12px 8px;
 }
 
-.wakala-sidebar.collapsed .sidebar-user {
+.admin-sidebar.collapsed .sidebar-user {
     padding: 10px 8px;
     justify-content: center;
 }
 
-.wakala-sidebar.collapsed .sidebar-nav .nav-item.active::before {
+.admin-sidebar.collapsed .sidebar-nav .nav-item.active::before {
     width: 3px;
     height: 20px;
 }
 
-.main-wrapper.expanded {
-    margin-left: 72px;
-}
+.main-wrapper.expanded { margin-left: 72px; }
 
 @media (max-width: 768px) {
-    .wakala-sidebar.collapsed {
+    .admin-sidebar.collapsed {
         width: 0;
         overflow: hidden;
     }
-    .main-wrapper.expanded {
-        margin-left: 0;
-    }
+    .main-wrapper.expanded { margin-left: 0; }
 }
 
-/* ============================================================
-   TOGGLE BUTTON INSIDE SIDEBAR
-   ============================================================ */
-.sidebar-collapse-toggle {
+/* COLLAPSE TOGGLE */
+.admin-sidebar-collapse {
     position: absolute;
     bottom: 80px;
     right: -12px;
@@ -503,31 +456,26 @@ $current_dir = basename(dirname($_SERVER['PHP_SELF']));
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 
-.sidebar-collapse-toggle:hover {
+.admin-sidebar-collapse:hover {
     transform: scale(1.1);
     box-shadow: 0 4px 16px rgba(0,0,0,0.3);
 }
 
 @media (max-width: 768px) {
-    .sidebar-collapse-toggle {
-        display: none;
-    }
+    .admin-sidebar-collapse { display: none; }
 }
 </style>
 
 <!-- ============================================================
 SIDEBAR HTML
 ============================================================ -->
-<!-- Mobile Toggle Button -->
-<button class="sidebar-toggle-btn" id="sidebarToggleBtn">
+<button class="admin-sidebar-toggle" id="adminSidebarToggle">
     <i class="fas fa-bars"></i>
 </button>
 
-<!-- Overlay -->
-<div class="sidebar-overlay" id="sidebarOverlay"></div>
+<div class="admin-sidebar-overlay" id="adminSidebarOverlay"></div>
 
-<!-- Sidebar - RED #bb0404 -->
-<aside class="wakala-sidebar" id="mainSidebar">
+<aside class="admin-sidebar" id="adminSidebar">
     
     <!-- Logo -->
     <div class="sidebar-logo">
@@ -594,6 +542,15 @@ SIDEBAR HTML
             <a href="../store_cash_out/index.php" class="nav-item <?php echo $current_dir == 'store_cash_out' ? 'active' : ''; ?>">
                 <i class="fas fa-money-bill-wave"></i>
                 <span>Cash Out</span>
+            </a>
+            
+            <!-- ============================================================
+            ✅ NEW: TRANSFER MENU
+            ============================================================ -->
+            <a href="../transfers/index.php" class="nav-item <?php echo $current_dir == 'transfers' ? 'active' : ''; ?>">
+                <i class="fas fa-exchange-alt"></i>
+                <span>Transfer</span>
+                <span class="nav-badge new-badge">NEW</span>
             </a>
             
             <a href="../capital_management/index.php" class="nav-item <?php echo $current_dir == 'capital_management' ? 'active' : ''; ?>">
@@ -671,36 +628,33 @@ SIDEBAR HTML
     </div>
     
     <!-- Collapse Toggle -->
-    <button class="sidebar-collapse-toggle" id="sidebarCollapseBtn" title="Toggle Sidebar">
+    <button class="admin-sidebar-collapse" id="adminSidebarCollapse" title="Toggle Sidebar">
         <i class="fas fa-chevron-left"></i>
     </button>
     
 </aside>
 
 <!-- ============================================================
-SIDEBAR JAVASCRIPT - FIXED: Maintains scroll position
+SIDEBAR JAVASCRIPT
 ============================================================ -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     
-    // ============================================================
-    // SIDEBAR SCROLL POSITION - RESTORE ON PAGE LOAD
-    // ============================================================
-    const sidebar = document.getElementById('mainSidebar');
+    const sidebar = document.getElementById('adminSidebar');
     
-    // Function to save scroll position
+    // ============================================================
+    // SIDEBAR SCROLL POSITION
+    // ============================================================
     function saveSidebarScroll() {
         if (sidebar) {
-            localStorage.setItem('sidebarScrollPosition', sidebar.scrollTop);
+            localStorage.setItem('adminSidebarScrollPosition', sidebar.scrollTop);
         }
     }
     
-    // Function to restore scroll position
     function restoreSidebarScroll() {
         if (sidebar) {
-            const savedPosition = localStorage.getItem('sidebarScrollPosition');
+            const savedPosition = localStorage.getItem('adminSidebarScrollPosition');
             if (savedPosition !== null) {
-                // Use setTimeout to ensure sidebar is fully rendered
                 setTimeout(function() {
                     sidebar.scrollTop = parseInt(savedPosition);
                 }, 50);
@@ -708,26 +662,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Save scroll position when user scrolls
     if (sidebar) {
         sidebar.addEventListener('scroll', function() {
             saveSidebarScroll();
         });
     }
     
-    // Restore scroll position on page load
     restoreSidebarScroll();
     
-    // Also restore when page is fully loaded
     window.addEventListener('load', function() {
         restoreSidebarScroll();
     });
     
     // ============================================================
-    // MOBILE TOGGLE - ONLY TOGGLES WITH BUTTON
+    // MOBILE TOGGLE
     // ============================================================
-    const toggleBtn = document.getElementById('sidebarToggleBtn');
-    const overlay = document.getElementById('sidebarOverlay');
+    const toggleBtn = document.getElementById('adminSidebarToggle');
+    const overlay = document.getElementById('adminSidebarOverlay');
     
     if (toggleBtn && sidebar && overlay) {
         toggleBtn.addEventListener('click', function(e) {
@@ -735,23 +686,19 @@ document.addEventListener('DOMContentLoaded', function() {
             sidebar.classList.toggle('mobile-open');
             overlay.classList.toggle('active');
             
-            // Save state
             const isOpen = sidebar.classList.contains('mobile-open');
-            localStorage.setItem('sidebarMobileOpen', isOpen ? 'true' : 'false');
+            localStorage.setItem('adminSidebarMobileOpen', isOpen ? 'true' : 'false');
         });
         
         overlay.addEventListener('click', function() {
             sidebar.classList.remove('mobile-open');
             overlay.classList.remove('active');
-            localStorage.setItem('sidebarMobileOpen', 'false');
+            localStorage.setItem('adminSidebarMobileOpen', 'false');
         });
     }
     
-    // ============================================================
-    // RESTORE MOBILE STATE
-    // ============================================================
     if (window.innerWidth <= 768) {
-        const mobileOpen = localStorage.getItem('sidebarMobileOpen') === 'true';
+        const mobileOpen = localStorage.getItem('adminSidebarMobileOpen') === 'true';
         if (mobileOpen && sidebar && overlay) {
             sidebar.classList.add('mobile-open');
             overlay.classList.add('active');
@@ -759,14 +706,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // COLLAPSE TOGGLE - Desktop only
+    // COLLAPSE TOGGLE
     // ============================================================
-    const collapseBtn = document.getElementById('sidebarCollapseBtn');
+    const collapseBtn = document.getElementById('adminSidebarCollapse');
     const mainWrapper = document.querySelector('.main-wrapper');
     
     if (collapseBtn && sidebar && mainWrapper) {
-        // Restore collapsed state
-        const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+        const isCollapsed = localStorage.getItem('adminSidebarCollapsed') === 'true';
         if (isCollapsed && window.innerWidth > 768) {
             sidebar.classList.add('collapsed');
             mainWrapper.classList.add('expanded');
@@ -783,22 +729,21 @@ document.addEventListener('DOMContentLoaded', function() {
             const icon = this.querySelector('i');
             if (sidebar.classList.contains('collapsed')) {
                 icon.className = 'fas fa-chevron-right';
-                localStorage.setItem('sidebarCollapsed', 'true');
+                localStorage.setItem('adminSidebarCollapsed', 'true');
             } else {
                 icon.className = 'fas fa-chevron-left';
-                localStorage.setItem('sidebarCollapsed', 'false');
+                localStorage.setItem('adminSidebarCollapsed', 'false');
             }
         });
     }
     
     // ============================================================
-    // ACTIVE LINK - USING CURRENT DIRECTORY
+    // ACTIVE LINK
     // ============================================================
-    const navItems = document.querySelectorAll('.wakala-sidebar .nav-item');
+    const navItems = document.querySelectorAll('.admin-sidebar .nav-item');
     const currentDir = '<?php echo $current_dir; ?>';
     
     navItems.forEach(function(item) {
-        // Check if this is the current page using href
         const href = item.getAttribute('href');
         if (href && href.includes(currentDir)) {
             item.classList.add('active');
@@ -825,42 +770,29 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // ============================================================
-    // FIX: PREVENT SIDEBAR FROM SCROLLING TO TOP ON MENU CLICK
+    // PREVENT SCROLL TO TOP
     // ============================================================
-    // Save scroll position before navigation
-    const allNavLinks = document.querySelectorAll('.wakala-sidebar .nav-item');
+    const allNavLinks = document.querySelectorAll('.admin-sidebar .nav-item');
     allNavLinks.forEach(function(link) {
         link.addEventListener('click', function(e) {
-            // Save current scroll position before navigating
             saveSidebarScroll();
-            
-            // Allow the navigation to proceed
-            // The scroll position will be restored on page load
             return true;
         });
     });
     
-    // ============================================================
-    // CLOSE SIDEBAR WHEN RESIZING TO DESKTOP
-    // ============================================================
     window.addEventListener('resize', function() {
         if (window.innerWidth > 768) {
             sidebar.classList.remove('mobile-open');
             overlay.classList.remove('active');
-            localStorage.setItem('sidebarMobileOpen', 'false');
+            localStorage.setItem('adminSidebarMobileOpen', 'false');
         }
     });
     
-    // ============================================================
-    // SAVE SCROLL ON BEFOREUNLOAD (when leaving page)
-    // ============================================================
     window.addEventListener('beforeunload', function() {
         saveSidebarScroll();
     });
     
-    console.log('%c 🏪 Sidebar Loaded - Scroll position preserved',
+    console.log('%c 🏪 Admin Sidebar Loaded - Transfer Menu Added',
         'background:#8B0000; color:white; padding:4px 12px; border-radius:4px; font-size:12px;');
-    console.log('%c 📍 Saved scroll position: ' + (localStorage.getItem('sidebarScrollPosition') || '0'),
-        'color:#6B7280; font-size:11px;');
 });
 </script>

@@ -2,917 +2,1562 @@
 // ================================================================
 // FILE: modules/providers/add.php
 // WAKALA FINANCIAL SYSTEM - ADD PROVIDER
-// WITH FULL DARK MODE SUPPORT
+// RED THEME + WORKING COLOR PICKER + LIVE PREVIEW
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+if (session_status() === PHP_SESSION_NONE) session_start();
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// CHECK PERMISSION - Only admin and super_admin can access
-// ============================================================
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
 
 // ============================================================
-// GET USER DATA
+// LOAD BRANCHES
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
+$stmt->execute();
+$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
-// PROCESS FORM SUBMISSION
+// AUTO DISPLAY ORDER — next available
 // ============================================================
-$error = '';
-$success = '';
+$next_display_order = 1;
+try {
+    $stmt = $db->query("SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM providers");
+    $next_display_order = intval($stmt->fetchColumn() ?: 1);
+} catch (Exception $e) {
+    $next_display_order = 1;
+}
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Get form data
-    $provider_code = trim($_POST['provider_code'] ?? '');
-    $provider_name = trim($_POST['provider_name'] ?? '');
-    $provider_type = $_POST['provider_type'] ?? 'bank';
-    $category = trim($_POST['category'] ?? 'Financial');
-    $icon_class = trim($_POST['icon_class'] ?? 'fas fa-university');
-    $color_code = trim($_POST['color_code'] ?? '#0B5ED7');
-    $display_order = intval($_POST['display_order'] ?? 0);
-    $is_active = isset($_POST['is_active']) ? 1 : 0;
-    $is_default = isset($_POST['is_default']) ? 1 : 0;
-    $requires_cash_balance = isset($_POST['requires_cash_balance']) ? 1 : 0;
-    $notes = trim($_POST['notes'] ?? '');
+// ============================================================
+// HANDLE SUBMISSION
+// ============================================================
+$error_message = '';
+$form_data = [];
 
-    // Validation
-    if (empty($provider_code)) {
-        $error = 'Provider code is required.';
-    } elseif (empty($provider_name)) {
-        $error = 'Provider name is required.';
-    } elseif (empty($provider_type)) {
-        $error = 'Provider type is required.';
-    } else {
-        // Check if provider code already exists
-        $check_stmt = $db->prepare("SELECT id FROM providers WHERE provider_code = ?");
-        $check_stmt->execute([$provider_code]);
-        if ($check_stmt->rowCount() > 0) {
-            $error = 'Provider code "' . htmlspecialchars($provider_code) . '" already exists.';
-        } else {
-            try {
-                // Insert provider
-                $insert_stmt = $db->prepare("INSERT INTO providers 
-                    (provider_code, provider_name, provider_type, category, icon_class, 
-                     color_code, display_order, is_active, is_default, requires_cash_balance, 
-                     notes, created_by) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                
-                $insert_stmt->execute([
-                    $provider_code,
-                    $provider_name,
-                    $provider_type,
-                    $category,
-                    $icon_class,
-                    $color_code,
-                    $display_order,
-                    $is_active,
-                    $is_default,
-                    $requires_cash_balance,
-                    $notes,
-                    $user_id
-                ]);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_provider') {
+    try {
+        $db->beginTransaction();
 
-                $provider_id = $db->lastInsertId();
+        $provider_name  = trim($_POST['provider_name'] ?? '');
+        $provider_code  = trim($_POST['provider_code'] ?? '');
+        $provider_type  = $_POST['provider_type'] ?? 'bank';
+        $color_code     = trim($_POST['color_code'] ?? '#0B5ED7');
+        $icon_class     = trim($_POST['icon_class'] ?? 'fas fa-university');
+        $display_order  = intval($_POST['display_order'] ?? 0);
+        $is_active      = isset($_POST['is_active']) ? 1 : 0;
 
-                // Log activity
-                logActivity($user_id, 'Add Provider', 'Providers', $provider_id, null, 
-                    'Provider: ' . $provider_name . ' (' . $provider_code . ')', null);
+        // Validation
+        if ($provider_name === '')  throw new Exception('Provider name is required.');
+        if ($provider_code === '')  throw new Exception('Provider code is required.');
 
-                $_SESSION['success_message'] = 'Provider "' . htmlspecialchars($provider_name) . '" added successfully!';
-                header('Location: index.php');
-                exit();
+        if (!in_array($provider_type, ['bank', 'mobile_money', 'other'])) $provider_type = 'bank';
+        if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color_code)) $color_code = '#0B5ED7';
+        if (!preg_match('/^fa[srlb]? fa-[a-z0-9-]+$/', $icon_class)) $icon_class = 'fas fa-university';
 
-            } catch (Exception $e) {
-                $error = 'Database error: ' . $e->getMessage();
-            }
+        // Uniqueness
+        $stmt = $db->prepare("SELECT COUNT(*) FROM providers WHERE provider_name = ?");
+        $stmt->execute([$provider_name]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Provider name already exists.');
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM providers WHERE provider_code = ?");
+        $stmt->execute([$provider_code]);
+        if ($stmt->fetchColumn() > 0) throw new Exception('Provider code already exists.');
+
+        // Insert provider
+        $stmt = $db->prepare("
+            INSERT INTO providers
+            (provider_name, provider_code, provider_type, icon_class,
+             color_code, display_order, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([
+            $provider_name, $provider_code, $provider_type, $icon_class,
+            $color_code, $display_order, $is_active
+        ]);
+
+        $new_provider_id = $db->lastInsertId();
+
+        // Branch assignments
+        $selected_branch_ids = array_map('intval', $_POST['branch_ids'] ?? []);
+
+        foreach ($selected_branch_ids as $branch_id) {
+            $stmt = $db->prepare("
+                INSERT INTO branch_providers
+                (provider_id, branch_id, provider_code, is_active, created_at)
+                VALUES (?, ?, ?, 1, NOW())
+            ");
+            $stmt->execute([$new_provider_id, $branch_id, $provider_code]);
         }
+
+        // Log
+        if (function_exists('logActivity')) {
+            logActivity(
+                $user_id,
+                'Add Provider',
+                'Providers',
+                $new_provider_id,
+                '',
+                'Added new provider: ' . $provider_name . ' (' . $provider_code . ')'
+            );
+        }
+
+        $db->commit();
+
+        $_SESSION['success_message'] = 'Provider "' . $provider_name . '" added successfully!';
+        header('Location: index.php');
+        exit();
+
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        $error_message = $e->getMessage();
+        $form_data = $_POST;
     }
 }
 
 // ============================================================
-// GET PROVIDER TYPES FOR DROPDOWN
+// FORM VALUES
 // ============================================================
-$provider_types = [
-    'bank' => 'Bank',
-    'mobile_money' => 'Mobile Money',
-    'other' => 'Other'
+$form_name          = $form_data['provider_name']  ?? '';
+$form_code          = $form_data['provider_code']  ?? '';
+$form_type          = $form_data['provider_type']  ?? 'bank';
+$form_color         = $form_data['color_code']     ?? '#0B5ED7';
+$form_icon          = $form_data['icon_class']     ?? 'fas fa-university';
+$form_display_order = $form_data['display_order']  ?? $next_display_order;
+$form_is_active     = isset($form_data['is_active']) ? 1 : 1; // default checked
+
+$form_branch_ids = isset($form_data['branch_ids'])
+                 ? array_map('intval', $form_data['branch_ids'])
+                 : [];
+
+// Preset colors
+$preset_colors = [
+    '#0B5ED7', '#DC2626', '#059669', '#D97706',
+    '#7C3AED', '#0891B2', '#DB2777', '#65A30D',
+    '#EA580C', '#1E40AF', '#475569', '#000000',
 ];
 
-// Get max display order
-$max_order_stmt = $db->query("SELECT MAX(display_order) as max_order FROM providers");
-$max_order = $max_order_stmt->fetch()['max_order'] ?? 0;
-$next_order = $max_order + 1;
+// Preset icons
+$preset_icons = [
+    'fas fa-university'       => 'Bank',
+    'fas fa-landmark'         => 'Landmark',
+    'fas fa-mobile-alt'       => 'Mobile',
+    'fas fa-credit-card'      => 'Card',
+    'fas fa-wallet'           => 'Wallet',
+    'fas fa-money-bill-wave'  => 'Cash',
+    'fas fa-coins'            => 'Coins',
+    'fas fa-piggy-bank'       => 'Savings',
+    'fas fa-chart-line'       => 'Investments',
+    'fas fa-hand-holding-usd' => 'Payments',
+    'fas fa-exchange-alt'     => 'Transfer',
+    'fas fa-building'         => 'Building',
+];
 
-// ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
-// ============================================================
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
 
-<!-- ============================================================
-CONTENT
-============================================================ -->
 <div class="main-wrapper">
     <div class="main-content">
-        
-        <!-- ===== PAGE HEADER ===== -->
+
+        <!-- PAGE HEADER -->
         <div class="page-header">
-            <div class="page-header-left">
-                <h2><i class="fas fa-plus-circle"></i> Add Provider</h2>
-                <span class="record-count">New</span>
+            <div class="header-left">
+                <h2><i class="fas fa-plus-circle"></i> Add New Provider</h2>
+                <p class="text-muted">Create a new bank, mobile money, or financial provider</p>
             </div>
-            <div class="page-header-right">
+            <div class="header-right">
                 <a href="index.php" class="btn btn-back">
-                    <i class="fas fa-arrow-left"></i> Back to Providers
+                    <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
         </div>
 
-        <!-- ============================================================
-        ERROR/SUCCESS MESSAGES
-        ============================================================ -->
-        <?php if (!empty($error)): ?>
+        <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo $error; ?></span>
+                <i class="fas fa-exclamation-circle"></i>
+                <span><?php echo htmlspecialchars($error_message); ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        ADD PROVIDER FORM
-        ============================================================ -->
-        <div class="form-container">
-            <form method="POST" action="" class="provider-form" id="providerForm">
-                
-                <!-- ===== BASIC INFORMATION ===== -->
-                <div class="form-section">
-                    <div class="form-section-title">
-                        <i class="fas fa-info-circle"></i> Basic Information
+        <form method="POST" action="" id="providerForm" onsubmit="return validateForm()">
+            <input type="hidden" name="action" value="add_provider">
+
+            <!-- ============================================================
+            MAIN CARD
+            ============================================================ -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon">
+                            <i class="fas fa-university"></i>
+                        </div>
+                        <div>
+                            <h3>Provider Information</h3>
+                            <p>Enter the new provider details</p>
+                        </div>
                     </div>
-                    
-                    <div class="form-grid">
-                        <!-- Provider Code -->
-                        <div class="form-group">
-                            <label for="provider_code" class="form-label required">Provider Code</label>
-                            <input type="text" id="provider_code" name="provider_code" 
-                                   class="form-control" 
-                                   value="<?php echo htmlspecialchars($_POST['provider_code'] ?? ''); ?>"
-                                   placeholder="e.g., NMB, MPESA" 
-                                   required>
-                            <small class="form-help">Unique code for the provider (e.g., NMB, MPESA)</small>
-                        </div>
-
-                        <!-- Provider Name -->
-                        <div class="form-group">
-                            <label for="provider_name" class="form-label required">Provider Name</label>
-                            <input type="text" id="provider_name" name="provider_name" 
-                                   class="form-control" 
-                                   value="<?php echo htmlspecialchars($_POST['provider_name'] ?? ''); ?>"
-                                   placeholder="e.g., NMB Bank, M-PESA" 
-                                   required>
-                            <small class="form-help">Full name of the provider</small>
-                        </div>
-
-                        <!-- Provider Type -->
-                        <div class="form-group">
-                            <label for="provider_type" class="form-label required">Provider Type</label>
-                            <select id="provider_type" name="provider_type" class="form-control" required>
-                                <option value="">Select Type</option>
-                                <?php foreach ($provider_types as $value => $label): ?>
-                                    <option value="<?php echo $value; ?>" 
-                                        <?php echo (($_POST['provider_type'] ?? '') == $value) ? 'selected' : ''; ?>>
-                                        <?php echo $label; ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <small class="form-help">Select the type of provider</small>
-                        </div>
-
-                        <!-- Category -->
-                        <div class="form-group">
-                            <label for="category" class="form-label">Category</label>
-                            <input type="text" id="category" name="category" 
-                                   class="form-control" 
-                                   value="<?php echo htmlspecialchars($_POST['category'] ?? 'Financial'); ?>"
-                                   placeholder="e.g., Financial, Telecom">
-                            <small class="form-help">Category or industry of the provider</small>
-                        </div>
+                    <div class="form-card-badge">
+                        <i class="fas fa-plus"></i> New Provider
                     </div>
                 </div>
 
-                <!-- ===== APPEARANCE ===== -->
-                <div class="form-section">
-                    <div class="form-section-title">
-                        <i class="fas fa-palette"></i> Appearance
-                    </div>
-                    
-                    <div class="form-grid">
-                        <!-- Icon Class -->
+                <div class="form-card-body">
+
+                    <!-- Name + Code -->
+                    <div class="form-row">
                         <div class="form-group">
-                            <label for="icon_class" class="form-label">Icon Class</label>
-                            <div class="icon-picker-wrapper">
-                                <input type="text" id="icon_class" name="icon_class" 
-                                       class="form-control" 
-                                       value="<?php echo htmlspecialchars($_POST['icon_class'] ?? 'fas fa-university'); ?>"
-                                       placeholder="e.g., fas fa-university">
-                                <button type="button" class="btn-icon-picker" onclick="openIconPicker()">
-                                    <i class="fas fa-icons"></i>
-                                </button>
-                            </div>
-                            <small class="form-help">Font Awesome icon class (e.g., fas fa-university)</small>
+                            <label>Provider Name <span class="required">*</span></label>
+                            <input type="text" name="provider_name" id="providerName"
+                                   class="form-control"
+                                   value="<?php echo htmlspecialchars($form_name); ?>"
+                                   placeholder="e.g. CRDB Bank"
+                                   required
+                                   oninput="updatePreview()">
                         </div>
-
-                        <!-- Color Code -->
                         <div class="form-group">
-                            <label for="color_code" class="form-label">Color</label>
-                            <div class="color-picker-wrapper">
-                                <input type="color" id="color_code" name="color_code" 
-                                       class="color-input" 
-                                       value="<?php echo htmlspecialchars($_POST['color_code'] ?? '#0B5ED7'); ?>">
-                                <input type="text" id="color_code_text" name="color_code_text" 
-                                       class="form-control color-text" 
-                                       value="<?php echo htmlspecialchars($_POST['color_code'] ?? '#0B5ED7'); ?>">
-                            </div>
-                            <small class="form-help">Color code for the provider badge</small>
-                        </div>
-
-                        <!-- Display Order -->
-                        <div class="form-group">
-                            <label for="display_order" class="form-label">Display Order</label>
-                            <input type="number" id="display_order" name="display_order" 
-                                   class="form-control" 
-                                   value="<?php echo $_POST['display_order'] ?? $next_order; ?>"
-                                   min="0">
-                            <small class="form-help">Order in which provider appears (lower = first)</small>
+                            <label>Provider Code <span class="required">*</span></label>
+                            <input type="text" name="provider_code" id="providerCode"
+                                   class="form-control code-input"
+                                   value="<?php echo htmlspecialchars($form_code); ?>"
+                                   placeholder="e.g. CRDB001"
+                                   required
+                                   oninput="updatePreview()">
+                            <p class="field-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Short unique code. Uppercase letters and numbers recommended.
+                            </p>
                         </div>
                     </div>
-                </div>
 
-                <!-- ===== SETTINGS ===== -->
-                <div class="form-section">
-                    <div class="form-section-title">
-                        <i class="fas fa-cog"></i> Settings
-                    </div>
-                    
-                    <div class="form-grid">
-                        <!-- Is Active -->
-                        <div class="form-group form-checkbox">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="is_active" name="is_active" 
-                                       <?php echo (!isset($_POST['is_active']) || $_POST['is_active'] == 'on') ? 'checked' : ''; ?>>
-                                <span class="checkbox-text">Active</span>
-                                <i class="fas fa-check-circle check-icon"></i>
-                            </label>
-                            <small class="form-help">Enable or disable this provider</small>
-                        </div>
-
-                        <!-- Is Default -->
-                        <div class="form-group form-checkbox">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="is_default" name="is_default" 
-                                       <?php echo isset($_POST['is_default']) && $_POST['is_default'] == 'on' ? 'checked' : ''; ?>>
-                                <span class="checkbox-text">Default Provider</span>
-                                <i class="fas fa-star check-icon"></i>
-                            </label>
-                            <small class="form-help">Mark as default provider</small>
-                        </div>
-
-                        <!-- Requires Cash Balance -->
-                        <div class="form-group form-checkbox">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="requires_cash_balance" name="requires_cash_balance" 
-                                       <?php echo (!isset($_POST['requires_cash_balance']) || $_POST['requires_cash_balance'] == 'on') ? 'checked' : ''; ?>>
-                                <span class="checkbox-text">Requires Cash Balance</span>
-                                <i class="fas fa-money-bill check-icon"></i>
-                            </label>
-                            <small class="form-help">Provider has cash balance tracking</small>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ===== NOTES ===== -->
-                <div class="form-section">
-                    <div class="form-section-title">
-                        <i class="fas fa-sticky-note"></i> Notes
-                    </div>
-                    
+                    <!-- Type selector -->
                     <div class="form-group">
-                        <label for="notes" class="form-label">Notes (Optional)</label>
-                        <textarea id="notes" name="notes" class="form-control" rows="4" 
-                                  placeholder="Add any additional information about this provider..."><?php 
-                            echo htmlspecialchars($_POST['notes'] ?? ''); 
-                        ?></textarea>
+                        <label>Provider Type <span class="required">*</span></label>
+                        <div class="type-selector">
+                            <label class="type-option">
+                                <input type="radio" name="provider_type" value="bank"
+                                       <?php echo $form_type === 'bank' ? 'checked' : ''; ?>
+                                       onchange="updatePreview()">
+                                <div class="type-card type-bank">
+                                    <div class="type-icon"><i class="fas fa-landmark"></i></div>
+                                    <div class="type-info">
+                                        <span class="type-title">Bank</span>
+                                        <span class="type-desc">Traditional banking</span>
+                                    </div>
+                                    <div class="type-check"><i class="fas fa-check-circle"></i></div>
+                                </div>
+                            </label>
+
+                            <label class="type-option">
+                                <input type="radio" name="provider_type" value="mobile_money"
+                                       <?php echo $form_type === 'mobile_money' ? 'checked' : ''; ?>
+                                       onchange="updatePreview()">
+                                <div class="type-card type-mobile">
+                                    <div class="type-icon"><i class="fas fa-mobile-alt"></i></div>
+                                    <div class="type-info">
+                                        <span class="type-title">Mobile Money</span>
+                                        <span class="type-desc">Mobile payment</span>
+                                    </div>
+                                    <div class="type-check"><i class="fas fa-check-circle"></i></div>
+                                </div>
+                            </label>
+
+                            <label class="type-option">
+                                <input type="radio" name="provider_type" value="other"
+                                       <?php echo $form_type === 'other' ? 'checked' : ''; ?>
+                                       onchange="updatePreview()">
+                                <div class="type-card type-other">
+                                    <div class="type-icon"><i class="fas fa-coins"></i></div>
+                                    <div class="type-info">
+                                        <span class="type-title">Other</span>
+                                        <span class="type-desc">Other financial services</span>
+                                    </div>
+                                    <div class="type-check"><i class="fas fa-check-circle"></i></div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="section-divider">
+                        <span><i class="fas fa-palette"></i> Appearance</span>
+                    </div>
+
+                    <!-- Color picker + Icon -->
+                    <div class="form-row">
+                        <!-- COLOR PICKER -->
+                        <div class="form-group">
+                            <label>Brand Color</label>
+                            <div class="color-picker-wrapper">
+
+                                <!-- Native color input, wrapped in a big clickable swatch -->
+                                <label class="color-swatch-label" for="colorPicker" title="Click to pick a color">
+                                    <input type="color"
+                                           id="colorPicker"
+                                           class="color-picker-input"
+                                           value="<?php echo htmlspecialchars($form_color); ?>"
+                                           oninput="onColorPick(this.value)"
+                                           onchange="onColorPick(this.value)">
+                                    <span class="color-swatch-preview" id="colorSwatchPreview"
+                                          style="background: <?php echo htmlspecialchars($form_color); ?>;">
+                                        <i class="fas fa-eye-dropper"></i>
+                                    </span>
+                                </label>
+
+                                <!-- Hidden field that actually submits -->
+                                <input type="hidden" name="color_code" id="colorCodeHidden"
+                                       value="<?php echo htmlspecialchars($form_color); ?>">
+
+                                <!-- Hex text input -->
+                                <input type="text"
+                                       id="colorText"
+                                       class="form-control color-text-input"
+                                       value="<?php echo htmlspecialchars($form_color); ?>"
+                                       placeholder="#0B5ED7"
+                                       pattern="^#[0-9A-Fa-f]{6}$"
+                                       maxlength="7"
+                                       oninput="onColorText(this.value)">
+                            </div>
+                            <p class="field-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Click the swatch to open the color picker, or type a hex code.
+                            </p>
+
+                            <!-- Preset swatches -->
+                            <div class="preset-colors">
+                                <?php foreach ($preset_colors as $hex): ?>
+                                    <button type="button"
+                                            class="preset-color-btn"
+                                            style="background: <?php echo $hex; ?>;"
+                                            data-color="<?php echo $hex; ?>"
+                                            title="<?php echo $hex; ?>"
+                                            onclick="pickColor('<?php echo $hex; ?>')"></button>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+
+                        <!-- ICON -->
+                        <div class="form-group">
+                            <label>Icon</label>
+                            <div class="icon-preview-row">
+                                <div class="icon-preview-box" id="iconPreviewBox"
+                                     style="background: <?php echo htmlspecialchars($form_color); ?>;">
+                                    <i class="<?php echo htmlspecialchars($form_icon); ?>" id="iconPreview"></i>
+                                </div>
+                                <input type="text" name="icon_class" id="iconInput"
+                                       class="form-control icon-text-input"
+                                       value="<?php echo htmlspecialchars($form_icon); ?>"
+                                       placeholder="fas fa-university"
+                                       oninput="updatePreview()">
+                            </div>
+                            <div class="preset-icons">
+                                <?php foreach ($preset_icons as $cls => $label): ?>
+                                    <button type="button" class="preset-icon-btn"
+                                            title="<?php echo $label; ?>"
+                                            data-icon="<?php echo $cls; ?>"
+                                            onclick="pickIcon('<?php echo $cls; ?>')">
+                                        <i class="<?php echo $cls; ?>"></i>
+                                    </button>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Display order + Active -->
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Display Order</label>
+                            <input type="number" name="display_order" id="displayOrder"
+                                   class="form-control"
+                                   value="<?php echo intval($form_display_order); ?>"
+                                   min="0" max="999"
+                                   placeholder="0">
+                            <p class="field-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Lower numbers appear first. Suggested: <strong><?php echo $next_display_order; ?></strong>
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Status</label>
+                            <label class="toggle-switch-wrapper">
+                                <input type="checkbox" name="is_active" value="1"
+                                       id="isActiveToggle"
+                                       <?php echo $form_is_active ? 'checked' : ''; ?>
+                                       onchange="updatePreview()">
+                                <span class="toggle-switch"></span>
+                                <span class="toggle-label" id="toggleLabel">
+                                    <?php echo $form_is_active ? 'Active' : 'Inactive'; ?>
+                                </span>
+                            </label>
+                            <p class="field-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Inactive providers are hidden from transfers.
+                            </p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- ============================================================
+            LIVE PREVIEW
+            ============================================================ -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon">
+                            <i class="fas fa-eye"></i>
+                        </div>
+                        <div>
+                            <h3>Live Preview</h3>
+                            <p>How the provider card will look</p>
+                        </div>
                     </div>
                 </div>
 
-                <!-- ===== FORM ACTIONS ===== -->
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Save Provider
-                    </button>
-                    <a href="index.php" class="btn btn-secondary">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
+                <div class="form-card-body">
+                    <div class="preview-center">
+                        <div class="provider-card-preview" id="previewCard">
+                            <div class="preview-accent" id="previewAccent"
+                                 style="background: <?php echo htmlspecialchars($form_color); ?>;"></div>
+                            <div class="preview-body">
+                                <div class="preview-top">
+                                    <div class="preview-icon-circle" id="previewIconCircle"
+                                         style="background: <?php echo htmlspecialchars($form_color); ?>;">
+                                        <i class="<?php echo htmlspecialchars($form_icon); ?>" id="previewIcon"></i>
+                                    </div>
+                                    <div class="preview-info">
+                                        <div class="preview-name" id="previewName">
+                                            <?php echo htmlspecialchars($form_name ?: 'Provider Name'); ?>
+                                        </div>
+                                        <div class="preview-code" id="previewCode">
+                                            <?php echo htmlspecialchars($form_code ?: 'CODE-000'); ?>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="preview-meta">
+                                    <span class="preview-type-badge" id="previewType">
+                                        <i class="fas fa-landmark"></i> Bank
+                                    </span>
+                                    <span class="preview-status" id="previewStatus">
+                                        <i class="fas fa-check-circle"></i> Active
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            BRANCH ASSIGNMENT
+            ============================================================ -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <div class="form-card-header-left">
+                        <div class="form-card-icon">
+                            <i class="fas fa-store-alt"></i>
+                        </div>
+                        <div>
+                            <h3>Branch Assignment</h3>
+                            <p>Select which branches can use this provider</p>
+                        </div>
+                    </div>
+                    <div class="form-card-badge">
+                        <i class="fas fa-check"></i>
+                        <span id="branchCount"><?php echo count($form_branch_ids); ?></span> selected
+                    </div>
                 </div>
 
-            </form>
-        </div>
+                <div class="form-card-body">
+                    <?php if (count($branches) > 0): ?>
+                        <div class="branch-selector-toolbar">
+                            <button type="button" class="btn-mini" onclick="selectAllBranches()">
+                                <i class="fas fa-check-double"></i> Select All
+                            </button>
+                            <button type="button" class="btn-mini" onclick="clearAllBranches()">
+                                <i class="fas fa-times"></i> Clear All
+                            </button>
+                        </div>
+
+                        <div class="branches-grid">
+                            <?php foreach ($branches as $b):
+                                $is_selected = in_array(intval($b['id']), $form_branch_ids);
+                            ?>
+                            <label class="branch-option <?php echo $is_selected ? 'selected' : ''; ?>">
+                                <input type="checkbox" name="branch_ids[]"
+                                       value="<?php echo $b['id']; ?>"
+                                       class="branch-checkbox"
+                                       <?php echo $is_selected ? 'checked' : ''; ?>
+                                       onchange="toggleBranchOption(this)">
+                                <div class="branch-check-icon">
+                                    <i class="fas fa-check"></i>
+                                </div>
+                                <div class="branch-option-icon">
+                                    <i class="fas fa-store"></i>
+                                </div>
+                                <div class="branch-option-info">
+                                    <span class="branch-option-name">
+                                        <?php echo htmlspecialchars($b['branch_name']); ?>
+                                    </span>
+                                    <span class="branch-option-code">
+                                        <?php echo htmlspecialchars($b['branch_code'] ?? '-'); ?>
+                                    </span>
+                                </div>
+                            </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <div class="empty-branches">
+                            <i class="fas fa-store-slash"></i>
+                            <p>No active branches available</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            FORM ACTIONS
+            ============================================================ -->
+            <div class="form-actions">
+                <a href="index.php" class="btn btn-secondary-large">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="button" class="btn btn-reset-large" onclick="resetForm()">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+                <button type="submit" class="btn btn-submit-large" id="submitBtn">
+                    <i class="fas fa-save"></i> Save Provider
+                </button>
+            </div>
+
+        </form>
 
     </div>
-    
-    <!-- ============================================================
-    FOOTER
-    ============================================================ -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-STYLES
-============================================================ -->
 <style>
 /* ============================================================
-   DARK MODE VARIABLES
+   GLOBAL
    ============================================================ */
-:root {
-    --form-bg: #FFFFFF;
-    --form-text: #1F2937;
-    --form-text-secondary: #6B7280;
-    --form-text-light: #9CA3AF;
-    --form-border: #E5E7EB;
-    --form-input-bg: #F9FAFB;
-    --form-hover: #F3F4F6;
-    --form-shadow: rgba(0,0,0,0.06);
-    --form-shadow-lg: rgba(0,0,0,0.12);
-    --form-section-border: #E5E7EB;
-}
-
-html.dark-mode {
-    --form-bg: #1F2937;
-    --form-text: #F9FAFB;
-    --form-text-secondary: #9CA3AF;
-    --form-text-light: #6B7280;
-    --form-border: #374151;
-    --form-input-bg: #374151;
-    --form-hover: #374151;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.4);
-    --form-section-border: #374151;
-}
-
-body {
-    background: var(--form-bg) !important;
-    color: var(--form-text);
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-.main-wrapper {
-    background: var(--form-bg) !important;
-}
-
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
 .main-content {
-    background: var(--form-bg) !important;
+    overflow-x: hidden !important; max-width: 100% !important;
+    width: 100% !important; padding: 16px 20px !important;
 }
 
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
+:root {
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-input: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --red-primary: #DC2626;
+    --red-dark: #B91C1C;
+}
+html.dark-mode {
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+}
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+.main-wrapper, .main-content { background: var(--bg-body) !important; }
+
+/* PAGE HEADER */
 .page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 18px; flex-wrap: wrap; gap: 12px;
 }
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
+.page-header .header-left h2 i { color: var(--red-primary); margin-right: 10px; }
+.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 4px 0 0 0; }
+.header-right { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--form-text);
-    margin: 0;
-}
-
-.page-header-left h2 i {
-    color: #3B82F6;
-    margin-right: 8px;
-}
-
-.record-count {
-    font-size: 13px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 2px 12px;
-    border-radius: 12px;
-}
-
-.btn-back {
-    background: var(--form-hover);
-    color: var(--form-text);
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+.btn {
+    padding: 10px 20px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
     transition: all 0.3s ease;
-    border: 1px solid var(--form-border);
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
 }
-
+.btn-back {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
 .btn-back:hover {
-    background: var(--form-border);
-    color: var(--form-text);
+    background: #FEF2F2; color: var(--red-primary);
+    border-color: var(--red-primary); transform: translateY(-2px);
 }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
+/* ALERTS */
 .alert {
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    position: relative;
+    padding: 14px 18px; border-radius: 10px;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 12px;
     animation: slideDown 0.4s ease forwards;
 }
-
-.alert-success {
-    background: #D1FAE5;
-    color: #065F46;
-    border: 1px solid #A7F3D0;
-}
-
-.alert-danger {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1px solid #FECACA;
-}
-
-html.dark-mode .alert-success {
-    background: #065F46;
-    color: #D1FAE5;
-    border: 1px solid #047857;
-}
-
-html.dark-mode .alert-danger {
-    background: #7F1D1D;
-    color: #FEE2E2;
-    border: 1px solid #991B1B;
-}
-
-.alert i {
-    font-size: 20px;
-    flex-shrink: 0;
-}
-
-.alert span {
-    flex: 1;
-}
-
-.alert-close {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-}
-
-.alert-close:hover {
-    opacity: 1;
-}
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
 
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ============================================================
-   FORM CONTAINER
-   ============================================================ */
-.form-container {
-    background: var(--form-bg);
-    border-radius: 10px;
-    box-shadow: 0 1px 3px var(--form-shadow);
-    border: 1px solid var(--form-border);
-    padding: 24px;
-    transition: all 0.3s ease;
+/* FORM CARDS */
+.form-card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    border: 1.5px solid var(--border-color);
+    margin-bottom: 20px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px var(--shadow-color);
 }
-
-.provider-form {
-    max-width: 100%;
+.form-card-header {
+    padding: 18px 26px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px; color: #FFFFFF;
+    position: relative; overflow: hidden;
 }
-
-/* ============================================================
-   FORM SECTIONS
-   ============================================================ */
-.form-section {
-    margin-bottom: 28px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--form-section-border);
+.form-card-header::before {
+    content: ''; position: absolute;
+    top: -50%; right: -10%;
+    width: 250px; height: 250px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%; pointer-events: none;
 }
-
-.form-section:last-of-type {
-    border-bottom: none;
-    margin-bottom: 0;
+.form-card-header-left { display: flex; align-items: center; gap: 14px; position: relative; z-index: 1; }
+.form-card-icon {
+    width: 48px; height: 48px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #FFFFFF; flex-shrink: 0;
+    border: 1.5px solid rgba(255,255,255,0.3);
 }
-
-.form-section-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--form-text);
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.form-card-header h3 { font-size: 17px; font-weight: 800; margin: 0 0 2px 0; color: #FFFFFF; }
+.form-card-header p { font-size: 12px; margin: 0; color: rgba(255,255,255,0.85); font-weight: 500; }
+.form-card-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.2);
+    color: #FFFFFF; border-radius: 20px;
+    font-size: 12px; font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.3);
+    position: relative; z-index: 1;
 }
+.form-card-body { padding: 26px; }
 
-.form-section-title i {
-    color: #3B82F6;
+/* FORM ELEMENTS */
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.form-group.full-width { grid-column: 1 / -1; }
+.form-group label {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-
-/* ============================================================
-   FORM GRID
-   ============================================================ */
-.form-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px 24px;
-}
-
-/* ============================================================
-   FORM GROUPS
-   ============================================================ */
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.form-group.full-width {
-    grid-column: 1 / -1;
-}
-
-.form-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--form-text);
-}
-
-.form-label.required::after {
-    content: ' *';
-    color: #DC2626;
-}
-
+.form-group label .required { color: #DC2626; }
 .form-control {
-    padding: 10px 14px;
-    border-radius: 8px;
-    border: 1.5px solid var(--form-border);
-    font-size: 14px;
+    padding: 12px 16px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-input);
     font-family: 'Inter', sans-serif;
     transition: all 0.3s ease;
-    background: var(--form-input-bg);
-    color: var(--form-text);
     width: 100%;
 }
-
 .form-control:focus {
-    outline: none;
-    border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220,38,38,0.08);
+    outline: none; border-color: var(--red-primary);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+    background: var(--bg-card);
 }
-
-.form-control::placeholder {
-    color: var(--form-text-light);
+.form-control::placeholder { color: var(--text-light); font-size: 12px; }
+.code-input {
+    font-family: 'Courier New', monospace !important;
+    font-weight: 800 !important;
+    letter-spacing: 1px;
+    color: var(--red-primary) !important;
+    text-transform: uppercase;
 }
-
-textarea.form-control {
-    resize: vertical;
-    min-height: 80px;
+.field-hint {
+    font-size: 11px; color: var(--text-muted);
+    margin: 4px 0 0 0;
+    display: flex; align-items: center; gap: 5px;
+    font-weight: 500; line-height: 1.5;
 }
+.field-hint i { font-size: 10px; color: var(--red-primary); }
+.field-hint strong { color: var(--red-primary); font-weight: 800; }
 
-.form-help {
-    font-size: 11px;
-    color: var(--form-text-light);
-    margin-top: 2px;
+/* TYPE SELECTOR */
+.type-selector {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
 }
-
-/* ============================================================
-   CHECKBOX
-   ============================================================ */
-.form-checkbox {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-top: 6px;
-}
-
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--form-text);
-}
-
-.checkbox-label input[type="checkbox"] {
-    display: none;
-}
-
-.checkbox-label .checkbox-text {
+.type-option { cursor: pointer; position: relative; }
+.type-option input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.type-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 18px; border-radius: 12px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-input);
+    transition: all 0.3s ease; min-width: 0;
     position: relative;
-    padding-left: 32px;
-    user-select: none;
 }
-
-.checkbox-label .checkbox-text::before {
-    content: '';
+.type-card:hover { border-color: #FCA5A5; transform: translateY(-2px); }
+.type-option input[type="radio"]:checked + .type-card {
+    border-color: #DC2626;
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    box-shadow: 0 4px 16px rgba(220, 38, 38, 0.2);
+}
+html.dark-mode .type-option input[type="radio"]:checked + .type-card {
+    background: linear-gradient(135deg, #5F1E1E 0%, #7F1D1D 100%);
+}
+.type-icon {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+}
+.type-bank .type-icon {
+    background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+    color: #1D4ED8;
+}
+.type-mobile .type-icon {
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+    color: #059669;
+}
+.type-other .type-icon {
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    color: #D97706;
+}
+html.dark-mode .type-bank .type-icon { background: #1E3A5F; color: #60A5FA; }
+html.dark-mode .type-mobile .type-icon { background: #065F46; color: #34D399; }
+html.dark-mode .type-other .type-icon { background: #5F3A1E; color: #FBBF24; }
+.type-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.type-title { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+.type-desc { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.type-check {
     position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--form-border);
-    border-radius: 6px;
-    background: var(--form-input-bg);
-    transition: all 0.3s ease;
-}
-
-.checkbox-label input[type="checkbox"]:checked + .checkbox-text::before {
+    top: 8px; right: 8px;
+    width: 22px; height: 22px;
     background: #DC2626;
-    border-color: #DC2626;
+    color: #FFFFFF;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    opacity: 0;
+    transform: scale(0.5);
+    transition: all 0.2s ease;
+}
+.type-option input[type="radio"]:checked + .type-card .type-check {
+    opacity: 1; transform: scale(1);
 }
 
-.checkbox-label input[type="checkbox"]:checked + .checkbox-text::after {
-    content: '✓';
-    position: absolute;
-    left: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: white;
-    font-size: 14px;
-    font-weight: 700;
-}
-
-.checkbox-label .check-icon {
-    display: none;
-}
-
-.checkbox-label input[type="checkbox"]:checked + .checkbox-text + .check-icon {
-    display: inline-block;
-    color: #10B981;
-}
-
-/* ============================================================
-   ICON PICKER
-   ============================================================ */
-.icon-picker-wrapper {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-.icon-picker-wrapper .form-control {
-    flex: 1;
-}
-
-.btn-icon-picker {
-    padding: 10px 14px;
-    background: var(--form-hover);
-    border: 1.5px solid var(--form-border);
-    border-radius: 8px;
-    color: var(--form-text);
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-size: 16px;
-}
-
-.btn-icon-picker:hover {
-    background: var(--form-border);
-    border-color: #DC2626;
-}
-
-/* ============================================================
-   COLOR PICKER
-   ============================================================ */
+/* COLOR PICKER */
 .color-picker-wrapper {
     display: flex;
     gap: 10px;
-    align-items: center;
+    align-items: stretch;
+    flex-wrap: wrap;
 }
-
-.color-input {
-    width: 44px;
-    height: 44px;
-    padding: 2px;
-    border: 1.5px solid var(--form-border);
-    border-radius: 8px;
+.color-swatch-label {
+    display: block;
     cursor: pointer;
-    background: var(--form-input-bg);
+    flex-shrink: 0;
+    position: relative;
 }
-
-.color-input::-webkit-color-swatch-wrapper {
-    padding: 2px;
-}
-
-.color-input::-webkit-color-swatch {
-    border-radius: 6px;
+.color-picker-input {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    opacity: 0;
+    cursor: pointer;
     border: none;
+    padding: 0;
+    margin: 0;
+    z-index: 2;
 }
-
-.color-text {
-    flex: 1;
-}
-
-/* ============================================================
-   FORM ACTIONS
-   ============================================================ */
-.form-actions {
+.color-swatch-preview {
     display: flex;
-    gap: 12px;
-    margin-top: 28px;
-    padding-top: 20px;
-    border-top: 1px solid var(--form-section-border);
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 48px;
+    border-radius: 10px;
+    border: 2px solid var(--border-color);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    transition: all 0.2s ease;
+    font-size: 20px;
+    color: #FFFFFF;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    position: relative;
+    overflow: hidden;
+}
+.color-swatch-preview::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, rgba(0,0,0,0.15) 100%);
+    pointer-events: none;
+}
+.color-swatch-preview i {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
+}
+.color-swatch-label:hover .color-swatch-preview {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+    border-color: #DC2626;
+}
+.color-text-input {
+    flex: 1;
+    min-width: 140px;
+    height: 48px;
+    font-family: 'Courier New', monospace !important;
+    font-weight: 800 !important;
+    font-size: 14px !important;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+.preset-colors {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 12px;
+}
+.preset-color-btn {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    border: 2px solid var(--border-color);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    padding: 0;
+}
+.preset-color-btn:hover {
+    transform: scale(1.15) translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    border-color: #FFFFFF;
+}
+.preset-color-btn.active {
+    border-color: #FFFFFF;
+    box-shadow: 0 0 0 3px #DC2626, 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-.btn {
-    padding: 10px 24px;
+/* ICON PICKER */
+.icon-preview-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+.icon-preview-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.icon-text-input {
+    flex: 1;
+    min-width: 0;
+    font-family: 'Courier New', monospace !important;
+    font-weight: 700 !important;
+    font-size: 12px !important;
+}
+.preset-icons {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-top: 10px;
+}
+.preset-icon-btn {
+    width: 38px; height: 38px;
     border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    font-family: 'Inter', sans-serif;
-    text-decoration: none;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    transition: all 0.2s ease;
+}
+.preset-icon-btn:hover {
+    background: #FEF2F2;
+    border-color: #DC2626;
+    color: #DC2626;
+    transform: translateY(-2px);
+}
+.preset-icon-btn.active {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    border-color: #DC2626;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+html.dark-mode .preset-icon-btn { background: #1e293b; }
+html.dark-mode .preset-icon-btn:hover { background: #5F1E1E; }
+
+/* TOGGLE SWITCH */
+.toggle-switch-wrapper {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    border: none;
+    gap: 12px;
     cursor: pointer;
+    padding: 8px 4px;
+    user-select: none;
+    align-self: flex-start;
+}
+.toggle-switch-wrapper input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.toggle-switch {
+    width: 52px;
+    height: 28px;
+    background: #D1D5DB;
+    border-radius: 14px;
+    position: relative;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.toggle-switch::before {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 22px; height: 22px;
+    background: #FFFFFF;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.toggle-switch-wrapper input[type="checkbox"]:checked + .toggle-switch {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+}
+.toggle-switch-wrapper input[type="checkbox"]:checked + .toggle-switch::before {
+    transform: translateX(24px);
+}
+.toggle-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+html.dark-mode .toggle-switch { background: #475569; }
+
+/* SECTION DIVIDER */
+.section-divider {
+    display: flex; align-items: center; gap: 12px;
+    margin: 24px 0 18px 0;
+}
+.section-divider::before,
+.section-divider::after {
+    content: ''; flex: 1; height: 1.5px;
+    background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+.section-divider span {
+    font-size: 12px; font-weight: 800;
+    color: var(--red-primary);
+    text-transform: uppercase; letter-spacing: 1.2px;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 8px; white-space: nowrap;
 }
 
-.btn-primary {
-    background: #DC2626;
-    color: white;
+/* LIVE PREVIEW */
+.preview-center {
+    display: flex;
+    justify-content: center;
+    padding: 20px 0;
 }
+.provider-card-preview {
+    width: 100%;
+    max-width: 340px;
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+}
+.preview-accent {
+    height: 6px;
+    width: 100%;
+    transition: background 0.2s ease;
+}
+.preview-body {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.preview-top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.preview-icon-circle {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 24px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: background 0.2s ease;
+}
+.preview-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.preview-name {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+    word-break: break-word;
+}
+.preview-code {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 800;
+    color: #DC2626;
+    background: #FEF2F2;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
+    align-self: flex-start;
+    border: 1px solid #FCA5A5;
+    width: fit-content;
+    text-transform: uppercase;
+}
+html.dark-mode .preview-code { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+.preview-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.preview-type-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 11px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: #DBEAFE; color: #1D4ED8;
+    border: 1.5px solid #BFDBFE;
+}
+.preview-type-badge.mobile {
+    background: #D1FAE5; color: #059669;
+    border-color: #A7F3D0;
+}
+.preview-type-badge.other {
+    background: #FEF3C7; color: #D97706;
+    border-color: #FDE68A;
+}
+.preview-status {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 11px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: #D1FAE5; color: #059669;
+    border: 1.5px solid #A7F3D0;
+}
+.preview-status.inactive {
+    background: #F3F4F6; color: #6B7280;
+    border-color: #E5E7EB;
+}
+html.dark-mode .preview-status { background: #065F46; color: #34D399; border-color: #10B981; }
+html.dark-mode .preview-status.inactive { background: #334155; color: #94A3B8; border-color: #475569; }
 
-.btn-primary:hover {
-    background: #B91C1C;
+/* BRANCH ASSIGNMENT */
+.branch-selector-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.btn-mini {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: all 0.2s ease;
+    font-family: 'Inter', sans-serif;
+}
+.btn-mini:hover {
+    background: #FEF2F2; color: #DC2626;
+    border-color: #DC2626;
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+}
+html.dark-mode .btn-mini { background: #1e293b; }
+html.dark-mode .btn-mini:hover { background: #5F1E1E; color: #FCA5A5; border-color: #DC2626; }
+
+.branches-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+.branch-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-input);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    min-width: 0;
+}
+.branch-option:hover {
+    border-color: #FCA5A5;
+    transform: translateY(-2px);
+}
+.branch-option.selected {
+    border-color: #DC2626;
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    box-shadow: 0 4px 16px rgba(220, 38, 38, 0.15);
+}
+html.dark-mode .branch-option.selected {
+    background: linear-gradient(135deg, #5F1E1E 0%, #7F1D1D 100%);
+}
+.branch-checkbox {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.branch-check-icon {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    border: 2px solid var(--border-color);
+    background: #FFFFFF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    color: transparent;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+html.dark-mode .branch-check-icon { background: #1e293b; }
+.branch-option.selected .branch-check-icon {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    border-color: #DC2626;
+    color: #FFFFFF;
+}
+.branch-option-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 16px;
+    flex-shrink: 0;
+    box-shadow: 0 3px 8px rgba(220, 38, 38, 0.25);
+}
+.branch-option-info {
+    display: flex; flex-direction: column; gap: 3px;
+    min-width: 0; flex: 1;
+}
+.branch-option-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.branch-option-code {
+    font-size: 10px;
+    font-weight: 800;
+    color: #DC2626;
+    font-family: 'Courier New', monospace;
+    background: #FEF2F2;
+    padding: 2px 8px;
+    border-radius: 5px;
+    align-self: flex-start;
+    border: 1px solid #FCA5A5;
+}
+html.dark-mode .branch-option-code { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+
+.empty-branches {
+    padding: 50px 20px;
+    text-align: center;
+    color: var(--text-muted);
+}
+.empty-branches i {
+    font-size: 48px;
+    color: #FCA5A5;
+    opacity: 0.5;
+    display: block;
+    margin-bottom: 12px;
+}
+.empty-branches p {
+    font-size: 14px;
+    margin: 0;
 }
 
-.btn-secondary {
-    background: var(--form-hover);
-    color: var(--form-text);
-    border: 1px solid var(--form-border);
+/* FORM ACTIONS */
+.form-actions {
+    display: flex; gap: 12px;
+    padding: 22px 26px;
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    flex-wrap: wrap; justify-content: flex-end;
+    position: sticky; bottom: 16px; z-index: 10;
+}
+.btn-secondary-large, .btn-reset-large, .btn-submit-large {
+    padding: 13px 26px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    min-width: 140px;
+    justify-content: center;
+}
+.btn-secondary-large {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-secondary-large:hover {
+    background: var(--bg-body);
+    color: var(--text-primary);
+    transform: translateY(-2px);
+}
+.btn-reset-large {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-reset-large:hover {
+    background: #FEF3C7; color: #D97706;
+    border-color: #FDE68A;
+    transform: translateY(-2px);
+}
+.btn-submit-large {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+}
+.btn-submit-large:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5);
+}
+.btn-submit-large:disabled {
+    opacity: 0.6; cursor: not-allowed; transform: none;
 }
 
-.btn-secondary:hover {
-    background: var(--form-border);
+/* RESPONSIVE */
+@media (max-width: 1024px) {
+    .form-row { grid-template-columns: 1fr; }
+    .type-selector { grid-template-columns: 1fr; }
 }
-
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 768px) {
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
-    }
-    
-    .form-container {
-        padding: 16px;
-    }
-    
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        justify-content: center;
-        width: 100%;
-    }
-    
-    .color-picker-wrapper {
-        flex-wrap: wrap;
-    }
+    .main-content { padding: 12px !important; }
+    .form-card-body { padding: 18px; }
+    .form-card-header { padding: 16px 20px; }
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .page-header .header-right { width: 100%; }
+    .page-header .header-right .btn { flex: 1; justify-content: center; }
+    .branches-grid { grid-template-columns: 1fr; }
+    .form-actions { flex-direction: column; position: static; padding: 16px; }
+    .btn-secondary-large, .btn-reset-large, .btn-submit-large { width: 100%; }
 }
-
 @media (max-width: 480px) {
-    .form-container {
-        padding: 12px;
-    }
-    
-    .form-section {
-        padding-bottom: 16px;
-    }
-    
-    .form-section-title {
-        font-size: 14px;
-    }
+    .color-text-input { font-size: 12px !important; }
+    .icon-text-input { font-size: 11px !important; }
+    .color-swatch-preview { width: 56px; height: 44px; font-size: 17px; }
 }
 </style>
 
-<!-- ============================================================
-SCRIPTS
-============================================================ -->
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    
-    // ============================================================
-    // SYNC COLOR PICKER WITH TEXT INPUT
-    // ============================================================
-    const colorInput = document.getElementById('color_code');
-    const colorText = document.getElementById('color_code_text');
-    
-    if (colorInput && colorText) {
-        colorInput.addEventListener('input', function() {
-            colorText.value = this.value;
-        });
-        
-        colorText.addEventListener('input', function() {
-            colorInput.value = this.value;
-        });
-    }
-    
-    // ============================================================
-    // DARK MODE SYNC
-    // ============================================================
-    function syncDarkMode() {
-        var html = document.documentElement;
-        var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
-    }
-    
-    syncDarkMode();
-    
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
+// ============================================================
+// COLOR PICKER
+// ============================================================
+function onColorPick(hex) {
+    if (!hex) return;
+    hex = hex.toUpperCase();
+
+    var hidden = document.getElementById('colorCodeHidden');
+    if (hidden) hidden.value = hex;
+
+    var textInput = document.getElementById('colorText');
+    if (textInput) textInput.value = hex;
+
+    var swatch = document.getElementById('colorSwatchPreview');
+    if (swatch) swatch.style.background = hex;
+
+    var iconBox = document.getElementById('iconPreviewBox');
+    if (iconBox) iconBox.style.background = hex;
+
+    var accent = document.getElementById('previewAccent');
+    if (accent) accent.style.background = hex;
+
+    var iconCircle = document.getElementById('previewIconCircle');
+    if (iconCircle) iconCircle.style.background = hex;
+
+    highlightPreset(hex);
+    updatePreview();
+}
+
+function onColorText(value) {
+    value = (value || '').trim();
+    if (!/^#[0-9A-Fa-f]{6}$/.test(value)) return;
+    var hex = value.toUpperCase();
+
+    var picker = document.getElementById('colorPicker');
+    if (picker) picker.value = hex;
+
+    var hidden = document.getElementById('colorCodeHidden');
+    if (hidden) hidden.value = hex;
+
+    var swatch = document.getElementById('colorSwatchPreview');
+    if (swatch) swatch.style.background = hex;
+
+    var iconBox = document.getElementById('iconPreviewBox');
+    if (iconBox) iconBox.style.background = hex;
+
+    var accent = document.getElementById('previewAccent');
+    if (accent) accent.style.background = hex;
+
+    var iconCircle = document.getElementById('previewIconCircle');
+    if (iconCircle) iconCircle.style.background = hex;
+
+    highlightPreset(hex);
+    updatePreview();
+}
+
+function pickColor(hex) {
+    hex = hex.toUpperCase();
+    var picker = document.getElementById('colorPicker');
+    if (picker) picker.value = hex;
+    onColorPick(hex);
+}
+
+function highlightPreset(hex) {
+    hex = (hex || '').toLowerCase();
+    document.querySelectorAll('.preset-color-btn').forEach(function(btn) {
+        var c = (btn.getAttribute('data-color') || '').toLowerCase();
+        if (c === hex) btn.classList.add('active');
+        else btn.classList.remove('active');
     });
-});
+}
 
 // ============================================================
 // ICON PICKER
 // ============================================================
-function openIconPicker() {
-    // Simple icon selector - can be expanded with a modal
-    alert('Enter Font Awesome icon class in the input field.\n\nExamples:\n- fas fa-university\n- fas fa-mobile-alt\n- fas fa-landmark\n- fas fa-building\n- fas fa-money-bill-wave');
+function pickIcon(cls) {
+    var input = document.getElementById('iconInput');
+    if (input) input.value = cls;
+
+    document.querySelectorAll('.preset-icon-btn').forEach(function(btn) {
+        if (btn.getAttribute('data-icon') === cls) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+
+    updatePreview();
 }
+
+// ============================================================
+// LIVE PREVIEW
+// ============================================================
+function updatePreview() {
+    var name = (document.getElementById('providerName')?.value || 'Provider Name').trim();
+    var code = (document.getElementById('providerCode')?.value || 'CODE-000').trim();
+    var icon = (document.getElementById('iconInput')?.value || 'fas fa-university').trim();
+    var isActive = document.getElementById('isActiveToggle')?.checked;
+
+    var type = 'bank';
+    var typeInput = document.querySelector('input[name="provider_type"]:checked');
+    if (typeInput) type = typeInput.value;
+
+    var nameEl = document.getElementById('previewName');
+    if (nameEl) nameEl.textContent = name || 'Provider Name';
+
+    var codeEl = document.getElementById('previewCode');
+    if (codeEl) codeEl.textContent = (code || 'CODE-000').toUpperCase();
+
+    var iconEl = document.getElementById('previewIcon');
+    if (iconEl) iconEl.className = icon;
+
+    var iconPreview = document.getElementById('iconPreview');
+    if (iconPreview) iconPreview.className = icon;
+
+    var typeEl = document.getElementById('previewType');
+    if (typeEl) {
+        typeEl.classList.remove('mobile', 'other');
+        var typeIcon = 'fa-landmark';
+        var typeLabel = 'Bank';
+
+        if (type === 'mobile_money') {
+            typeEl.classList.add('mobile');
+            typeIcon = 'fa-mobile-alt';
+            typeLabel = 'Mobile Money';
+        } else if (type === 'other') {
+            typeEl.classList.add('other');
+            typeIcon = 'fa-coins';
+            typeLabel = 'Other';
+        }
+        typeEl.innerHTML = '<i class="fas ' + typeIcon + '"></i> ' + typeLabel;
+    }
+
+    var statusEl = document.getElementById('previewStatus');
+    if (statusEl) {
+        if (isActive) {
+            statusEl.classList.remove('inactive');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Active';
+        } else {
+            statusEl.classList.add('inactive');
+            statusEl.innerHTML = '<i class="fas fa-times-circle"></i> Inactive';
+        }
+    }
+
+    var toggleLabel = document.getElementById('toggleLabel');
+    if (toggleLabel) toggleLabel.textContent = isActive ? 'Active' : 'Inactive';
+}
+
+// ============================================================
+// BRANCH SELECTION
+// ============================================================
+function toggleBranchOption(checkbox) {
+    var label = checkbox.closest('.branch-option');
+    if (!label) return;
+    if (checkbox.checked) label.classList.add('selected');
+    else label.classList.remove('selected');
+    updateBranchCount();
+}
+
+function selectAllBranches() {
+    document.querySelectorAll('.branch-checkbox').forEach(function(cb) {
+        cb.checked = true;
+        var label = cb.closest('.branch-option');
+        if (label) label.classList.add('selected');
+    });
+    updateBranchCount();
+}
+
+function clearAllBranches() {
+    document.querySelectorAll('.branch-checkbox').forEach(function(cb) {
+        cb.checked = false;
+        var label = cb.closest('.branch-option');
+        if (label) label.classList.remove('selected');
+    });
+    updateBranchCount();
+}
+
+function updateBranchCount() {
+    var count = document.querySelectorAll('.branch-checkbox:checked').length;
+    var el = document.getElementById('branchCount');
+    if (el) el.textContent = count;
+}
+
+// ============================================================
+// RESET
+// ============================================================
+function resetForm() {
+    if (!confirm('Clear all fields and start over?')) return;
+    window.location.href = window.location.pathname;
+}
+
+// ============================================================
+// VALIDATION
+// ============================================================
+function validateForm() {
+    var name = document.getElementById('providerName').value.trim();
+    var code = document.getElementById('providerCode').value.trim();
+
+    if (name === '') { alert('Please enter the provider name.'); return false; }
+    if (code === '') { alert('Please enter the provider code.'); return false; }
+
+    // Ensure hidden color field is set
+    var hidden = document.getElementById('colorCodeHidden');
+    var picker = document.getElementById('colorPicker');
+    if (hidden && (!hidden.value || hidden.value.trim() === '')) {
+        hidden.value = picker.value || '#0B5ED7';
+    }
+
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    return true;
+}
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var initialColor = document.getElementById('colorPicker')?.value || '#0B5ED7';
+    highlightPreset(initialColor.toUpperCase());
+
+    var initialIcon = document.getElementById('iconInput')?.value || '';
+    document.querySelectorAll('.preset-icon-btn').forEach(function(btn) {
+        if (btn.getAttribute('data-icon') === initialIcon) btn.classList.add('active');
+    });
+
+    updateBranchCount();
+    updatePreview();
+
+    // Safety net on submit
+    var form = document.getElementById('providerForm');
+    if (form) {
+        form.addEventListener('submit', function() {
+            var hidden = document.getElementById('colorCodeHidden');
+            var picker = document.getElementById('colorPicker');
+            if (hidden && picker) hidden.value = picker.value.toUpperCase();
+        });
+    }
+
+    function syncDarkMode() {
+        var html = document.documentElement;
+        var isDark = localStorage.getItem('darkMode') === 'true' || localStorage.getItem('darkMode') === 'enabled';
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
+    }
+    syncDarkMode();
+    document.addEventListener('darkModeChanged', function() { syncDarkMode(); });
+});
 </script>
 
 </body>
