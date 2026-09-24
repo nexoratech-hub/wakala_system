@@ -1,13 +1,14 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/index.php
-// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (ADMIN) - FINAL
-// ✅ BLUE THEME
-// ✅ Summary Cards: 2 JUU, 2 CHINI (2x2)
-// ✅ Report Card Design (kama employee)
-// ✅ View/Edit/Delete kwenye Report Header
-// ✅ Provider rows + Footer totals
-// ✅ Nzuri text colors
+// FILE: modules/morning_report/index_employee.php
+// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (EMPLOYEE) - FINAL
+// BLUE THEME + Report Header + Provider Rows
+// ✅ Summary cards: 2x2 grid
+// ✅ Nzuri text colors (matching na Admin)
+// ✅ Report info in HEADER
+// ✅ View button in HEADER
+// ✅ Body: #, Provider, Code, Type, Float
+// ✅ Last rows: Total Float + Cash + Grand Total
 // ================================================================
 
 require_once '../../config/config.php';
@@ -27,46 +28,30 @@ $user_id = $_SESSION['user_id'];
 $role    = $_SESSION['role'] ?? 'employee';
 
 // ============================================================
-// ADMIN ONLY
+// GET EMPLOYEE BRANCH
 // ============================================================
-if ($role !== 'admin' && $role !== 'super_admin') {
-    header('Location: index_employee.php');
+$stmt = $db->prepare("SELECT branch_id, branch FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$emp = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$emp || $emp['branch_id'] <= 0) {
+    $_SESSION['error_message'] = 'You are not assigned to any branch.';
+    header('Location: ../dashboard/employee.php');
     exit();
 }
 
-// ============================================================
-// BRANCH FILTER
-// ============================================================
-$selected_branch = 0;
-if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id'] !== '0') {
-    $selected_branch = intval($_GET['branch_id']);
-}
-
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-$stmt->execute();
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-if ($selected_branch == 0 && count($branches) === 1) {
-    $selected_branch = intval($branches[0]['id']);
-}
+$selected_branch = intval($emp['branch_id']);
 
 // ============================================================
 // BRANCH INFO
 // ============================================================
-$branch_name = 'All Branches';
-$branch_code = '';
-$branch_location = '';
+$stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+$stmt->execute([$selected_branch]);
+$branch = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if ($selected_branch > 0) {
-    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
-    $stmt->execute([$selected_branch]);
-    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch) {
-        $branch_name = $branch['branch_name'];
-        $branch_code = $branch['branch_code'] ?? '';
-        $branch_location = $branch['location'] ?? '';
-    }
-}
+$branch_name = $branch['branch_name'] ?? 'Unknown';
+$branch_code = $branch['branch_code'] ?? '';
+$branch_location = $branch['location'] ?? '';
 
 // ============================================================
 // FILTERS
@@ -98,19 +83,14 @@ try {
         LEFT JOIN employees e ON mr.employee_id = e.id
         LEFT JOIN branches b ON mr.branch_id = b.id
         LEFT JOIN evening_stocks es ON mr.source_evening_stock_id = es.id
-        WHERE mr.report_date BETWEEN ? AND ?
+        WHERE mr.branch_id = ?
+          AND mr.report_date BETWEEN ? AND ?
     ";
-    $params = [$from_date, $to_date];
-
-    if ($selected_branch > 0) {
-        $sql .= " AND mr.branch_id = ?";
-        $params[] = $selected_branch;
-    }
+    $params = [$selected_branch, $from_date, $to_date];
 
     if ($search !== '') {
-        $sql .= " AND (mr.report_number LIKE ? OR e.full_name LIKE ? OR b.branch_name LIKE ?)";
+        $sql .= " AND (mr.report_number LIKE ? OR e.full_name LIKE ?)";
         $like = '%' . $search . '%';
-        $params[] = $like;
         $params[] = $like;
         $params[] = $like;
     }
@@ -166,24 +146,22 @@ if (isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- BRANCH INDICATOR - BLUE THEME -->
+        <!-- BRANCH INDICATOR -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
                     <i class="fas fa-store-alt"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">
-                        <?php echo $selected_branch > 0 ? 'Current Branch' : 'Showing'; ?>
-                    </span>
+                    <span class="branch-indicator-label">Current Branch</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -211,16 +189,16 @@ include_once '../../includes/admin_topbar.php';
                 <p class="text-muted">Auto-generated from Evening Stock / Capital Management</p>
             </div>
             <div class="header-right">
-                <button type="button" class="btn-add" onclick="openAddPicker()">
+                <a href="add_employee.php" class="btn-new-report">
                     <i class="fas fa-plus-circle"></i>
                     <span>Add Morning Report</span>
-                </button>
+                </a>
                 <a href="export.php?branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>" 
                    class="btn-export">
                     <i class="fas fa-file-csv"></i>
                     <span>Export CSV</span>
                 </a>
-                <a href="../daily_report/index.php?branch_id=<?php echo $selected_branch; ?>" class="btn-back">
+                <a href="../dashboard/employee.php" class="btn-back">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
@@ -244,7 +222,7 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-             SUMMARY CARDS - 2 JUU, 2 CHINI (2x2 GRID)
+             SUMMARY CARDS - 2x2 (Nzuri text colors kama Admin)
              ============================================================ -->
         <div class="summary-cards">
             
@@ -302,17 +280,6 @@ include_once '../../includes/admin_topbar.php';
                     <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
                 </div>
                 <div class="filter-group">
-                    <label>Branch</label>
-                    <select name="branch_id" class="form-control">
-                        <option value="0">All Branches</option>
-                        <?php foreach ($branches as $b): ?>
-                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($b['branch_name']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="filter-group">
                     <label>Search</label>
                     <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" class="form-control" placeholder="Report #, employee...">
                 </div>
@@ -320,7 +287,7 @@ include_once '../../includes/admin_topbar.php';
                     <button type="submit" class="btn-filter">
                         <i class="fas fa-search"></i> Filter
                     </button>
-                    <a href="index.php" class="btn-reset">
+                    <a href="index_employee.php" class="btn-reset">
                         <i class="fas fa-undo"></i> Reset
                     </a>
                 </div>
@@ -328,7 +295,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-             REPORT CARDS
+             MAIN REPORT CARDS (Per Report)
              ============================================================ -->
         <?php if (count($reports) > 0): ?>
             
@@ -341,7 +308,6 @@ include_once '../../includes/admin_topbar.php';
                 $report_float = floatval($report['total_float']);
                 $report_cash = floatval(str_replace(',', '', $report['cash_balance'] ?? 0));
                 $report_total = $report_float + $report_cash;
-                $is_locked = intval($report['is_locked']) === 1;
             ?>
                 
                 <div class="report-card">
@@ -359,10 +325,6 @@ include_once '../../includes/admin_topbar.php';
                                     <?php echo htmlspecialchars($report['report_number']); ?>
                                 </div>
                                 <div class="report-header-meta">
-                                    <span class="report-header-meta-item">
-                                        <i class="fas fa-store-alt"></i>
-                                        <?php echo htmlspecialchars($report['branch_display_name'] ?? 'N/A'); ?>
-                                    </span>
                                     <span class="report-header-meta-item">
                                         <i class="far fa-calendar"></i>
                                         <?php echo date('d M Y', strtotime($report['report_date'])); ?>
@@ -400,7 +362,7 @@ include_once '../../includes/admin_topbar.php';
                                 Cash: <strong><?php echo formatCurrency($report_cash); ?></strong>
                             </div>
                             <div class="employee-status">
-                                <?php if ($is_locked): ?>
+                                <?php if (intval($report['is_locked']) === 1): ?>
                                     <span class="status-badge status-locked">
                                         <i class="fas fa-lock"></i> Locked
                                     </span>
@@ -412,35 +374,13 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         </div>
                         
-                        <!-- RIGHT: Action Buttons (View + Edit + Delete) -->
+                        <!-- RIGHT: View Button -->
                         <div class="report-header-actions">
-                            <a href="view.php?id=<?php echo $rid; ?>" 
-                               class="btn-action-header btn-view-header"
-                               title="View Report">
+                            <a href="view_employee.php?id=<?php echo $rid; ?>" 
+                               class="btn-view-report">
                                 <i class="fas fa-eye"></i>
-                                <span>View</span>
+                                <span>View Report</span>
                             </a>
-                            
-                            <?php if (!$is_locked): ?>
-                                <a href="edit.php?id=<?php echo $rid; ?>" 
-                                   class="btn-action-header btn-edit-header"
-                                   title="Edit Report">
-                                    <i class="fas fa-edit"></i>
-                                    <span>Edit</span>
-                                </a>
-                                
-                                <button onclick="deleteReport(<?php echo $rid; ?>, '<?php echo addslashes($report['report_number']); ?>')" 
-                                        class="btn-action-header btn-delete-header"
-                                        title="Delete Report">
-                                    <i class="fas fa-trash"></i>
-                                    <span>Delete</span>
-                                </button>
-                            <?php else: ?>
-                                <span class="btn-action-header btn-locked-header" title="Locked">
-                                    <i class="fas fa-lock"></i>
-                                    <span>Locked</span>
-                                </span>
-                            <?php endif; ?>
                         </div>
                         
                     </div>
@@ -502,7 +442,7 @@ include_once '../../includes/admin_topbar.php';
                                     <?php endforeach; ?>
                                 </tbody>
                                 <tfoot>
-                                    <!-- TOTAL FLOAT -->
+                                    <!-- TOTAL FLOAT ROW -->
                                     <tr class="total-float-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label">
@@ -515,7 +455,7 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                     </tr>
-                                    <!-- CASH -->
+                                    <!-- CASH ROW -->
                                     <tr class="cash-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label">
@@ -528,7 +468,7 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                     </tr>
-                                    <!-- GRAND TOTAL -->
+                                    <!-- GRAND TOTAL ROW -->
                                     <tr class="grand-total-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label grand">
@@ -559,61 +499,20 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-sun"></i>
                 <h3>No Morning Reports</h3>
-                <p>No morning reports found in the selected period.</p>
-                <button type="button" class="btn-add" onclick="openAddPicker()">
+                <p>Hakuna morning reports katika kipindi hiki kwa branch yako.</p>
+                <a href="add_employee.php" class="btn-new-report">
                     <i class="fas fa-plus-circle"></i> Create First Report
-                </button>
+                </a>
             </div>
         <?php endif; ?>
 
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
-</div>
-
-<!-- ADD BRANCH PICKER MODAL -->
-<div class="modal-overlay" id="addPickerModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-plus-circle"></i> Add Morning Report</h3>
-            <button class="modal-close" onclick="closeAddPicker()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <p class="modal-intro">Chagua branch ili kuongeza morning report:</p>
-            <div class="branch-picker-grid">
-                <?php foreach ($branches as $b): ?>
-                    <a href="add.php?branch_id=<?php echo $b['id']; ?>&date=<?php echo date('Y-m-d'); ?>" 
-                       class="branch-picker-card">
-                        <div class="bpc-icon">
-                            <i class="fas fa-store-alt"></i>
-                        </div>
-                        <div class="bpc-info">
-                            <span class="bpc-name"><?php echo htmlspecialchars($b['branch_name']); ?></span>
-                            <?php if (!empty($b['branch_code'])): ?>
-                                <span class="bpc-code"><?php echo htmlspecialchars($b['branch_code']); ?></span>
-                            <?php endif; ?>
-                            <?php if (!empty($b['location'])): ?>
-                                <span class="bpc-location">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <?php echo htmlspecialchars($b['location']); ?>
-                                </span>
-                            <?php endif; ?>
-                        </div>
-                        <i class="fas fa-arrow-right bpc-arrow"></i>
-                    </a>
-                <?php endforeach; ?>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeAddPicker()">
-                <i class="fas fa-times"></i> Cancel
-            </button>
-        </div>
-    </div>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
 /* ============================================================
-   VARIABLES
+   VARIABLES - BLUE THEME
    ============================================================ */
 :root {
     --bg-body: #f0f4f8;
@@ -628,6 +527,7 @@ include_once '../../includes/admin_topbar.php';
     --border-color: #cbd5e1;
     --shadow-color: rgba(30, 64, 175, 0.08);
     --shadow-hover: rgba(30, 64, 175, 0.15);
+    
     --blue-primary: #1e40af;
     --blue-dark: #1e3a8a;
     --blue-mid: #2563eb;
@@ -635,6 +535,7 @@ include_once '../../includes/admin_topbar.php';
     --blue-lighter: #dbeafe;
     --blue-lightest: #eff6ff;
     --blue-accent: #60a5fa;
+    
     --green-primary: #059669;
     --green-light: #10b981;
     --orange-primary: #d97706;
@@ -643,6 +544,7 @@ include_once '../../includes/admin_topbar.php';
     --red-dark: #8a0303;
     --purple-primary: #7c3aed;
 }
+
 html.dark-mode {
     --bg-body: #0f172a;
     --bg-card: #1e293b;
@@ -658,63 +560,204 @@ html.dark-mode {
     --blue-lightest: #1e293b;
 }
 
+/* ============================================================
+   GLOBAL
+   ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; min-height: 100vh; background: var(--bg-body); transition: margin-left 0.3s ease; }
 .main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
+@media (max-width: 1024px) {
+    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; }
+    .main-content { padding: 16px 18px !important; }
+}
+@media (max-width: 768px) {
+    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
+    .main-content { padding: 16px 14px !important; width: 100%; }
+}
+@media (max-width: 480px) {
+    .main-wrapper { padding-top: 44px; width: 100%; }
+    .main-content { padding: 12px 10px !important; width: 100%; }
+}
+
 /* ============================================================
    BRANCH INDICATOR
    ============================================================ */
-.branch-indicator { background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); border-radius: 12px; padding: 14px 22px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3); flex-wrap: wrap; gap: 12px; position: relative; overflow: hidden; }
-.branch-indicator::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: rgba(255, 255, 255, 0.08); border-radius: 50%; pointer-events: none; }
-.branch-indicator-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; flex: 1; position: relative; z-index: 1; }
-.branch-icon-wrapper { width: 42px; height: 42px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #FFFFFF; flex-shrink: 0; backdrop-filter: blur(8px); border: 1.5px solid rgba(255, 255, 255, 0.3); }
+.branch-indicator {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
+    border-radius: 12px; padding: 14px 22px; margin-bottom: 14px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
+    flex-wrap: wrap; gap: 12px;
+    position: relative; overflow: hidden;
+}
+.branch-indicator::before {
+    content: ''; position: absolute;
+    top: -50%; right: -10%;
+    width: 300px; height: 300px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%; pointer-events: none;
+}
+.branch-indicator-left {
+    display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap; min-width: 0; flex: 1;
+    position: relative; z-index: 1;
+}
+.branch-icon-wrapper {
+    width: 42px; height: 42px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #FFFFFF; flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+}
 .branch-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.branch-indicator-label { font-size: 10px; font-weight: 600; opacity: 0.85; text-transform: uppercase; letter-spacing: 1px; color: #FFFFFF; }
-.branch-indicator-name { font-weight: 800; font-size: 16px; color: #FFFFFF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.branch-indicator-code { font-size: 11px; font-weight: 700; color: #FFFFFF; padding: 3px 12px; background: rgba(255, 255, 255, 0.2); border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.25); }
-.branch-location { display: flex; align-items: center; gap: 5px; font-size: 12px; color: rgba(255,255,255,0.9); padding: 4px 12px; background: rgba(255, 255, 255, 0.12); border-radius: 12px; white-space: nowrap; }
-.branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; position: relative; z-index: 1; }
-.branch-indicator-right .date-display { font-size: 12px; color: rgba(255,255,255,0.95); padding: 6px 14px; background: rgba(255, 255, 255, 0.15); border-radius: 16px; display: flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 600; }
+.branch-indicator-label {
+    font-size: 10px; font-weight: 600; opacity: 0.85;
+    text-transform: uppercase; letter-spacing: 1px; color: #FFFFFF;
+}
+.branch-indicator-name {
+    font-weight: 800; font-size: 16px; color: #FFFFFF;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+.branch-indicator-code {
+    font-size: 11px; font-weight: 700; color: #FFFFFF;
+    padding: 3px 12px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.branch-location {
+    display: flex; align-items: center; gap: 5px; font-size: 12px;
+    color: rgba(255,255,255,0.9); padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 12px; white-space: nowrap;
+}
+.branch-indicator-right {
+    display: flex; align-items: center; gap: 8px;
+    flex-shrink: 0; position: relative; z-index: 1;
+}
+.branch-indicator-right .date-display {
+    font-size: 12px; color: rgba(255,255,255,0.95);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; font-weight: 600;
+}
 
 /* ============================================================
    PAGE HEADER
    ============================================================ */
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }
-.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; color: var(--text-primary); }
+.page-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px; flex-wrap: wrap; gap: 12px;
+}
+.page-header .header-left h2 {
+    font-size: 22px; font-weight: 800; margin: 0;
+    color: var(--text-primary);
+}
 .page-header .header-left h2 i { margin-right: 10px; }
-.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 4px 0 0 0; font-weight: 500; }
-.page-header .header-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.page-header .header-left .text-muted {
+    font-size: 13px; color: var(--text-muted);
+    margin: 4px 0 0 0; font-weight: 500;
+}
+.page-header .header-right {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
 
 /* ============================================================
    BUTTONS
    ============================================================ */
-.btn-add { background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); color: #FFFFFF; padding: 11px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; text-decoration: none; box-shadow: 0 4px 14px rgba(30, 64, 175, 0.35); white-space: nowrap; }
-.btn-add:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(30, 64, 175, 0.5); color: #FFFFFF; }
-.btn-export { background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: #FFFFFF; padding: 11px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; text-decoration: none; box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35); white-space: nowrap; }
-.btn-export:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(5, 150, 105, 0.5); color: #FFFFFF; }
-.btn-back { background: var(--bg-card); color: var(--text-secondary); border: 1.5px solid var(--border-color); padding: 10px 20px; border-radius: 10px; font-weight: 600; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; text-decoration: none; white-space: nowrap; }
-.btn-back:hover { background: var(--blue-lightest); color: var(--blue-primary); border-color: var(--blue-light); transform: translateY(-2px); }
+.btn-new-report {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+    color: #FFFFFF;
+    padding: 11px 22px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    box-shadow: 0 4px 14px rgba(30, 64, 175, 0.35);
+    white-space: nowrap;
+}
+.btn-new-report:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 22px rgba(30, 64, 175, 0.5);
+    color: #FFFFFF;
+}
+.btn-export {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    color: #FFFFFF;
+    padding: 11px 22px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);
+    white-space: nowrap;
+}
+.btn-export:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 22px rgba(5, 150, 105, 0.5);
+    color: #FFFFFF;
+}
+.btn-back {
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    padding: 10px 20px;
+    border-radius: 10px;
+    font-weight: 600; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.btn-back:hover {
+    background: var(--blue-lightest);
+    color: var(--blue-primary);
+    border-color: var(--blue-light);
+    transform: translateY(-2px);
+}
 
 /* ============================================================
    ALERTS
    ============================================================ */
-.alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); animation: slideDown 0.4s ease forwards; }
+.alert {
+    padding: 14px 18px; border-radius: 10px;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    animation: slideDown 0.4s ease forwards;
+}
 .alert-success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
 .alert-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
 html.dark-mode .alert-success { background: #065f46; color: #d1fae5; border-color: #047857; }
 html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color: #991b1b; }
 .alert i { font-size: 20px; flex-shrink: 0; }
 .alert span { flex: 1; font-size: 13px; font-weight: 500; }
-.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
+.alert-close {
+    background: transparent; border: none;
+    font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6;
+}
 .alert-close:hover { opacity: 1; }
-@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 
 /* ============================================================
-   ✅ SUMMARY CARDS - 2 JUU, 2 CHINI (2x2 GRID)
+   ✅ SUMMARY CARDS - 2x2 na NZURI TEXT COLORS
    ============================================================ */
 .summary-cards {
     display: grid;
@@ -739,7 +782,7 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
     overflow: hidden;
 }
 
-/* Colored left border kwa kila card */
+/* Colored left border per card */
 .summary-card::before {
     content: '';
     position: absolute;
@@ -749,10 +792,10 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
     border-radius: 14px 0 0 14px;
 }
 
-.summary-blue::before { background: linear-gradient(180deg, #1e40af, #3b82f6); }
+.summary-blue::before  { background: linear-gradient(180deg, #1e40af, #3b82f6); }
 .summary-green::before { background: linear-gradient(180deg, #059669, #10b981); }
-.summary-orange::before { background: linear-gradient(180deg, #d97706, #f59e0b); }
-.summary-purple::before { background: linear-gradient(180deg, #7c3aed, #8b5cf6); }
+.summary-orange::before{ background: linear-gradient(180deg, #d97706, #f59e0b); }
+.summary-purple::before{ background: linear-gradient(180deg, #7c3aed, #8b5cf6); }
 
 .summary-card:hover {
     transform: translateY(-4px);
@@ -834,40 +877,81 @@ html.dark-mode .sc-icon-purple { background: #4c1d95; color: #ddd6fe; border-col
     max-width: 100%;
 }
 
-/* Text colors per card */
-.summary-blue .sc-value { color: #1e40af; }
-.summary-green .sc-value { color: #059669; }
+/* ✅ NZURI TEXT COLORS - Matching na rangi ya card */
+.summary-blue .sc-value   { color: #1e40af; }
+.summary-green .sc-value  { color: #059669; }
 .summary-orange .sc-value { color: #d97706; }
 .summary-purple .sc-value { color: #7c3aed; }
 
-html.dark-mode .summary-blue .sc-value { color: #60a5fa; }
-html.dark-mode .summary-green .sc-value { color: #34d399; }
+html.dark-mode .summary-blue .sc-value   { color: #60a5fa; }
+html.dark-mode .summary-green .sc-value  { color: #34d399; }
 html.dark-mode .summary-orange .sc-value { color: #fbbf24; }
 html.dark-mode .summary-purple .sc-value { color: #a78bfa; }
 
-.summary-blue .sc-label { color: #1e40af; opacity: 0.75; }
-.summary-green .sc-label { color: #059669; opacity: 0.75; }
+/* Labels pia zenye rangi */
+.summary-blue .sc-label   { color: #1e40af; opacity: 0.75; }
+.summary-green .sc-label  { color: #059669; opacity: 0.75; }
 .summary-orange .sc-label { color: #d97706; opacity: 0.75; }
 .summary-purple .sc-label { color: #7c3aed; opacity: 0.75; }
 
-html.dark-mode .summary-blue .sc-label { color: #93c5fd; opacity: 0.9; }
-html.dark-mode .summary-green .sc-label { color: #6ee7b7; opacity: 0.9; }
+html.dark-mode .summary-blue .sc-label   { color: #93c5fd; opacity: 0.9; }
+html.dark-mode .summary-green .sc-label  { color: #6ee7b7; opacity: 0.9; }
 html.dark-mode .summary-orange .sc-label { color: #fcd34d; opacity: 0.9; }
 html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
 
 /* ============================================================
    FILTERS
    ============================================================ */
-.filters-bar { background: var(--bg-card); padding: 16px 20px; border-radius: 12px; border: 1.5px solid var(--border-color); margin-bottom: 18px; max-width: 100%; box-shadow: 0 2px 8px var(--shadow-color); }
+.filters-bar {
+    background: var(--bg-card);
+    padding: 16px 20px;
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    margin-bottom: 18px; max-width: 100%;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
 .filters-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 5px; }
-.filter-group label { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.filter-group label {
+    font-size: 11px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
 .filter-actions { flex-direction: row; align-items: flex-end; gap: 8px; }
-.form-control { padding: 9px 14px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 12px; color: var(--text-primary); background: var(--bg-input); transition: all 0.3s ease; min-width: 150px; font-family: 'Inter', sans-serif; }
-.form-control:focus { outline: none; border-color: var(--blue-primary); box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1); background: var(--bg-card); }
-.btn-filter { background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); color: #FFFFFF; padding: 9px 20px; border: none; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; box-shadow: 0 3px 10px rgba(30, 64, 175, 0.25); white-space: nowrap; }
+.form-control {
+    padding: 9px 14px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 12px; color: var(--text-primary);
+    background: var(--bg-input);
+    transition: all 0.3s ease;
+    min-width: 150px;
+    font-family: 'Inter', sans-serif;
+}
+.form-control:focus {
+    outline: none;
+    border-color: var(--blue-primary);
+    box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+    background: var(--bg-card);
+}
+.btn-filter {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+    color: #FFFFFF; padding: 9px 20px;
+    border: none; border-radius: 8px;
+    font-weight: 700; font-size: 12px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: all 0.3s ease;
+    box-shadow: 0 3px 10px rgba(30, 64, 175, 0.25);
+    white-space: nowrap;
+}
 .btn-filter:hover { transform: translateY(-2px); box-shadow: 0 5px 16px rgba(30, 64, 175, 0.4); }
-.btn-reset { background: var(--bg-card); color: var(--text-secondary); border: 1.5px solid var(--border-color); padding: 9px 18px; border-radius: 8px; font-weight: 600; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; text-decoration: none; white-space: nowrap; }
+.btn-reset {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color); padding: 9px 18px;
+    border-radius: 8px; font-weight: 600; font-size: 12px;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    transition: all 0.3s ease; text-decoration: none; white-space: nowrap;
+}
 .btn-reset:hover { background: var(--blue-lightest); color: var(--blue-primary); border-color: var(--blue-light); }
 
 /* ============================================================
@@ -910,7 +994,14 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
     border-radius: 50%; pointer-events: none;
 }
 
-.report-header-info { display: flex; align-items: center; gap: 16px; position: relative; z-index: 1; min-width: 0; }
+.report-header-info {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+}
 .report-header-icon {
     width: 54px; height: 54px;
     background: rgba(255, 255, 255, 0.2);
@@ -931,7 +1022,12 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
     word-break: break-all;
 }
-.report-header-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.report-header-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
 .report-header-meta-item {
     display: inline-flex;
     align-items: center;
@@ -1031,78 +1127,34 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
 .report-header-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     position: relative;
     z-index: 1;
     flex-shrink: 0;
 }
-
-.btn-action-header {
+.btn-view-report {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    border-radius: 10px;
-    font-weight: 800;
-    font-size: 12px;
-    text-decoration: none;
-    transition: all 0.3s ease;
-    white-space: nowrap;
-    border: 2px solid;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-}
-.btn-action-header i { font-size: 13px; }
-.btn-action-header span { display: inline-block; }
-
-.btn-view-header {
+    gap: 8px;
+    padding: 12px 20px;
     background: #FFFFFF;
     color: #1e40af;
-    border-color: #FFFFFF;
+    border-radius: 10px;
+    font-weight: 800;
+    font-size: 13px;
+    text-decoration: none;
+    transition: all 0.3s ease;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+    white-space: nowrap;
+    border: 2px solid #FFFFFF;
 }
-.btn-view-header:hover {
+.btn-view-report:hover {
     transform: translateY(-2px);
     background: #EFF6FF;
     color: #1e3a8a;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
-
-.btn-edit-header {
-    background: #FCD34D;
-    color: #78350F;
-    border-color: #FCD34D;
-    box-shadow: 0 4px 14px rgba(252, 211, 77, 0.4);
-}
-.btn-edit-header:hover {
-    transform: translateY(-2px);
-    background: #FBBF24;
-    color: #78350F;
-    border-color: #FBBF24;
-    box-shadow: 0 6px 20px rgba(251, 191, 36, 0.5);
-}
-
-.btn-delete-header {
-    background: #DC2626;
-    color: #FFFFFF;
-    border-color: #DC2626;
-    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
-}
-.btn-delete-header:hover {
-    transform: translateY(-2px);
-    background: #B91C1C;
-    color: #FFFFFF;
-    border-color: #B91C1C;
-    box-shadow: 0 6px 20px rgba(185, 28, 28, 0.5);
-}
-
-.btn-locked-header {
-    background: rgba(255, 255, 255, 0.15);
-    color: rgba(255, 255, 255, 0.8);
-    border-color: rgba(255, 255, 255, 0.3);
-    cursor: not-allowed;
-    opacity: 0.8;
-}
+.btn-view-report i { font-size: 14px; }
 
 .status-badge {
     display: inline-flex; align-items: center; gap: 5px;
@@ -1126,9 +1178,16 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
 /* ============================================================
    REPORT BODY - PROVIDER TABLE
    ============================================================ */
-.report-body { padding: 0; background: var(--bg-card); }
+.report-body {
+    padding: 0;
+    background: var(--bg-card);
+}
 
-.provider-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.provider-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
 
 .provider-table thead tr {
     background: var(--bg-table-even);
@@ -1150,9 +1209,17 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
     border-bottom: 1px solid var(--border-color);
     transition: background 0.2s ease;
 }
-.provider-table tbody tr:hover { background: var(--bg-table-hover); }
-.provider-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
-.provider-table tbody td { padding: 14px 16px; color: var(--text-primary); vertical-align: middle; }
+.provider-table tbody tr:hover {
+    background: var(--bg-table-hover);
+}
+.provider-table tbody tr:nth-child(even) {
+    background: var(--bg-table-even);
+}
+.provider-table tbody td {
+    padding: 14px 16px;
+    color: var(--text-primary);
+    vertical-align: middle;
+}
 .provider-table tbody td.text-right { text-align: right; }
 
 .provider-row-number {
@@ -1167,9 +1234,15 @@ html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
     font-weight: 800;
     border: 1px solid #BFDBFE;
 }
-html.dark-mode .provider-row-number { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+html.dark-mode .provider-row-number {
+    background: #1e3a5f; color: #93c5fd; border-color: #3b82f6;
+}
 
-.provider-cell { display: flex; align-items: center; gap: 12px; }
+.provider-cell {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
 .provider-icon {
     width: 40px; height: 40px;
     border-radius: 50%;
@@ -1179,7 +1252,11 @@ html.dark-mode .provider-row-number { background: #1e3a5f; color: #93c5fd; borde
     flex-shrink: 0;
     box-shadow: 0 3px 10px rgba(0,0,0,0.15);
 }
-.provider-name { font-size: 13px; font-weight: 800; color: var(--text-primary); }
+.provider-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text-primary);
+}
 
 .code-badge {
     display: inline-block;
@@ -1225,8 +1302,16 @@ html.dark-mode .type-other { background: #5f3a1e; color: #fbbf24; border-color: 
     font-family: 'Courier New', monospace;
     white-space: nowrap;
 }
-.amount-float { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
-.amount-cash { background: #D1FAE5; color: #059669; border: 1px solid #A7F3D0; }
+.amount-float {
+    background: #DBEAFE;
+    color: #1E40AF;
+    border: 1px solid #BFDBFE;
+}
+.amount-cash {
+    background: #D1FAE5;
+    color: #059669;
+    border: 1px solid #A7F3D0;
+}
 .amount-total {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1E3A8A;
@@ -1245,8 +1330,13 @@ html.dark-mode .amount-cash { background: #065f46; color: #34d399; border-color:
 html.dark-mode .amount-total { background: linear-gradient(135deg, #1e3a5f, #1e40af); color: #93c5fd; border-color: #3b82f6; }
 html.dark-mode .amount-grand { background: linear-gradient(135deg, #5f3a1e, #78350f); color: #fcd34d; border-color: #d97706; }
 
-.provider-table tfoot tr { border-top: 1px solid var(--border-color); }
-.provider-table tfoot td { padding: 14px 16px; font-weight: 800; }
+.provider-table tfoot tr {
+    border-top: 1px solid var(--border-color);
+}
+.provider-table tfoot td {
+    padding: 14px 16px;
+    font-weight: 800;
+}
 .provider-table tfoot td.text-right { text-align: right; }
 
 .tfoot-label {
@@ -1261,13 +1351,17 @@ html.dark-mode .amount-grand { background: linear-gradient(135deg, #5f3a1e, #783
 .tfoot-label i { font-size: 14px; }
 .tfoot-label.grand { font-size: 13px; }
 
-.total-float-row { background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%) !important; }
+.total-float-row {
+    background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%) !important;
+}
 .total-float-row .tfoot-label { color: #1E40AF; }
 .total-float-row .tfoot-label i { color: #2563EB; }
 html.dark-mode .total-float-row { background: linear-gradient(135deg, #1e3a5f, #1e40af) !important; }
 html.dark-mode .total-float-row .tfoot-label { color: #93c5fd; }
 
-.cash-row { background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%) !important; }
+.cash-row {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%) !important;
+}
 .cash-row .tfoot-label { color: #059669; }
 .cash-row .tfoot-label i { color: #10B981; }
 html.dark-mode .cash-row { background: linear-gradient(135deg, #065f46, #047857) !important; }
@@ -1282,135 +1376,79 @@ html.dark-mode .cash-row .tfoot-label { color: #34d399; }
 html.dark-mode .grand-total-row { background: linear-gradient(135deg, #5f3a1e, #78350f) !important; }
 html.dark-mode .grand-total-row .tfoot-label { color: #fcd34d; }
 
-.no-providers { text-align: center; padding: 40px 20px; color: var(--text-muted); }
-.no-providers i { font-size: 42px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 12px; }
-.no-providers p { font-size: 13px; margin: 0; font-weight: 600; }
+.no-providers {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+}
+.no-providers i {
+    font-size: 42px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 12px;
+}
+.no-providers p {
+    font-size: 13px;
+    margin: 0;
+    font-weight: 600;
+}
 
 .empty-state {
-    text-align: center; padding: 60px 20px;
-    background: var(--bg-card); border-radius: 14px;
+    text-align: center;
+    padding: 60px 20px;
+    background: var(--bg-card);
+    border-radius: 14px;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-.empty-state i { font-size: 56px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 16px; }
-.empty-state h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
-.empty-state p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
-
-/* ============================================================
-   MODAL
-   ============================================================ */
-.modal-overlay {
-    display: none; position: fixed; top: 0; left: 0;
-    width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 9999; align-items: center; justify-content: center;
-    padding: 20px; backdrop-filter: blur(4px);
+.empty-state i {
+    font-size: 56px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 16px;
 }
-.modal-overlay.show { display: flex; }
-.modal-content {
-    background: var(--bg-card); border-radius: 16px;
-    width: 100%; max-width: 720px;
-    max-height: 90vh; overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-    animation: modalIn 0.3s ease;
-    display: flex; flex-direction: column;
+.empty-state h3 {
+    font-size: 18px;
+    color: var(--text-primary);
+    margin: 0 0 8px 0;
 }
-@keyframes modalIn {
-    from { opacity: 0; transform: scale(0.95) translateY(10px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
-}
-.modal-header {
-    padding: 20px 24px;
-    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
-    color: #FFFFFF;
-    display: flex; justify-content: space-between; align-items: center;
-}
-.modal-header h3 { margin: 0; font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 10px; }
-.modal-header h3 i { color: #FCD34D; }
-.modal-close {
-    background: rgba(255, 255, 255, 0.15);
-    border: none; width: 32px; height: 32px;
-    border-radius: 50%; color: #FFFFFF;
-    font-size: 20px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.2s ease;
-}
-.modal-close:hover { background: rgba(255, 255, 255, 0.3); transform: rotate(90deg); }
-.modal-body { padding: 24px; overflow-y: auto; flex: 1; }
-.modal-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px 0; font-weight: 500; }
-.branch-picker-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.branch-picker-card {
-    display: flex; align-items: center; gap: 12px;
-    padding: 14px 16px;
-    background: var(--bg-input);
-    border: 2px solid var(--border-color);
-    border-radius: 12px; text-decoration: none;
-    transition: all 0.3s ease; cursor: pointer;
-}
-.branch-picker-card:hover {
-    border-color: #2563eb;
-    background: #eff6ff;
-    transform: translateY(-3px);
-    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.25);
-}
-html.dark-mode .branch-picker-card:hover { background: #1e3a5f; }
-.bpc-icon {
-    width: 44px; height: 44px;
-    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
-    color: #FFFFFF; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; flex-shrink: 0;
-    box-shadow: 0 3px 10px rgba(30, 64, 175, 0.3);
-}
-.bpc-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
-.bpc-name { font-size: 14px; font-weight: 800; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bpc-code {
-    font-size: 10px; font-weight: 700; color: #1e40af;
-    background: #dbeafe; padding: 2px 8px; border-radius: 6px;
-    align-self: flex-start; font-family: 'Courier New', monospace;
-}
-html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
-.bpc-location { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
-.bpc-location i { color: #2563eb; font-size: 9px; }
-.bpc-arrow { color: #94a3b8; font-size: 14px; transition: all 0.3s ease; }
-.branch-picker-card:hover .bpc-arrow { color: #2563eb; transform: translateX(4px); }
-.modal-footer {
-    padding: 16px 24px;
-    background: var(--bg-input);
-    display: flex; gap: 10px; justify-content: flex-end;
-    border-top: 1px solid var(--border-color);
-}
-.btn-secondary {
-    background: var(--bg-table-even); color: var(--text-secondary);
-    border: 1px solid var(--border-color); padding: 10px 18px;
-    border-radius: 8px; font-weight: 600; cursor: pointer;
-    font-size: 12px; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 5px;
-    font-family: 'Inter', sans-serif;
+.empty-state p {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 20px 0;
 }
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-@media (max-width: 1400px) {
-    .report-header { grid-template-columns: 1fr auto; }
+@media (max-width: 1200px) {
+    .report-header {
+        grid-template-columns: 1fr auto;
+        gap: 16px;
+    }
     .report-header-employee {
-        border-left: none; padding-left: 0;
+        border-left: none;
+        padding-left: 0;
         border-right: 2px solid rgba(255, 255, 255, 0.2);
     }
 }
-@media (max-width: 1200px) {
-    .report-header { grid-template-columns: 1fr; gap: 16px; }
+@media (max-width: 900px) {
+    .report-header {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
     .report-header-employee {
-        border-left: none; border-right: none;
-        padding: 0; padding-top: 16px;
+        border-left: none;
+        border-right: none;
+        padding: 0;
+        padding-top: 16px;
         border-top: 2px solid rgba(255, 255, 255, 0.2);
         flex-wrap: wrap;
     }
-    .report-header-actions { justify-content: flex-start; }
-}
-@media (max-width: 1024px) {
-    .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .report-header-actions { justify-content: stretch; }
+    .btn-view-report { width: 100%; justify-content: center; }
 }
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
@@ -1418,12 +1456,16 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .branch-indicator-right { width: 100%; }
     .page-header { flex-direction: column; align-items: flex-start; }
     .page-header .header-right { width: 100%; }
-    .page-header .header-right .btn-add,
+    .page-header .header-right .btn-new-report,
     .page-header .header-right .btn-export,
-    .page-header .header-right .btn-back { flex: 1; justify-content: center; }
+    .page-header .header-right .btn-back {
+        flex: 1; justify-content: center;
+    }
 
-    /* ✅ SUMMARY CARDS - STILL 2x2 on tablet */
-    .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .summary-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
     .summary-card { padding: 16px 16px; gap: 12px; }
     .sc-icon { width: 46px; height: 46px; font-size: 18px; border-radius: 12px; }
     .sc-value { font-size: 16px; letter-spacing: -0.3px; }
@@ -1435,7 +1477,6 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .filter-actions { flex-direction: row; width: 100%; }
     .filter-actions .btn-filter,
     .filter-actions .btn-reset { flex: 1; justify-content: center; }
-    .branch-picker-grid { grid-template-columns: 1fr; }
 
     .report-header { padding: 16px; }
     .report-header-info { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -1446,9 +1487,6 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .emp-avatar-img, .emp-avatar { width: 40px; height: 40px; font-size: 16px; }
     .emp-name { font-size: 13px; max-width: 150px; }
 
-    .report-header-actions { flex-wrap: wrap; gap: 6px; width: 100%; }
-    .btn-action-header { flex: 1; justify-content: center; padding: 10px 12px; font-size: 11px; }
-
     .provider-table { font-size: 12px; min-width: 600px; }
     .provider-table thead th { padding: 10px 12px; font-size: 9px; }
     .provider-table tbody td { padding: 12px 12px; }
@@ -1458,7 +1496,6 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .amount-total, .amount-grand { font-size: 13px; }
 }
 @media (max-width: 480px) {
-    /* ✅ SUMMARY CARDS - STILL 2x2 on mobile, compact */
     .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .summary-card {
         padding: 12px 12px; gap: 8px;
@@ -1468,8 +1505,7 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .sc-value { font-size: 14px; letter-spacing: -0.2px; }
     .sc-label { font-size: 8px; }
     .report-header-number { font-size: 12px; }
-    .btn-action-header { padding: 8px 10px; font-size: 10px; }
-    .btn-action-header span { font-size: 10px; }
+    .btn-view-report { padding: 10px 16px; font-size: 12px; }
     .provider-table { min-width: 500px; }
     .provider-table thead th { padding: 8px 10px; font-size: 8px; }
     .provider-table tbody td { padding: 10px 10px; }
@@ -1477,39 +1513,6 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
 </style>
 
 <script>
-// ============================================================
-// ADD PICKER MODAL
-// ============================================================
-function openAddPicker() {
-    document.getElementById('addPickerModal').classList.add('show');
-}
-function closeAddPicker() {
-    document.getElementById('addPickerModal').classList.remove('show');
-}
-document.addEventListener('DOMContentLoaded', function() {
-    var modal = document.getElementById('addPickerModal');
-    if (modal) {
-        modal.addEventListener('click', function(e) {
-            if (e.target === this) closeAddPicker();
-        });
-    }
-});
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeAddPicker();
-});
-
-// ============================================================
-// DELETE
-// ============================================================
-function deleteReport(id, number) {
-    if (confirm('Delete morning report "' + number + '"?\n\nThis action cannot be undone.')) {
-        window.location.href = 'delete.php?id=' + id;
-    }
-}
-
-// ============================================================
-// INIT
-// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {

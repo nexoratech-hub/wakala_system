@@ -4,84 +4,107 @@
 // WAKALA FINANCIAL SYSTEM - DELETE MORNING REPORT
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// GET REPORT ID
-// ============================================================
-$report_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
 
-if ($report_id <= 0) {
+$id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+if ($id <= 0) {
+    $_SESSION['error_message'] = 'Invalid morning report ID.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET REPORT DATA
+// FETCH REPORT
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM morning_reports WHERE id = ?");
-$stmt->execute([$report_id]);
-$report = $stmt->fetch();
+$stmt->execute([$id]);
+$report = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$report) {
-    header('Location: index.php');
-    exit();
-}
-
-// Check permission - employee can only delete their own reports
-if ($role == 'employee' && $report['employee_id'] != $user_id) {
+    $_SESSION['error_message'] = 'Morning report not found.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// DELETE REPORT
+// BLOCK DELETE IF LOCKED
+// ============================================================
+if (intval($report['is_locked']) === 1) {
+    $_SESSION['error_message'] = 'Cannot delete a locked morning report.';
+    header('Location: view.php?id=' . $id);
+    exit();
+}
+
+// ============================================================
+// CHECK IF DAILY REPORT REFERENCES THIS MORNING REPORT
+// ============================================================
+$stmt = $db->prepare("
+    SELECT id, report_number 
+    FROM daily_reports 
+    WHERE morning_report_id = ? 
+    LIMIT 1
+");
+$stmt->execute([$id]);
+$linked_daily = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if ($linked_daily) {
+    $_SESSION['error_message'] = 'Cannot delete — this morning report is linked to daily report ' . 
+                                  $linked_daily['report_number'] . '.';
+    header('Location: view.php?id=' . $id);
+    exit();
+}
+
+// ============================================================
+// DELETE
 // ============================================================
 try {
-    // Log activity before deletion
-    try {
-        $stmt = $db->prepare("INSERT INTO activity_logs (employee_id, action, module, record_id, old_value, branch_id) 
-                              VALUES (?, 'Delete Morning Report', 'Morning Report', ?, ?, ?)");
-        $stmt->execute([$user_id, $report_id, 'Morning report deleted: ' . $report['report_number'], $report['branch_id']]);
-    } catch (Exception $e) {
-        // Activity log table might not exist, ignore
-    }
-    
-    // Delete the report
+    $db->beginTransaction();
+
+    // Delete providers (CASCADE in DB but explicit for safety)
+    $stmt = $db->prepare("DELETE FROM morning_report_providers WHERE report_id = ?");
+    $stmt->execute([$id]);
+
+    // Delete report
     $stmt = $db->prepare("DELETE FROM morning_reports WHERE id = ?");
-    $stmt->execute([$report_id]);
-    
-    $_SESSION['success_message'] = 'Morning report deleted successfully!';
-    
+    $stmt->execute([$id]);
+
+    // Log
+    logActivity(
+        $user_id,
+        'Delete Morning Report',
+        'Morning Report',
+        $id,
+        $report['report_number'],
+        'Deleted morning report ' . $report['report_number']
+    );
+
+    $db->commit();
+
+    $_SESSION['success_message'] = 'Morning report ' . $report['report_number'] . ' deleted successfully.';
+
 } catch (Exception $e) {
-    $_SESSION['error_message'] = 'Error deleting report: ' . $e->getMessage();
+    if ($db->inTransaction()) $db->rollBack();
+    $_SESSION['error_message'] = 'Delete failed: ' . $e->getMessage();
 }
 
-// Redirect back to index
-$branch_param = $report['branch_id'] > 0 ? '?branch=' . $report['branch_id'] : '';
-header('Location: index.php' . $branch_param);
+header('Location: index.php?branch_id=' . intval($report['branch_id']));
 exit();
-?>

@@ -1,11 +1,12 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/view.php
-// WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT (ADMIN) - FINAL
-// ✅ BLUE THEME (matching na index.php)
+// FILE: modules/morning_report/view_employee.php
+// WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT (EMPLOYEE)
+// ✅ BLUE THEME (matching na Admin & Add Evening Stock)
 // ✅ 3 Providers per row (grid layout)
 // ✅ Cash + Grand Total chini
-// ✅ Nzuri text colors
+// ✅ Employee anaona reports za branch yake tu
+// ✅ Branch selector imefichwa kwenye topbar
 // ================================================================
 
 require_once '../../config/config.php';
@@ -24,20 +25,28 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role    = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin') {
-    header('Location: ../dashboard/employee.php');
-    exit();
-}
-
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($id <= 0) {
     $_SESSION['error_message'] = 'Invalid morning report.';
-    header('Location: index.php');
+    header('Location: index_employee.php');
     exit();
 }
 
 // ============================================================
-// FETCH REPORT
+// GET EMPLOYEE BRANCH
+// ============================================================
+$stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$emp = $stmt->fetch(PDO::FETCH_ASSOC);
+$employee_branch_id = intval($emp['branch_id'] ?? 0);
+
+if ($employee_branch_id <= 0) {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
+
+// ============================================================
+// FETCH REPORT (only from employee's branch)
 // ============================================================
 $stmt = $db->prepare("
     SELECT 
@@ -56,14 +65,14 @@ $stmt = $db->prepare("
     LEFT JOIN employees e ON mr.employee_id = e.id
     LEFT JOIN branches b ON mr.branch_id = b.id
     LEFT JOIN evening_stocks es ON mr.source_evening_stock_id = es.id
-    WHERE mr.id = ?
+    WHERE mr.id = ? AND mr.branch_id = ?
 ");
-$stmt->execute([$id]);
+$stmt->execute([$id, $employee_branch_id]);
 $report = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$report) {
-    $_SESSION['error_message'] = 'Morning report not found.';
-    header('Location: index.php');
+    $_SESSION['error_message'] = 'Morning report not found or you do not have permission to view it.';
+    header('Location: index_employee.php');
     exit();
 }
 
@@ -107,14 +116,59 @@ if (isset($_SESSION['error_message'])) {
 }
 
 include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
+include_once '../../includes/employee_sidebar.php';
 include_once '../../includes/admin_topbar.php';
 ?>
+
+<!-- ============================================================
+     HIDE BRANCH SELECTOR FROM TOPBAR (EMPLOYEE VIEW)
+     ============================================================ -->
+<style id="employee-topbar-fix">
+    .topbar .branch-selector,
+    .topbar .topbar-branch,
+    .topbar .branch-dropdown,
+    .topbar .topbar-branch-selector,
+    .topbar .branch-switcher,
+    .topbar .branch-select-wrapper,
+    .topbar .header-branch-selector,
+    .topbar .branch-filter,
+    .topbar .branch-filter-wrapper,
+    .topbar .branch-picker,
+    .topbar .navbar-branch,
+    .topbar .branch-select,
+    .topbar .branch-choice,
+    .topbar .topbar-branch-wrapper,
+    .topbar select[name="branch_id"],
+    .topbar select[name="branch"],
+    .topbar #branchSelector,
+    .topbar #branchSwitcher,
+    .topbar .topbar-right .branch-selector,
+    .topbar .topbar-right .branch-dropdown,
+    .topbar .topbar-right select[name="branch_id"],
+    header.topbar .branch-selector,
+    header.topbar .branch-dropdown,
+    header.topbar select[name="branch_id"],
+    .admin-topbar .branch-selector,
+    .admin-topbar .topbar-branch,
+    .admin-topbar .branch-dropdown,
+    .admin-topbar .branch-switcher,
+    .admin-topbar select[name="branch_id"],
+    nav.topbar .branch-selector,
+    nav.topbar .branch-dropdown {
+        display: none !important;
+        visibility: hidden !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }
+</style>
 
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- BRANCH INDICATOR -->
+        <!-- BRANCH INDICATOR - BLUE -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
@@ -135,7 +189,7 @@ include_once '../../includes/admin_topbar.php';
                 <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <a href="index.php?branch_id=<?php echo $report['branch_id']; ?>" class="btn-back-card">
+                <a href="index_employee.php" class="btn-back-card">
                     <i class="fas fa-arrow-left"></i>
                     <span>Back to Reports</span>
                 </a>
@@ -145,26 +199,16 @@ include_once '../../includes/admin_topbar.php';
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-sun" style="color:#1E40AF;"></i> Morning Report Details</h2>
+                <h2><i class="fas fa-sun" style="color:#2563EB;"></i> Morning Report Details</h2>
                 <p class="text-muted">
                     <i class="fas fa-hashtag"></i>
                     <?php echo htmlspecialchars($report['report_number']); ?>
                 </p>
             </div>
             <div class="header-right">
-                <?php if (intval($report['is_locked']) === 0): ?>
-                    <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit">
-                        <i class="fas fa-edit"></i> Edit
-                    </a>
-                <?php endif; ?>
                 <button onclick="window.print()" class="btn btn-print">
                     <i class="fas fa-print"></i> Print
                 </button>
-                <?php if (intval($report['is_locked']) === 0): ?>
-                    <button onclick="deleteReport(<?php echo $id; ?>, '<?php echo addslashes($report['report_number']); ?>')" class="btn btn-delete">
-                        <i class="fas fa-trash"></i> Delete
-                    </button>
-                <?php endif; ?>
             </div>
         </div>
 
@@ -184,9 +228,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-             MAIN CARD (Blue Theme)
-             ============================================================ -->
+        <!-- MAIN CARD - BLUE -->
         <div class="main-card">
             <div class="main-card-icon">
                 <i class="fas fa-sun"></i>
@@ -216,7 +258,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- TOTALS SUMMARY (3 cards) -->
+        <!-- TOTALS GRID - 3 CARDS -->
         <div class="totals-grid">
             <div class="total-card total-float">
                 <div class="total-icon"><i class="fas fa-coins"></i></div>
@@ -247,7 +289,7 @@ include_once '../../includes/admin_topbar.php';
             <!-- REPORT INFO -->
             <div class="detail-card">
                 <div class="detail-card-header">
-                    <div class="detail-icon" style="background: linear-gradient(135deg, #1E40AF, #2563EB);">
+                    <div class="detail-icon" style="background: linear-gradient(135deg, #2563EB, #1D4ED8);">
                         <i class="fas fa-info-circle"></i>
                     </div>
                     <h3>Report Information</h3>
@@ -289,6 +331,16 @@ include_once '../../includes/admin_topbar.php';
                         <span class="info-value"><?php echo date('d M Y', strtotime($report['source_stock_date'])); ?></span>
                     </div>
                     <?php endif; ?>
+                    <div class="info-row">
+                        <span class="info-label">Status</span>
+                        <span class="info-value">
+                            <?php if (intval($report['is_locked']) === 1): ?>
+                                <span class="badge badge-locked"><i class="fas fa-lock"></i> Locked</span>
+                            <?php else: ?>
+                                <span class="badge badge-open"><i class="fas fa-lock-open"></i> Open</span>
+                            <?php endif; ?>
+                        </span>
+                    </div>
                 </div>
             </div>
 
@@ -298,7 +350,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="detail-icon" style="background: linear-gradient(135deg, #059669, #10B981);">
                         <i class="fas fa-user-check"></i>
                     </div>
-                    <h3>Employee Information</h3>
+                    <h3>Prepared By</h3>
                 </div>
                 <div class="detail-card-body">
                     <div class="employee-box">
@@ -335,7 +387,7 @@ include_once '../../includes/admin_topbar.php';
              ============================================================ -->
         <div class="providers-section">
             
-            <!-- Section Header -->
+            <!-- Section Header - BLUE -->
             <div class="section-header">
                 <div class="section-header-left">
                     <div class="section-header-icon">
@@ -354,7 +406,7 @@ include_once '../../includes/admin_topbar.php';
                 <!-- Providers Grid - 3 kwa row -->
                 <div class="providers-grid">
                     <?php $pi = 1; foreach ($providers as $p): 
-                        $p_color = $p['color_code'] ?? '#1e40af';
+                        $p_color = $p['color_code'] ?? '#2563EB';
                         $p_icon = $p['icon_class'] ?? 'fas fa-university';
                         $p_type = $p['provider_type'] ?? 'bank';
                         $p_type_label = ucfirst(str_replace('_', ' ', $p_type));
@@ -389,7 +441,7 @@ include_once '../../includes/admin_topbar.php';
                                 </div>
                             </div>
                             
-                            <!-- Card Footer - Float -->
+                            <!-- Card Footer - Float (BLUE) -->
                             <div class="provider-card-footer">
                                 <span class="provider-card-footer-label">
                                     <i class="fas fa-coins"></i> Float Balance
@@ -403,12 +455,9 @@ include_once '../../includes/admin_topbar.php';
                     <?php endforeach; ?>
                 </div>
 
-                <!-- ============================================================
-                     CASH SUMMARY (CHINI YA PROVIDERS) - Blue Theme
-                     ============================================================ -->
+                <!-- CASH SUMMARY - 3 CARDS (CHINI YA PROVIDERS) -->
                 <div class="cash-summary-section">
                     
-                    <!-- Total Float Card -->
                     <div class="cash-summary-card float-card">
                         <div class="cash-summary-icon">
                             <i class="fas fa-coins"></i>
@@ -419,7 +468,6 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
 
-                    <!-- Cash Card -->
                     <div class="cash-summary-card cash-card">
                         <div class="cash-summary-icon">
                             <i class="fas fa-money-bill-wave"></i>
@@ -430,7 +478,6 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
 
-                    <!-- Grand Total Card -->
                     <div class="cash-summary-card grand-card">
                         <div class="cash-summary-icon">
                             <i class="fas fa-chart-line"></i>
@@ -467,21 +514,16 @@ include_once '../../includes/admin_topbar.php';
 
         <!-- ACTIONS -->
         <div class="actions-card">
-            <a href="index.php?branch_id=<?php echo $report['branch_id']; ?>" class="btn btn-secondary">
+            <a href="index_employee.php" class="btn btn-secondary">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
-            <?php if (intval($report['is_locked']) === 0): ?>
-                <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit-lg">
-                    <i class="fas fa-edit"></i> Edit Report
-                </a>
-            <?php endif; ?>
             <button onclick="window.print()" class="btn btn-print-lg">
                 <i class="fas fa-print"></i> Print Report
             </button>
         </div>
 
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
@@ -512,9 +554,11 @@ include_once '../../includes/admin_topbar.php';
     --green-primary: #059669;
     --green-light: #10b981;
     --orange-primary: #d97706;
-    --orange-light: #f59e0b;
     --red-primary: #bb0404;
     --purple-primary: #7c3aed;
+    
+    --sidebar-width: 220px;
+    --topbar-height: 70px;
 }
 html.dark-mode {
     --bg-body: #0f172a;
@@ -532,12 +576,27 @@ html.dark-mode {
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; margin-left: var(--sidebar-width) !important; width: calc(100% - var(--sidebar-width)) !important; padding-top: var(--topbar-height); min-height: 100vh; background: var(--bg-body); transition: margin-left 0.3s ease; }
 .main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* BRANCH INDICATOR - BLUE */
+@media (max-width: 1024px) {
+    .main-wrapper { margin-left: var(--sidebar-width) !important; width: calc(100% - var(--sidebar-width)) !important; padding-top: var(--topbar-height); }
+    .main-content { padding: 16px 18px !important; }
+}
+@media (max-width: 768px) {
+    .main-wrapper { margin-left: 0 !important; width: 100% !important; padding-top: 62px; }
+    .main-content { padding: 16px 14px !important; width: 100%; }
+}
+@media (max-width: 480px) {
+    .main-wrapper { padding-top: 58px; width: 100% !important; }
+    .main-content { padding: 12px 10px !important; width: 100%; }
+}
+
+/* ============================================================
+   BRANCH INDICATOR - BLUE
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -560,16 +619,19 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     color: #FFF; text-decoration: none; font-size: 13px; font-weight: 600;
     transition: all 0.3s ease;
 }
-.btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
+.btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; transform: translateX(-3px); }
 
-/* PAGE HEADER */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
-.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; color: var(--text-primary); }
-.page-header .header-left h2 i { margin-right: 8px; }
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
 .page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 6px 0 0 0; display: flex; align-items: center; gap: 6px; font-family: 'Courier New', monospace; font-weight: 600; }
 .page-header .header-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ALERTS */
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
@@ -579,7 +641,9 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 .alert span { flex: 1; font-size: 13px; font-weight: 500; }
 .alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
 
-/* MAIN CARD - BLUE */
+/* ============================================================
+   MAIN CARD - BLUE
+   ============================================================ */
 .main-card {
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     border-radius: 16px;
@@ -616,7 +680,9 @@ html.dark-mode .badge-auto { background: #4C1D95; color: #DDD6FE; border-color: 
 html.dark-mode .badge-manual { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
 .main-card .badge-locked, .main-card .badge-open { background: rgba(255,255,255,0.25); color: #FFF; border-color: rgba(255,255,255,0.4); backdrop-filter: blur(8px); }
 
-/* TOTALS GRID - 3 CARDS */
+/* ============================================================
+   TOTALS GRID - 3 CARDS
+   ============================================================ */
 .totals-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
 .total-card { display: flex; align-items: center; gap: 16px; padding: 20px 24px; border-radius: 14px; color: #FFF; box-shadow: 0 4px 16px rgba(0,0,0,0.15); position: relative; overflow: hidden; }
 .total-card::before { content: ''; position: absolute; top: -50%; right: -20%; width: 140px; height: 140px; background: rgba(255,255,255,0.1); border-radius: 50%; }
@@ -628,7 +694,9 @@ html.dark-mode .badge-manual { background: #5F3A1E; color: #FBBF24; border-color
 .total-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; opacity: 0.9; }
 .total-value { font-size: clamp(15px, 1.5vw, 20px); font-weight: 900; font-family: 'Inter', 'Courier New', monospace; word-break: break-all; line-height: 1.2; }
 
-/* DETAILS GRID */
+/* ============================================================
+   DETAILS GRID
+   ============================================================ */
 .details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 18px; }
 .detail-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); }
 .detail-card-header { padding: 16px 20px; background: var(--bg-table-even); border-bottom: 1.5px solid var(--border-color); display: flex; align-items: center; gap: 14px; }
@@ -640,7 +708,7 @@ html.dark-mode .badge-manual { background: #5F3A1E; color: #FBBF24; border-color
 .info-row:last-child { border-bottom: none; }
 .info-label { font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
 .info-value { font-size: 13px; font-weight: 700; color: var(--text-primary); text-align: right; word-break: break-word; }
-.info-value.mono { font-family: 'Courier New', monospace; color: #1E40AF; }
+.info-value.mono { font-family: 'Courier New', monospace; color: #2563EB; }
 html.dark-mode .info-value.mono { color: #93c5fd; }
 
 .employee-box { display: flex; align-items: center; gap: 14px; padding: 16px; background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); border: 2px solid #A7F3D0; border-radius: 12px; margin-bottom: 16px; }
@@ -652,7 +720,7 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
 .employee-code { display: inline-block; padding: 2px 10px; background: #059669; color: #FFF; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; align-self: flex-start; }
 
 /* ============================================================
-   PROVIDERS SECTION - BLUE THEME
+   PROVIDERS SECTION - BLUE
    ============================================================ */
 .providers-section {
     background: var(--bg-card);
@@ -663,9 +731,9 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     overflow: hidden;
 }
 
-/* Section Header - RED (matching na scheme) */
+/* Section Header - BLUE THEME */
 .section-header {
-    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
+    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
     padding: 18px 24px;
     display: flex;
     justify-content: space-between;
@@ -742,12 +810,11 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     min-width: 0;
 }
 .provider-card:hover {
-    border-color: #1e40af;
+    border-color: #2563EB;
     transform: translateY(-4px);
-    box-shadow: 0 10px 24px rgba(30, 64, 175, 0.2);
+    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
 }
 
-/* Provider Card Header */
 .provider-card-header {
     padding: 14px 16px;
     background: var(--bg-table-even);
@@ -771,9 +838,7 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     border: 1px solid #BFDBFE;
     flex-shrink: 0;
 }
-html.dark-mode .provider-card-number {
-    background: #1e3a5f; color: #93c5fd; border-color: #3b82f6;
-}
+html.dark-mode .provider-card-number { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
 .provider-card-icon {
     width: 42px;
     height: 42px;
@@ -786,12 +851,8 @@ html.dark-mode .provider-card-number {
     flex-shrink: 0;
     box-shadow: 0 3px 10px rgba(0,0,0,0.15);
 }
-.provider-card-type {
-    margin-left: auto;
-    flex-shrink: 0;
-}
+.provider-card-type { margin-left: auto; flex-shrink: 0; }
 
-/* Type Badges */
 .provider-type-badge {
     display: inline-flex;
     align-items: center;
@@ -812,7 +873,6 @@ html.dark-mode .type-bank { background: #1e3a5f; color: #93c5fd; border-color: #
 html.dark-mode .type-mobile_money { background: #4c1d95; color: #ddd6fe; border-color: #8b5cf6; }
 html.dark-mode .type-other { background: #5f3a1e; color: #fbbf24; border-color: #d97706; }
 
-/* Provider Card Body */
 .provider-card-body {
     padding: 16px;
     display: flex;
@@ -849,7 +909,7 @@ html.dark-mode .type-other { background: #5f3a1e; color: #fbbf24; border-color: 
 .provider-card-code i { font-size: 10px; }
 html.dark-mode .provider-card-code { background: #5f3a1e; color: #fbbf24; border-color: #92400e; }
 
-/* Provider Card Footer - Float (BLUE THEME) */
+/* Provider Card Footer - Float (BLUE) */
 .provider-card-footer {
     padding: 14px 16px;
     background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
@@ -886,7 +946,7 @@ html.dark-mode .provider-card-footer-label { color: #93c5fd; }
 html.dark-mode .provider-card-footer-value { color: #60a5fa; }
 
 /* ============================================================
-   CASH SUMMARY SECTION (CHINI YA PROVIDERS) - 3 CARDS
+   CASH SUMMARY - 3 CARDS (CHINI YA PROVIDERS)
    ============================================================ */
 .cash-summary-section {
     padding: 0 20px 20px 20px;
@@ -917,15 +977,9 @@ html.dark-mode .provider-card-footer-value { color: #60a5fa; }
     pointer-events: none;
 }
 
-.float-card {
-    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
-}
-.cash-card {
-    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
-}
-.grand-card {
-    background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%);
-}
+.float-card { background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%); }
+.cash-card { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
+.grand-card { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
 
 .cash-summary-icon {
     width: 52px;
@@ -966,7 +1020,9 @@ html.dark-mode .provider-card-footer-value { color: #60a5fa; }
     letter-spacing: -0.3px;
 }
 
-/* Empty Providers */
+/* ============================================================
+   EMPTY PROVIDERS
+   ============================================================ */
 .empty-providers {
     text-align: center;
     padding: 60px 20px;
@@ -985,7 +1041,9 @@ html.dark-mode .provider-card-footer-value { color: #60a5fa; }
     font-weight: 600;
 }
 
-/* NOTES */
+/* ============================================================
+   NOTES
+   ============================================================ */
 .notes-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); margin-bottom: 18px; }
 .notes-card-header { padding: 14px 20px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-bottom: 1.5px solid #FCD34D; display: flex; align-items: center; gap: 10px; }
 html.dark-mode .notes-card-header { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #D97706; }
@@ -996,21 +1054,35 @@ html.dark-mode .notes-card-header h3 { color: #FDE68A; }
 .notes-card-body { padding: 18px 20px; }
 .notes-card-body p { font-size: 14px; line-height: 1.7; color: var(--text-primary); margin: 0; }
 
-/* ACTIONS */
+/* ============================================================
+   ACTIONS
+   ============================================================ */
 .actions-card { display: flex; gap: 12px; padding: 20px 24px; background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); box-shadow: 0 2px 8px var(--shadow-color); flex-wrap: wrap; }
 .btn { padding: 12px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.3s ease; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
 .btn-secondary { background: var(--bg-table-even); color: var(--text-secondary); border: 1.5px solid var(--border-color); }
 .btn-secondary:hover { background: var(--bg-table-even); color: var(--text-primary); transform: translateY(-2px); }
-.btn-edit { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
-.btn-edit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4); color: #FFF; }
 .btn-print { background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3); }
 .btn-print:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4); color: #FFF; }
-.btn-delete { background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFF; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
-.btn-delete:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4); color: #FFF; }
-.btn-edit-lg { flex: 1; justify-content: center; min-width: 180px; background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
-.btn-edit-lg:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4); color: #FFF; }
 .btn-print-lg { flex: 1; justify-content: center; min-width: 180px; background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3); }
 .btn-print-lg:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4); color: #FFF; }
+
+/* ============================================================
+   EMPLOYEE FOOTER FIX
+   ============================================================ */
+.employee-footer {
+    margin-left: 0 !important;
+    margin-top: auto !important;
+    margin-bottom: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: #ffffff !important;
+    border-top: 1px solid var(--border-color) !important;
+    padding: 10px 20px !important;
+}
+html.dark-mode .employee-footer { background: #1e293b !important; border-color: #334155 !important; }
+.employee-footer .footer-content { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #6b7280; flex-wrap: wrap; gap: 8px; }
+html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
+.employee-footer .footer-version { font-weight: 600; color: #bb0404; }
 
 /* ============================================================
    RESPONSIVE
@@ -1037,32 +1109,38 @@ html.dark-mode .notes-card-header h3 { color: #FDE68A; }
     .info-value { text-align: left; }
     .providers-grid { grid-template-columns: 1fr; }
     .cash-summary-section { grid-template-columns: 1fr; }
+
+    .employee-footer { padding: 10px 14px !important; }
+    .employee-footer .footer-content { font-size: 11px; flex-direction: column; text-align: center; gap: 4px; }
 }
 @media (max-width: 480px) {
     .provider-card-footer-value { font-size: 16px; }
     .cash-summary-value { font-size: 15px; }
     .provider-card-icon { width: 38px; height: 38px; font-size: 15px; }
     .cash-summary-icon { width: 46px; height: 46px; font-size: 18px; }
+    .employee-footer { padding: 8px 12px !important; }
+    .employee-footer .footer-content { font-size: 10px; }
 }
 
 @media print {
     .branch-indicator, .page-header, .actions-card, .alert { display: none !important; }
-    .main-wrapper, .main-content { background: #FFF !important; padding: 0 !important; }
+    .main-wrapper, .main-content {
+        background: #FFF !important;
+        padding: 0 !important;
+        margin-left: 0 !important;
+        width: 100% !important;
+        padding-top: 0 !important;
+    }
     .main-card, .total-card, .section-header, .cash-summary-card, .provider-card-footer {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
     }
     .providers-grid { grid-template-columns: repeat(3, 1fr); }
+    .employee-footer { display: none !important; }
 }
 </style>
 
 <script>
-function deleteReport(id, number) {
-    if (confirm('Delete morning report "' + number + '"?\n\nThis action cannot be undone.')) {
-        window.location.href = 'delete.php?id=' + id;
-    }
-}
-
 document.addEventListener('DOMContentLoaded', function() {
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {
@@ -1074,6 +1152,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 400);
         }, 8000);
     }
+
+    function syncDarkMode() {
+        var html = document.documentElement;
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
+    }
+    syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
 });
 </script>
 

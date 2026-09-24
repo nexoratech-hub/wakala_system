@@ -4,748 +4,580 @@
 // WAKALA FINANCIAL SYSTEM - PRINT MORNING REPORT
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
 $user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
 
-// ============================================================
-// GET REPORT ID
-// ============================================================
-$report_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
-
-if ($report_id <= 0) {
-    die('Invalid report ID.');
+$id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+if ($id <= 0) {
+    $_SESSION['error_message'] = 'Invalid morning report.';
+    header('Location: index.php');
+    exit();
 }
 
 // ============================================================
-// GET REPORT DATA
+// FETCH REPORT (Admin sees all, Employee sees own branch)
 // ============================================================
-$stmt = $db->prepare("SELECT 
-                        mr.*,
-                        e.full_name as employee_name,
-                        e.employee_id as employee_code,
-                        b.branch_name as branch_name,
-                        b.branch_code,
-                        b.location as branch_location,
-                        b.phone as branch_phone,
-                        b.email as branch_email
-                      FROM morning_reports mr
-                      LEFT JOIN employees e ON mr.employee_id = e.id
-                      LEFT JOIN branches b ON mr.branch_id = b.id
-                      WHERE mr.id = ?");
-$stmt->execute([$report_id]);
+$sql = "
+    SELECT 
+        mr.*,
+        e.full_name AS employee_name,
+        e.employee_id AS employee_code,
+        b.branch_name AS branch_display_name,
+        b.branch_code AS branch_display_code,
+        b.location AS branch_location,
+        b.phone AS branch_phone,
+        b.email AS branch_email,
+        es.stock_number AS source_stock_number,
+        es.stock_date AS source_stock_date
+    FROM morning_reports mr
+    LEFT JOIN employees e ON mr.employee_id = e.id
+    LEFT JOIN branches b ON mr.branch_id = b.id
+    LEFT JOIN evening_stocks es ON mr.source_evening_stock_id = es.id
+    WHERE mr.id = ?
+";
+
+$params = [$id];
+
+// Employee can only see own branch
+if ($role !== 'admin' && $role !== 'super_admin') {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    $employee_branch = intval($emp['branch_id'] ?? 0);
+    
+    $sql .= " AND mr.branch_id = ?";
+    $params[] = $employee_branch;
+}
+
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
 $report = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$report) {
-    die('Report not found.');
+    $_SESSION['error_message'] = 'Morning report not found.';
+    $redirect = ($role === 'admin' || $role === 'super_admin') ? 'index.php' : 'index_employee.php';
+    header('Location: ' . $redirect);
+    exit();
 }
 
 // ============================================================
-// DECODE PROVIDER DATA
+// FETCH PROVIDERS
 // ============================================================
-$provider_data = json_decode($report['provider_data'], true);
-$providers = [];
-
-if (!empty($provider_data)) {
-    $placeholders = implode(',', array_fill(0, count($provider_data), '?'));
-    $stmt = $db->prepare("SELECT id, provider_code, provider_name, icon_class, color_code FROM providers WHERE id IN ($placeholders) ORDER BY display_order");
-    $stmt->execute(array_keys($provider_data));
-    $providers_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($providers_list as $p) {
-        $p['amount'] = $provider_data[$p['id']] ?? 0;
-        $providers[] = $p;
-    }
-}
-
-// ============================================================
-// CALCULATE TOTALS
-// ============================================================
-$total_float = $report['cumm_total'] ?? 0;
-$cash_balance = $report['cash_balance'] ?? 0;
-$grand_total = $total_float + $cash_balance;
+$stmt = $db->prepare("
+    SELECT 
+        mrp.*,
+        p.icon_class, p.color_code, p.provider_type
+    FROM morning_report_providers mrp
+    LEFT JOIN providers p ON mrp.provider_id = p.id
+    WHERE mrp.report_id = ?
+    ORDER BY p.display_order, mrp.provider_name
+");
+$stmt->execute([$id]);
+$providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
 // COMPANY SETTINGS
 // ============================================================
-$company_name = 'Wakala Financial System';
-$company_address = 'Dar es Salaam, Tanzania';
-$company_phone = '+255 700 000 000';
-$company_email = 'info@wakala.com';
+$company_name = 'Wakala System';
+$company_address = '';
+$company_phone = '';
+$company_email = '';
 
-// Try to get from settings
 try {
-    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('company_name', 'company_address', 'company_phone', 'company_email')");
+    $stmt = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('company_name', 'company_address', 'company_phone', 'company_email')");
+    $stmt->execute();
     $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-    if (isset($settings['company_name'])) $company_name = $settings['company_name'];
-    if (isset($settings['company_address'])) $company_address = $settings['company_address'];
-    if (isset($settings['company_phone'])) $company_phone = $settings['company_phone'];
-    if (isset($settings['company_email'])) $company_email = $settings['company_email'];
-} catch (Exception $e) {
-    // Use defaults
-}
+    $company_name = $settings['company_name'] ?? $company_name;
+    $company_address = $settings['company_address'] ?? '';
+    $company_phone = $settings['company_phone'] ?? '';
+    $company_email = $settings['company_email'] ?? '';
+} catch (Exception $e) {}
 
 // ============================================================
-// LOGO PATH
+// TOTALS
 // ============================================================
+$total_float = 0;
+foreach ($providers as $p) $total_float += floatval($p['float_balance']);
+$cash_balance = floatval($report['cash_balance']);
+$cumm_total = $total_float + $cash_balance;
+
 $logo_path = '../../assets/images/logo.PNG';
-$logo_base64 = '';
-
-// Check if logo exists and convert to base64 for print
-if (file_exists($logo_path)) {
-    $logo_data = file_get_contents($logo_path);
-    $logo_base64 = 'data:image/png;base64,' . base64_encode($logo_data);
-} else {
-    // Try alternative path
-    $logo_path_alt = '../assets/images/logo.PNG';
-    if (file_exists($logo_path_alt)) {
-        $logo_data = file_get_contents($logo_path_alt);
-        $logo_base64 = 'data:image/png;base64,' . base64_encode($logo_data);
-    }
+if (!file_exists($logo_path)) {
+    $logo_path = '../../assets/images/default-logo.png';
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Morning Report - <?php echo htmlspecialchars($report['report_number']); ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Print Styles */
-        @media print {
-            body { background: white !important; }
-            .no-print { display: none !important; }
-            .print-container { 
-                margin: 0 !important; 
-                padding: 20px !important;
-                box-shadow: none !important;
-                border: none !important;
-            }
-            .page-break { page-break-after: always; }
-            .report-header { background: #f8f9fa !important; }
-        }
-        
-        /* Main Styles */
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body {
-            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-            background: #f3f4f6;
-            padding: 20px;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            background: #FFF7ED;
             color: #1F2937;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
         }
-        
-        .print-container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        .print-wrapper { max-width: 850px; width: 100%; }
+        .action-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+        .btn-action {
+            padding: 12px 22px; border: none; border-radius: 10px;
+            font-weight: 700; font-size: 13px; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 8px;
+            text-decoration: none; transition: all 0.3s ease;
+        }
+        .btn-print {
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+            color: white;
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
+        }
+        .btn-print:hover { transform: translateY(-2px); }
+        .btn-back {
+            background: white; color: #374151;
+            border: 1.5px solid #D1D5DB;
+        }
+        .btn-back:hover { background: #F3F4F6; }
+
+        .print-paper {
+            background: #FFF;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(217, 119, 6, 0.15);
+            overflow: hidden;
+            border: 2px solid #FED7AA;
+            position: relative;
+        }
+
+        .print-header {
+            background: linear-gradient(135deg, #F59E0B 0%, #D97706 50%, #B45309 100%);
+            color: #FFF;
             padding: 30px 40px;
             position: relative;
-        }
-        
-        /* Watermark */
-        .watermark {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-30deg);
-            font-size: 80px;
-            font-weight: 900;
-            color: rgba(220, 38, 38, 0.05);
-            pointer-events: none;
-            z-index: 0;
-            white-space: nowrap;
-            letter-spacing: 10px;
-        }
-        
-        /* Report Header */
-        .report-header {
-            border-bottom: 3px solid #DC2626;
-            padding-bottom: 20px;
-            margin-bottom: 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .header-left {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        
-        .header-logo {
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
             overflow: hidden;
-            border: 3px solid #DC2626;
-            flex-shrink: 0;
-            background: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
         }
-        
-        .header-logo img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        
-        .header-logo .logo-placeholder {
-            width: 100%;
-            height: 100%;
-            background: #DC2626;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 32px;
-            font-weight: 800;
-        }
-        
-        .header-title h1 {
-            font-size: 22px;
-            font-weight: 700;
-            color: #1F2937;
-        }
-        
-        .header-title .report-number {
-            font-size: 14px;
-            color: #DC2626;
-            font-weight: 600;
-        }
-        
-        .header-title .report-date {
-            font-size: 13px;
-            color: #6B7280;
-        }
-        
-        .header-right {
-            text-align: right;
-        }
-        
-        .header-right .company-name {
-            font-size: 16px;
-            font-weight: 700;
-            color: #1F2937;
-        }
-        
-        .header-right .company-detail {
-            font-size: 12px;
-            color: #6B7280;
-            display: block;
-        }
-        
-        /* Report Meta */
-        .report-meta {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-            padding: 16px 20px;
-            background: #F9FAFB;
-            border-radius: 8px;
-            border: 1px solid #E5E7EB;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .meta-item {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .meta-label {
-            font-size: 11px;
-            text-transform: uppercase;
-            color: #6B7280;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-        
-        .meta-value {
-            font-size: 14px;
-            font-weight: 600;
-            color: #1F2937;
-        }
-        
-        /* Section Title */
-        .section-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: #1F2937;
-            margin-bottom: 16px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #E5E7EB;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .section-title i {
-            color: #DC2626;
-            margin-right: 8px;
-        }
-        
-        /* Providers Table */
-        .providers-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 24px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .providers-table thead {
-            background: #DC2626;
-        }
-        
-        .providers-table thead th {
-            padding: 10px 14px;
-            text-align: left;
-            color: white;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .providers-table thead th:last-child {
-            text-align: right;
-        }
-        
-        .providers-table tbody tr {
-            border-bottom: 1px solid #E5E7EB;
-        }
-        
-        .providers-table tbody tr:last-child {
-            border-bottom: none;
-        }
-        
-        .providers-table tbody td {
-            padding: 10px 14px;
-            font-size: 13px;
-            color: #1F2937;
-        }
-        
-        .providers-table tbody td:last-child {
-            text-align: right;
-            font-weight: 600;
-        }
-        
-        .provider-icon {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
+        .print-header::before {
+            content: '';
+            position: absolute;
+            top: -50%; right: -10%;
+            width: 300px; height: 300px;
+            background: rgba(255,255,255,0.1);
             border-radius: 50%;
-            color: white;
-            font-size: 12px;
-            margin-right: 8px;
         }
-        
-        .provider-name-cell {
-            display: flex;
-            align-items: center;
-        }
-        
-        .provider-code-badge {
-            font-size: 10px;
-            color: #6B7280;
-            background: #F3F4F6;
-            padding: 1px 8px;
-            border-radius: 10px;
-            margin-left: 8px;
-        }
-        
-        /* Totals */
-        .totals-section {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 16px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 2px solid #E5E7EB;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .total-box {
-            padding: 12px 16px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        
-        .total-box .total-label {
-            font-size: 12px;
-            text-transform: uppercase;
-            color: #6B7280;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-        
-        .total-box .total-value {
-            font-size: 20px;
-            font-weight: 800;
-        }
-        
-        .total-box.total-float {
-            background: #DBEAFE;
-        }
-        
-        .total-box.total-float .total-value {
-            color: #1D4ED8;
-        }
-        
-        .total-box.total-cash {
-            background: #D1FAE5;
-        }
-        
-        .total-box.total-cash .total-value {
-            color: #065F46;
-        }
-        
-        .total-box.total-grand {
-            background: #FEF3C7;
-        }
-        
-        .total-box.total-grand .total-value {
-            color: #D97706;
-        }
-        
-        /* Footer */
-        .report-footer {
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 2px solid #E5E7EB;
-            display: flex;
+        .header-content {
+            position: relative; z-index: 1;
+            display: flex; align-items: center;
             justify-content: space-between;
-            align-items: center;
-            font-size: 12px;
-            color: #6B7280;
-            position: relative;
-            z-index: 1;
+            gap: 24px; flex-wrap: wrap;
         }
-        
-        .report-footer .signatures {
-            display: flex;
-            gap: 40px;
+        .header-left { display: flex; align-items: center; gap: 16px; flex: 1; min-width: 0; }
+        .logo-wrapper {
+            width: 80px; height: 80px;
+            background: #FFF; border-radius: 50%;
+            padding: 6px; flex-shrink: 0;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+            border: 3px solid rgba(255,255,255,0.5);
+            display: flex; align-items: center; justify-content: center;
         }
-        
-        .report-footer .signature-line {
+        .logo-wrapper img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; }
+        .company-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .company-name { font-size: 22px; font-weight: 900; }
+        .company-detail { font-size: 12px; color: rgba(255,255,255,0.9); display: flex; align-items: center; gap: 6px; }
+        .receipt-label { text-align: right; flex-shrink: 0; }
+        .receipt-label-title { font-size: 20px; font-weight: 900; letter-spacing: 2.5px; text-transform: uppercase; }
+        .receipt-label-sub { font-size: 11px; color: rgba(255,255,255,0.85); letter-spacing: 1px; margin-top: 4px; font-weight: 600; }
+        .receipt-status {
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-top: 12px; padding: 8px 20px;
+            background: rgba(255,255,255,0.25); color: #FFF;
+            border-radius: 20px; font-size: 11px; font-weight: 900;
+            letter-spacing: 1.5px; text-transform: uppercase;
+            border: 2px solid rgba(255,255,255,0.4);
+        }
+
+        .amount-display {
+            padding: 32px 40px;
             text-align: center;
+            background: linear-gradient(135deg, #FFF7ED 0%, #FED7AA 100%);
+            border-bottom: 2px dashed #F59E0B;
         }
-        
-        .report-footer .signature-line .line {
-            width: 120px;
-            border-bottom: 1px solid #1F2937;
-            margin-bottom: 4px;
+        .amount-label { font-size: 11px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 2.5px; margin-bottom: 10px; }
+        .amount-value { font-size: 44px; font-weight: 900; color: #78350F; font-family: 'Courier New', monospace; letter-spacing: -1.5px; line-height: 1.1; word-break: break-all; }
+        .amount-sub { font-size: 13px; color: #B45309; font-weight: 600; margin-top: 8px; }
+
+        .print-body { padding: 32px 40px; }
+        .info-section { margin-bottom: 24px; }
+        .info-section-title {
+            font-size: 11px; font-weight: 800; color: #B45309;
+            text-transform: uppercase; letter-spacing: 1.5px;
+            padding-bottom: 8px; border-bottom: 2px solid #FED7AA;
+            margin-bottom: 14px;
+            display: flex; align-items: center; gap: 8px;
         }
-        
-        .report-footer .signature-line .label {
-            font-size: 11px;
-            color: #6B7280;
+        .info-section-title i {
+            color: #D97706; font-size: 14px;
+            background: #FEF3C7; width: 26px; height: 26px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
         }
-        
-        /* Print Button */
-        .print-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            background: #DC2626;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-family: 'Inter', sans-serif;
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+        .info-item {
+            display: flex; flex-direction: column; gap: 4px;
+            padding: 11px 14px; background: #F9FAFB;
+            border-radius: 10px; border: 1.5px solid #E5E7EB;
         }
-        
-        .print-btn:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220,38,38,0.3);
+        .info-label { font-size: 10px; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.8px; }
+        .info-value { font-size: 14px; font-weight: 700; color: #1F2937; word-break: break-word; }
+        .info-value.mono { font-family: 'Courier New', monospace; color: #B45309; }
+
+        .provider-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .provider-table thead tr { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; }
+        .provider-table thead th {
+            padding: 12px 14px; text-align: left;
+            font-weight: 700; font-size: 10px;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            white-space: nowrap;
         }
-        
-        .print-btn i {
-            font-size: 16px;
+        .provider-table thead th.text-right { text-align: right; }
+        .provider-table tbody tr { border-bottom: 1px solid #E5E7EB; }
+        .provider-table tbody tr:nth-child(even) { background: #FFFBEB; }
+        .provider-table tbody td { padding: 12px 14px; color: #1F2937; vertical-align: middle; }
+        .provider-table tbody td.text-right { text-align: right; }
+        .provider-table tfoot tr { background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-top: 2px solid #F59E0B; }
+        .provider-table tfoot td { padding: 14px; font-weight: 900; color: #78350F; }
+        .provider-table tfoot td.text-right { text-align: right; }
+
+        .provider-cell { display: flex; align-items: center; gap: 10px; }
+        .provider-icon {
+            width: 32px; height: 32px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: #FFF; font-size: 12px; flex-shrink: 0;
         }
-        
-        .btn-back {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            background: #6B7280;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            transition: all 0.3s ease;
-            font-family: 'Inter', sans-serif;
+        .code-badge {
+            display: inline-block; padding: 3px 10px;
+            background: #FEF3C7; color: #B45309;
+            border-radius: 8px; font-size: 10px; font-weight: 700;
+            font-family: 'Courier New', monospace;
         }
-        
-        .btn-back:hover {
-            background: #4B5563;
+        .amount-cell { font-family: 'Courier New', monospace; font-weight: 800; color: #B45309; }
+
+        .financial-summary {
+            background: linear-gradient(135deg, #FFF7ED, #FED7AA);
+            border: 2px solid #F59E0B;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-top: 24px;
         }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .print-container {
-                padding: 20px;
+        .financial-row {
+            display: flex; justify-content: space-between;
+            align-items: center; padding: 12px 0;
+            border-bottom: 1px solid #FDBA74;
+            font-size: 14px; color: #78350F; font-weight: 600;
+            gap: 12px; flex-wrap: wrap;
+        }
+        .financial-row:last-child { border-bottom: none; }
+        .financial-label { display: flex; align-items: center; gap: 8px; }
+        .financial-label i { color: #D97706; }
+        .financial-value { font-family: 'Courier New', monospace; font-weight: 800; color: #D97706; font-size: 16px; }
+        .financial-divider { border-top: 2px dashed #D97706; margin: 8px 0; }
+        .financial-row-total { font-size: 18px !important; padding-top: 12px; }
+        .financial-row-total .financial-value { font-size: 24px; color: #78350F; }
+
+        .signature-section {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 40px; margin-top: 40px; padding-top: 24px;
+            border-top: 2px dashed #FDBA74;
+        }
+        .signature-box { text-align: center; }
+        .signature-line { border-bottom: 2px solid #1F2937; height: 50px; margin-bottom: 10px; }
+        .signature-label { font-size: 11px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 1.2px; }
+        .signature-name { font-size: 12px; color: #6B7280; margin-top: 6px; font-weight: 600; }
+
+        .print-footer {
+            background: linear-gradient(135deg, #78350F, #B45309);
+            color: #FFF; padding: 20px 40px;
+            font-size: 11px; line-height: 1.6;
+        }
+        .footer-content {
+            display: flex; justify-content: space-between;
+            align-items: center; flex-wrap: wrap; gap: 14px;
+        }
+        .footer-info { display: flex; align-items: center; gap: 6px; color: rgba(255,255,255,0.85); font-weight: 600; }
+        .footer-info i { color: #FCD34D; font-size: 12px; }
+
+        .watermark {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%) rotate(-30deg);
+            font-size: 120px; font-weight: 900;
+            color: rgba(245, 158, 11, 0.04);
+            pointer-events: none; user-select: none;
+            z-index: 0; letter-spacing: 10px;
+        }
+
+        @media print {
+            @page { size: A4; margin: 8mm; }
+            body { background: #FFF !important; padding: 0; display: block; }
+            .action-bar { display: none !important; }
+            .print-wrapper { max-width: 100%; }
+            .print-paper { box-shadow: none; border-radius: 0; }
+            .print-header, .amount-display, .financial-summary, .print-footer,
+            .provider-table thead tr, .provider-table tfoot tr {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
             }
-            
-            .report-header {
-                flex-direction: column;
-                gap: 12px;
-                align-items: flex-start;
-            }
-            
-            .header-right {
-                text-align: left;
-                width: 100%;
-            }
-            
-            .report-meta {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
-            .totals-section {
-                grid-template-columns: 1fr;
-            }
-            
-            .report-footer {
-                flex-direction: column;
-                gap: 16px;
-            }
-            
-            .report-footer .signatures {
-                flex-direction: column;
-                gap: 16px;
-                width: 100%;
-            }
-            
-            .report-footer .signature-line .line {
-                width: 100%;
-            }
+        }
+
+        @media (max-width: 640px) {
+            body { padding: 10px; }
+            .print-header { padding: 24px 20px; }
+            .print-body { padding: 20px 18px; }
+            .amount-display { padding: 26px 20px; }
+            .amount-value { font-size: 32px; }
+            .print-footer { padding: 16px 20px; }
+            .header-content { flex-direction: column; align-items: flex-start; }
+            .receipt-label { text-align: left; }
+            .info-grid { grid-template-columns: 1fr; }
+            .signature-section { grid-template-columns: 1fr; gap: 30px; }
+            .action-bar { flex-direction: column; }
+            .btn-action { width: 100%; justify-content: center; }
+            .financial-row { flex-direction: column; align-items: flex-start; gap: 4px; }
         }
     </style>
 </head>
 <body>
 
-<div class="print-container">
-    <!-- Watermark -->
-    <div class="watermark">MORNING REPORT</div>
-    
-    <!-- Report Header -->
-    <div class="report-header">
-        <div class="header-left">
-            <div class="header-logo">
-                <?php if (!empty($logo_base64)): ?>
-                    <img src="<?php echo $logo_base64; ?>" alt="Company Logo">
-                <?php else: ?>
-                    <div class="logo-placeholder">
-                        <i class="fas fa-sun"></i>
+<div class="print-wrapper">
+    <div class="action-bar">
+        <a href="view.php?id=<?php echo $id; ?>" class="btn-action btn-back">
+            <i class="fas fa-arrow-left"></i> Back to Report
+        </a>
+        <button onclick="window.print()" class="btn-action btn-print">
+            <i class="fas fa-print"></i> Print This Report
+        </button>
+    </div>
+
+    <div class="print-paper">
+        <div class="watermark">MORNING</div>
+
+        <!-- HEADER -->
+        <div class="print-header">
+            <div class="header-content">
+                <div class="header-left">
+                    <div class="logo-wrapper">
+                        <img src="<?php echo htmlspecialchars($logo_path); ?>" alt="Logo"
+                             onerror="this.style.display='none'; this.parentElement.innerHTML='<i class=\'fas fa-building\' style=\'font-size:36px;color:#D97706;\'></i>';">
                     </div>
-                <?php endif; ?>
+                    <div class="company-info">
+                        <div class="company-name"><?php echo htmlspecialchars($company_name); ?></div>
+                        <?php if ($company_address): ?>
+                        <div class="company-detail"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($company_address); ?></div>
+                        <?php endif; ?>
+                        <?php if ($company_phone): ?>
+                        <div class="company-detail"><i class="fas fa-phone"></i> <?php echo htmlspecialchars($company_phone); ?></div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="receipt-label">
+                    <div class="receipt-label-title">MORNING REPORT</div>
+                    <div class="receipt-label-sub">Daily Opening Balance</div>
+                    <div class="receipt-status">
+                        <i class="fas fa-check-circle"></i>
+                        <?php echo intval($report['is_locked']) === 1 ? 'Locked' : 'Open'; ?>
+                    </div>
+                </div>
             </div>
-            <div class="header-title">
-                <h1>Morning Report</h1>
-                <span class="report-number"><?php echo htmlspecialchars($report['report_number']); ?></span>
-                <span class="report-date">| <?php echo date('d M Y, H:i', strtotime($report['created_at'] ?? $report['submitted_at'])); ?></span>
-            </div>
         </div>
-        <div class="header-right">
-            <div class="company-name"><?php echo htmlspecialchars($company_name); ?></div>
-            <span class="company-detail"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($company_address); ?></span>
-            <span class="company-detail"><i class="fas fa-phone"></i> <?php echo htmlspecialchars($company_phone); ?></span>
-            <span class="company-detail"><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($company_email); ?></span>
-        </div>
-    </div>
-    
-    <!-- Report Meta -->
-    <div class="report-meta">
-        <div class="meta-item">
-            <span class="meta-label">Branch</span>
-            <span class="meta-value">
-                <i class="fas fa-store-alt" style="color:#DC2626; font-size:12px;"></i>
-                <?php echo htmlspecialchars($report['branch_name'] ?? $report['branch'] ?? 'Main'); ?>
-                <?php if (!empty($report['branch_code'])): ?>
-                    <span style="font-size:12px; color:#6B7280; font-weight:400;">(<?php echo htmlspecialchars($report['branch_code']); ?>)</span>
-                <?php endif; ?>
-            </span>
-        </div>
-        <div class="meta-item">
-            <span class="meta-label">Report Date</span>
-            <span class="meta-value">
-                <i class="fas fa-calendar-alt" style="color:#DC2626; font-size:12px;"></i>
+
+        <!-- REPORT NUMBER -->
+        <div class="amount-display">
+            <div class="amount-label">Report Number</div>
+            <div class="amount-value"><?php echo htmlspecialchars($report['report_number']); ?></div>
+            <div class="amount-sub">
+                <i class="fas fa-calendar"></i>
                 <?php echo date('d M Y', strtotime($report['report_date'])); ?>
-            </span>
+            </div>
         </div>
-        <div class="meta-item">
-            <span class="meta-label">Prepared By</span>
-            <span class="meta-value">
-                <i class="fas fa-user" style="color:#DC2626; font-size:12px;"></i>
-                <?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?>
-            </span>
-        </div>
-        <div class="meta-item">
-            <span class="meta-label">Employee ID</span>
-            <span class="meta-value">
-                <i class="fas fa-id-badge" style="color:#DC2626; font-size:12px;"></i>
-                <?php echo htmlspecialchars($report['employee_code'] ?? 'N/A'); ?>
-            </span>
-        </div>
-    </div>
-    
-    <!-- Providers Table -->
-    <h4 class="section-title"><i class="fas fa-university"></i> Provider Balances</h4>
-    
-    <table class="providers-table">
-        <thead>
-            <tr>
-                <th>#</th>
-                <th>Provider</th>
-                <th style="text-align:right;">Amount (TSh)</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php if (!empty($providers)): ?>
-                <?php $counter = 1; ?>
-                <?php foreach ($providers as $provider): ?>
-                    <tr>
-                        <td style="width:40px; color:#6B7280;"><?php echo $counter++; ?></td>
-                        <td>
-                            <div class="provider-name-cell">
-                                <span class="provider-icon" style="background: <?php echo $provider['color_code'] ?? '#0B5ED7'; ?>;">
-                                    <i class="<?php echo $provider['icon_class'] ?? 'fas fa-university'; ?>"></i>
-                                </span>
-                                <?php echo htmlspecialchars($provider['provider_name']); ?>
-                                <span class="provider-code-badge"><?php echo htmlspecialchars($provider['provider_code']); ?></span>
-                            </div>
-                        </td>
-                        <td style="text-align:right; font-weight:600;">
-                            <?php echo number_format($provider['amount'], 2); ?>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <tr>
-                    <td colspan="3" style="text-align:center; color:#6B7280; padding:20px;">
-                        <i class="fas fa-info-circle"></i> No provider data available
-                    </td>
-                </tr>
+
+        <!-- BODY -->
+        <div class="print-body">
+
+            <!-- REPORT INFO -->
+            <div class="info-section">
+                <div class="info-section-title">
+                    <i class="fas fa-info-circle"></i>
+                    Report Information
+                </div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Branch</span>
+                        <span class="info-value"><?php echo htmlspecialchars($report['branch_display_name'] ?? 'N/A'); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Branch Code</span>
+                        <span class="info-value mono"><?php echo htmlspecialchars($report['branch_display_code'] ?? '-'); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Report Date</span>
+                        <span class="info-value"><?php echo date('d M Y', strtotime($report['report_date'])); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Submitted At</span>
+                        <span class="info-value"><?php echo date('d M Y H:i:s', strtotime($report['submitted_at'])); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Prepared By</span>
+                        <span class="info-value"><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Employee Code</span>
+                        <span class="info-value mono"><?php echo htmlspecialchars($report['employee_code'] ?? '-'); ?></span>
+                    </div>
+                    <?php if (!empty($report['source_stock_number'])): ?>
+                    <div class="info-item">
+                        <span class="info-label">Source Stock</span>
+                        <span class="info-value mono"><?php echo htmlspecialchars($report['source_stock_number']); ?></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Source Stock Date</span>
+                        <span class="info-value"><?php echo date('d M Y', strtotime($report['source_stock_date'])); ?></span>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- PROVIDERS -->
+            <div class="info-section">
+                <div class="info-section-title">
+                    <i class="fas fa-university"></i>
+                    Provider Floats
+                </div>
+                <table class="provider-table">
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">#</th>
+                            <th>Provider</th>
+                            <th>Code</th>
+                            <th>Type</th>
+                            <th class="text-right">Float Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php $i = 1; foreach ($providers as $p):
+                            $color = $p['color_code'] ?? '#0B5ED7';
+                            $icon = $p['icon_class'] ?? 'fas fa-university';
+                        ?>
+                            <tr>
+                                <td><?php echo $i++; ?></td>
+                                <td>
+                                    <div class="provider-cell">
+                                        <div class="provider-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
+                                            <i class="<?php echo htmlspecialchars($icon); ?>"></i>
+                                        </div>
+                                        <span><?php echo htmlspecialchars($p['provider_name']); ?></span>
+                                    </div>
+                                </td>
+                                <td><span class="code-badge"><?php echo htmlspecialchars($p['provider_code']); ?></span></td>
+                                <td><?php echo ucfirst(str_replace('_', ' ', $p['provider_type'] ?? 'bank')); ?></td>
+                                <td class="text-right">
+                                    <span class="amount-cell"><?php echo formatCurrency($p['float_balance']); ?></span>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="4" class="text-right">TOTAL FLOAT:</td>
+                            <td class="text-right"><?php echo formatCurrency($total_float); ?></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+
+            <!-- FINANCIAL SUMMARY -->
+            <div class="financial-summary">
+                <div class="financial-row">
+                    <span class="financial-label"><i class="fas fa-coins"></i> Total Float</span>
+                    <span class="financial-value"><?php echo formatCurrency($total_float); ?></span>
+                </div>
+                <div class="financial-row">
+                    <span class="financial-label"><i class="fas fa-plus"></i> Cash Balance</span>
+                    <span class="financial-value"><?php echo formatCurrency($cash_balance); ?></span>
+                </div>
+                <div class="financial-divider"></div>
+                <div class="financial-row financial-row-total">
+                    <span class="financial-label"><i class="fas fa-equals"></i> CUMM. TOTAL</span>
+                    <span class="financial-value"><?php echo formatCurrency($cumm_total); ?></span>
+                </div>
+            </div>
+
+            <!-- NOTES -->
+            <?php if (!empty($report['notes'])): ?>
+            <div class="info-section" style="margin-top: 24px;">
+                <div class="info-section-title">
+                    <i class="fas fa-sticky-note"></i>
+                    Notes
+                </div>
+                <div class="info-item">
+                    <span class="info-value" style="font-weight: 500; line-height: 1.6;">
+                        <?php echo nl2br(htmlspecialchars($report['notes'])); ?>
+                    </span>
+                </div>
+            </div>
             <?php endif; ?>
-        </tbody>
-    </table>
-    
-    <!-- Totals -->
-    <div class="totals-section">
-        <div class="total-box total-float">
-            <div class="total-label">Total Float</div>
-            <div class="total-value"><?php echo number_format($total_float, 2); ?></div>
-        </div>
-        <div class="total-box total-cash">
-            <div class="total-label">Cash Balance</div>
-            <div class="total-value"><?php echo number_format($cash_balance, 2); ?></div>
-        </div>
-        <div class="total-box total-grand">
-            <div class="total-label">Grand Total</div>
-            <div class="total-value"><?php echo number_format($grand_total, 2); ?></div>
-        </div>
-    </div>
-    
-    <!-- Notes -->
-    <?php if (!empty($report['notes'])): ?>
-        <div style="margin-top: 16px; padding: 12px 16px; background: #F9FAFB; border-radius: 8px; border-left: 4px solid #DC2626; position:relative; z-index:1;">
-            <span style="font-size:12px; color:#6B7280; font-weight:600; text-transform:uppercase;">Notes:</span>
-            <p style="margin-top:4px; font-size:13px; color:#1F2937;"><?php echo nl2br(htmlspecialchars($report['notes'])); ?></p>
-        </div>
-    <?php endif; ?>
-    
-    <!-- Footer -->
-    <div class="report-footer">
-        <div>
-            <span>Generated on: <?php echo date('d M Y, H:i:s'); ?></span>
-            <span style="margin-left:16px;">| Version 2.0.0</span>
-        </div>
-        <div class="signatures">
-            <div class="signature-line">
-                <div class="line"></div>
-                <div class="label">Prepared By</div>
-                <div style="font-weight:500; color:#1F2937;"><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></div>
+
+            <!-- SIGNATURES -->
+            <div class="signature-section">
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Prepared By</div>
+                    <div class="signature-name"><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">Approved By</div>
+                    <div class="signature-name">_____________________</div>
+                </div>
             </div>
-            <div class="signature-line">
-                <div class="line"></div>
-                <div class="label">Approved By</div>
-                <div style="font-weight:500; color:#1F2937;">_________________</div>
-            </div>
-            <div class="signature-line">
-                <div class="line"></div>
-                <div class="label">Date</div>
-                <div style="font-weight:500; color:#1F2937;"><?php echo date('d M Y'); ?></div>
+
+        </div>
+
+        <!-- FOOTER -->
+        <div class="print-footer">
+            <div class="footer-content">
+                <div class="footer-info">
+                    <i class="fas fa-clock"></i>
+                    <span>Generated: <?php echo date('d M Y H:i:s'); ?></span>
+                </div>
+                <div class="footer-info">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Official Morning Report</span>
+                </div>
+                <div class="footer-info">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>Verified</span>
+                </div>
             </div>
         </div>
+
     </div>
 </div>
-
-<!-- Actions -->
-<div style="max-width:1000px; margin:20px auto; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;" class="no-print">
-    <button onclick="window.print()" class="print-btn">
-        <i class="fas fa-print"></i> Print / PDF
-    </button>
-    <a href="view.php?id=<?php echo $report_id; ?>" class="btn-back">
-        <i class="fas fa-eye"></i> View Report
-    </a>
-    <a href="index.php" class="btn-back">
-        <i class="fas fa-arrow-left"></i> Back to List
-    </a>
-</div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Auto-print if print parameter is set
-    if (window.location.search.includes('print=1')) {
-        setTimeout(function() {
-            window.print();
-        }, 500);
-    }
-});
-</script>
 
 </body>
 </html>

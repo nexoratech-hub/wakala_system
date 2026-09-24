@@ -1,13 +1,16 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/add.php
-// WAKALA FINANCIAL SYSTEM - ADD MORNING REPORT (ADMIN) - FINAL
+// FILE: modules/morning_report/add_employee.php
+// WAKALA FINANCIAL SYSTEM - ADD MORNING REPORT (EMPLOYEE) - FINAL
 // ✅ GREEN THEME
 // ✅ AUTO-FILL ONLY - Readonly
 // ✅ Cash JUU, Providers CHINI (3 kwa row)
 // ✅ Table mbili: morning_reports + daily_reports
 // ✅ FIXED: SQL columns + float computation
 // ================================================================
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
@@ -17,37 +20,49 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-if (!isset($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
+$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
-$role    = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin') {
-    header('Location: ../dashboard/employee.php');
+if ($role !== 'employee') {
+    header('Location: add.php');
     exit();
 }
 
 // ============================================================
-// GET BRANCH
+// GET EMPLOYEE DATA
 // ============================================================
-$branch_id = isset($_GET['branch_id']) ? intval($_GET['branch_id']) : 0;
+$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$employee = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if ($branch_id <= 0) {
-    $_SESSION['error_message'] = 'Please select a branch.';
-    header('Location: index.php');
+if (!$employee) {
+    header('Location: ../../login.php');
     exit();
 }
 
+$employee_branch_id = intval($employee['branch_id'] ?? 0);
+
+if ($employee_branch_id <= 0) {
+    $_SESSION['error_message'] = 'Your account is not assigned to any branch.';
+    header('Location: index_employee.php');
+    exit();
+}
+
+// ============================================================
+// GET BRANCH INFO
+// ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
-$stmt->execute([$branch_id]);
+$stmt->execute([$employee_branch_id]);
 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$branch) {
     $_SESSION['error_message'] = 'Branch not found.';
-    header('Location: index.php');
+    header('Location: index_employee.php');
     exit();
 }
 
@@ -72,13 +87,13 @@ $stmt = $db->prepare("
     WHERE branch_id = ? AND report_date = ?
     LIMIT 1
 ");
-$stmt->execute([$branch_id, $target_date]);
+$stmt->execute([$employee_branch_id, $target_date]);
 $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if ($existing) {
     $_SESSION['error_message'] = 'Morning report for ' . date('d M Y', strtotime($target_date)) . 
                                   ' already exists (' . $existing['report_number'] . ').';
-    header('Location: view.php?id=' . $existing['id']);
+    header('Location: view_employee.php?id=' . $existing['id']);
     exit();
 }
 
@@ -101,7 +116,7 @@ $stmt = $db->prepare("
     ORDER BY es.stock_date DESC, es.id DESC
     LIMIT 1
 ");
-$stmt->execute([$branch_id, $target_date]);
+$stmt->execute([$employee_branch_id, $target_date]);
 $evening_stock = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if ($evening_stock) {
@@ -128,7 +143,7 @@ if ($evening_stock) {
                     INNER JOIN branch_providers bp ON bp.provider_id = p.id
                     WHERE p.id = ? AND bp.branch_id = ?
                 ");
-                $stmt2->execute([intval($pid), $branch_id]);
+                $stmt2->execute([intval($pid), $employee_branch_id]);
                 $pinfo = $stmt2->fetch(PDO::FETCH_ASSOC);
                 if ($pinfo) {
                     $esp[] = [
@@ -185,7 +200,7 @@ if (!$has_data) {
         ORDER BY transaction_date DESC, id DESC
         LIMIT 1
     ");
-    $stmt->execute([$branch_id]);
+    $stmt->execute([$employee_branch_id]);
     $capital_cash_row = $stmt->fetch(PDO::FETCH_ASSOC);
     $capital_cash = $capital_cash_row ? floatval(str_replace(',', '', $capital_cash_row['amount'])) : 0;
 
@@ -205,7 +220,7 @@ if (!$has_data) {
           )
         ORDER BY p.display_order, p.provider_name
     ");
-    $stmt->execute([$branch_id, $branch_id]);
+    $stmt->execute([$employee_branch_id, $employee_branch_id]);
     $capital_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     if (!empty($capital_providers) || $capital_cash > 0) {
@@ -276,7 +291,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $db->beginTransaction();
 
-        $post_branch_id    = intval($_POST['branch_id'] ?? 0);
         $post_date         = $_POST['report_date'] ?? date('Y-m-d');
         $post_source_type  = $_POST['source_type'] ?? 'manual';
         $post_source_id    = intval($_POST['source_evening_stock_id'] ?? 0);
@@ -284,11 +298,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $post_notes        = trim($_POST['notes'] ?? '');
         $post_providers    = $_POST['providers'] ?? [];
 
-        if ($post_branch_id <= 0) throw new Exception('Invalid branch.');
         if ($post_cash < 0) throw new Exception('Cash balance cannot be negative.');
 
         $stmt = $db->prepare("SELECT id FROM morning_reports WHERE branch_id = ? AND report_date = ? LIMIT 1");
-        $stmt->execute([$post_branch_id, $post_date]);
+        $stmt->execute([$employee_branch_id, $post_date]);
         if ($stmt->fetch()) {
             throw new Exception('Morning report for this date already exists.');
         }
@@ -318,7 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)
         ");
         $stmt->execute([
-            $report_number, $user_id, $branch_name, $post_branch_id, $post_date,
+            $report_number, $user_id, $branch_name, $employee_branch_id, $post_date,
             json_encode($post_providers), $post_cash, $cumm_total,
             $post_notes, $db_source_type, $db_source_id
         ]);
@@ -339,7 +352,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             INNER JOIN branch_providers bp ON bp.provider_id = p.id
             WHERE bp.branch_id = ? AND bp.is_active = 1
         ");
-        $stmt2->execute([$post_branch_id]);
+        $stmt2->execute([$employee_branch_id]);
         while ($row = $stmt2->fetch(PDO::FETCH_ASSOC)) {
             $provider_map[intval($row['id'])] = $row;
         }
@@ -369,7 +382,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         ");
 
         $stmt_dr->execute([
-            $daily_report_number, $user_id, $branch_name, $post_branch_id, $post_date,
+            $daily_report_number, $user_id, $branch_name, $employee_branch_id, $post_date,
             $report_id, $post_cash, $cumm_total, $total_float, $cumm_total, $cumm_total, $post_notes
         ]);
 
@@ -400,14 +413,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         logActivity(
             $user_id, 'Add Morning Report', 'Morning Report', $report_id, '',
-            'Created ' . $report_number . ' (' . $post_source_type . ') for ' . $branch_name . 
+            'Employee ' . $employee['full_name'] . ' added ' . $report_number . ' for ' . $branch_name . 
             ' - Float: ' . number_format($total_float) . ', Cash: ' . number_format($post_cash)
         );
 
         $db->commit();
 
         $_SESSION['success_message'] = 'Morning Report ' . $report_number . ' created successfully!';
-        header('Location: view.php?id=' . $report_id);
+        header('Location: index_employee.php');
         exit();
 
     } catch (Exception $e) {
@@ -416,9 +429,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+$success_message_session = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message_session = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <div class="main-wrapper">
@@ -430,7 +449,7 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-store-alt"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">Branch</span>
+                    <span class="branch-indicator-label">My Branch</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -444,9 +463,9 @@ include_once '../../includes/admin_topbar.php';
                 <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn-back-card">
+                <a href="index_employee.php" class="btn-back-card">
                     <i class="fas fa-arrow-left"></i>
-                    <span>Back to Reports</span>
+                    <span>Back</span>
                 </a>
             </div>
         </div>
@@ -457,6 +476,14 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
+        <?php if (!empty($success_message_session)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo htmlspecialchars($success_message_session); ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i>
@@ -472,19 +499,13 @@ include_once '../../includes/admin_topbar.php';
                 </div>
                 <h3 class="waiting-title">Waiting for Opening Capital</h3>
                 <p class="waiting-text">
-                    No Evening Stock data found for this branch. 
-                    Please add <strong>Opening Capital</strong> from Capital Management first, 
+                    No Evening Stock data found for your branch. 
+                    Please ask admin to add <strong>Opening Capital</strong> from Capital Management first, 
                     or submit an <strong>Evening Stock</strong> for a previous date.
                 </p>
                 <div class="waiting-actions">
-                    <a href="../capital_management/index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-primary">
-                        <i class="fas fa-coins"></i> Go to Capital Management
-                    </a>
-                    <a href="../evening_stock/index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-secondary">
-                        <i class="fas fa-moon"></i> Go to Evening Stock
-                    </a>
-                    <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-secondary">
-                        <i class="fas fa-arrow-left"></i> Back
+                    <a href="index_employee.php" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Back to Reports
                     </a>
                 </div>
             </div>
@@ -518,7 +539,6 @@ include_once '../../includes/admin_topbar.php';
 
             <form method="POST" action="" class="add-form" id="addForm" onsubmit="return validateAdd()">
                 <input type="hidden" name="action" value="add_morning_report">
-                <input type="hidden" name="branch_id" value="<?php echo $branch_id; ?>">
                 <input type="hidden" name="source_type" value="<?php echo htmlspecialchars($source_type); ?>">
                 <input type="hidden" name="source_evening_stock_id" value="<?php echo ($source_type === 'evening_stock' && $source_data) ? intval($source_data['id']) : 0; ?>">
 
@@ -587,7 +607,7 @@ include_once '../../includes/admin_topbar.php';
                         <?php else: ?>
                             <div class="empty-providers">
                                 <i class="fas fa-info-circle"></i>
-                                <p>No providers found for this branch.</p>
+                                <p>No providers found for your branch.</p>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -629,7 +649,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
 
                 <div class="actions-bottom">
-                    <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-secondary">
+                    <a href="index_employee.php" class="btn btn-secondary">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                     <button type="submit" class="btn btn-primary" id="submitBtn">
@@ -642,7 +662,7 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
@@ -676,8 +696,30 @@ html.dark-mode {
 }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
-.main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
+.main-wrapper {
+    overflow-x: hidden !important;
+    max-width: 100% !important;
+    margin-left: 240px;
+    width: calc(100% - 240px);
+    padding-top: 56px;
+    min-height: 100vh;
+    background: var(--bg-body);
+    transition: margin-left 0.3s ease, width 0.3s ease;
+    position: relative;
+}
+.main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 20px 24px !important; }
+@media (max-width: 1024px) {
+    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; }
+    .main-content { padding: 16px 18px !important; }
+}
+@media (max-width: 768px) {
+    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
+    .main-content { padding: 16px 14px !important; width: 100%; }
+}
+@media (max-width: 480px) {
+    .main-wrapper { padding-top: 44px; width: 100%; }
+    .main-content { padding: 12px 10px !important; width: 100%; }
+}
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
@@ -729,24 +771,27 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 .page-header {
     display: flex; justify-content: space-between;
-    align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;
+    align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
 }
-.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
-.page-header .header-left h2 i { margin-right: 8px; }
+.page-header .header-left h2 { font-size: 18px; font-weight: 700; margin: 0; }
+.page-header .header-left h2 i { margin-right: 6px; }
 
 .alert {
-    padding: 14px 18px; border-radius: 10px;
-    margin-bottom: 16px; display: flex;
-    align-items: center; gap: 12px;
-    box-shadow: 0 2px 8px var(--shadow-color);
+    padding: 12px 16px; border-radius: 8px;
+    margin-bottom: 14px; display: flex;
+    align-items: center; gap: 10px;
+    font-weight: 500; font-size: 13px;
 }
+.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
 html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
-.alert i { font-size: 20px; flex-shrink: 0; }
-.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert i { font-size: 18px; flex-shrink: 0; }
+.alert span { flex: 1; }
 .alert-close {
-    background: transparent; border: none; font-size: 22px;
-    color: inherit; cursor: pointer; opacity: 0.6;
+    background: transparent; border: none;
+    font-size: 20px; color: inherit;
+    cursor: pointer; padding: 0 4px; opacity: 0.6;
 }
 
 .waiting-card {
@@ -805,9 +850,9 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
 .source-evening { border-color: #7C3AED; }
 .source-capital { border-color: #F59E0B; }
 .source-info-header {
-    padding: 12px 20px;
+    padding: 11px 18px;
     display: flex; align-items: center; gap: 10px;
-    font-size: 13px; font-weight: 800;
+    font-size: 12px; font-weight: 800;
     color: #FFFFFF;
     text-transform: uppercase; letter-spacing: 1px;
 }
@@ -823,7 +868,7 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
     gap: 0;
 }
 .source-detail {
-    padding: 14px 20px;
+    padding: 12px 18px;
     display: flex; flex-direction: column;
     gap: 4px;
     border-right: 1px solid var(--border-color);
@@ -836,7 +881,7 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
     text-transform: uppercase; letter-spacing: 0.8px;
 }
 .source-detail-value {
-    font-size: 13px; font-weight: 800;
+    font-size: 12px; font-weight: 800;
     color: var(--text-primary);
     font-family: 'Courier New', monospace;
     word-break: break-word;
@@ -852,32 +897,32 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
 }
 .form-card-header {
     background: linear-gradient(135deg, #059669 0%, #047857 100%);
-    padding: 14px 20px;
+    padding: 12px 18px;
     display: flex; align-items: center; gap: 10px;
     color: #FFF;
 }
-.form-card-header i { font-size: 18px; }
-.form-card-header h3 { font-size: 15px; font-weight: 800; margin: 0; flex: 1; }
+.form-card-header i { font-size: 16px; }
+.form-card-header h3 { font-size: 14px; font-weight: 800; margin: 0; flex: 1; }
 .providers-count {
     font-size: 11px; font-weight: 700;
-    padding: 4px 12px;
+    padding: 3px 10px;
     background: rgba(255,255,255,0.2);
     border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.3);
 }
-.form-card-body { padding: 20px; }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.form-card-body { padding: 18px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
 .form-group label {
-    font-size: 12px; font-weight: 700;
+    font-size: 11px; font-weight: 700;
     color: var(--text-secondary);
     text-transform: uppercase; letter-spacing: 0.5px;
 }
 .form-group label .required { color: #DC2626; }
 .form-control {
-    padding: 11px 14px;
+    padding: 10px 13px;
     border: 1.5px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 9px;
     font-size: 13px;
     color: var(--text-primary);
     background: var(--bg-input);
@@ -891,9 +936,9 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
     box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
     background: var(--bg-card);
 }
-textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter', sans-serif; }
+textarea.form-control { resize: vertical; min-height: 70px; font-family: 'Inter', sans-serif; }
 .money-input {
-    font-size: 18px !important;
+    font-size: 16px !important;
     font-weight: 800 !important;
     font-family: 'Inter', 'Courier New', monospace !important;
     letter-spacing: 0.5px;
@@ -917,11 +962,11 @@ html.dark-mode .readonly-input {
     color: #6EE7B7 !important;
 }
 
-.providers-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.providers-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .provider-input-card {
     background: var(--bg-input);
     border: 1.5px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 10px;
     overflow: hidden;
     transition: all 0.3s ease;
 }
@@ -930,16 +975,16 @@ html.dark-mode .readonly-input {
     box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
 }
 .provider-input-header {
-    padding: 12px 14px;
+    padding: 10px 12px;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border-color);
     display: flex; align-items: center; gap: 10px;
 }
 .provider-input-icon {
-    width: 36px; height: 36px;
+    width: 34px; height: 34px;
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    color: #FFF; font-size: 15px; flex-shrink: 0;
+    color: #FFF; font-size: 14px; flex-shrink: 0;
 }
 .provider-input-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .provider-input-name {
@@ -957,17 +1002,17 @@ html.dark-mode .readonly-input {
     font-family: 'Courier New', monospace;
 }
 html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
-.provider-input-body { padding: 12px 14px; }
+.provider-input-body { padding: 10px 12px; }
 .provider-input-body label {
-    font-size: 10px; font-weight: 700;
+    font-size: 9px; font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    display: block; margin-bottom: 6px;
+    display: block; margin-bottom: 5px;
 }
 .provider-input-body .form-control {
-    font-size: 14px;
-    padding: 9px 12px;
+    font-size: 13px;
+    padding: 8px 10px;
     text-align: right;
     font-family: 'Courier New', monospace;
     font-weight: 700;
@@ -975,14 +1020,14 @@ html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
 
 .empty-providers {
     text-align: center;
-    padding: 30px 20px;
+    padding: 24px 16px;
     color: var(--text-muted);
 }
 .empty-providers i {
-    font-size: 36px; color: var(--text-light);
-    opacity: 0.5; display: block; margin-bottom: 10px;
+    font-size: 32px; color: var(--text-light);
+    opacity: 0.5; display: block; margin-bottom: 8px;
 }
-.empty-providers p { margin: 0; font-size: 13px; }
+.empty-providers p { margin: 0; font-size: 12px; }
 
 .summary-panel {
     background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
@@ -996,11 +1041,11 @@ html.dark-mode .summary-panel {
     border-color: #059669;
 }
 .summary-panel-header {
-    padding: 12px 20px;
+    padding: 11px 18px;
     background: rgba(5, 150, 105, 0.1);
     border-bottom: 2px solid #6EE7B7;
     display: flex; align-items: center; gap: 10px;
-    font-size: 13px; font-weight: 800;
+    font-size: 12px; font-weight: 800;
     color: #065F46;
     text-transform: uppercase; letter-spacing: 1px;
 }
@@ -1010,20 +1055,20 @@ html.dark-mode .summary-panel-header {
     color: #D1FAE5;
 }
 .summary-panel-header i { color: #059669; }
-.summary-panel-body { padding: 16px 20px; }
+.summary-panel-body { padding: 14px 18px; }
 .summary-line {
     display: flex; justify-content: space-between;
-    align-items: center; padding: 8px 0;
+    align-items: center; padding: 7px 0;
     border-bottom: 1px dashed rgba(5, 150, 105, 0.3);
-    font-size: 13px; color: #065F46; font-weight: 600;
+    font-size: 12px; color: #065F46; font-weight: 600;
 }
 html.dark-mode .summary-line { color: #D1FAE5; border-color: rgba(110, 231, 183, 0.3); }
 .summary-line:last-child { border-bottom: none; }
 .summary-line-total {
-    padding-top: 12px;
-    margin-top: 8px;
+    padding-top: 10px;
+    margin-top: 6px;
     border-top: 2px solid #059669 !important;
-    font-size: 16px !important;
+    font-size: 15px !important;
     font-weight: 800 !important;
     color: #065F46 !important;
 }
@@ -1032,20 +1077,20 @@ html.dark-mode .summary-line-total { color: #A7F3D0 !important; }
     font-family: 'Courier New', monospace;
     font-weight: 800;
     color: #059669;
-    font-size: 15px;
+    font-size: 14px;
 }
 html.dark-mode .summary-value { color: #6EE7B7; }
-.summary-line-total .summary-value { font-size: 20px; color: #065F46; }
+.summary-line-total .summary-value { font-size: 18px; color: #065F46; }
 html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
 
 .actions-bottom {
     display: flex; gap: 12px;
     justify-content: flex-end;
-    padding: 20px 0;
+    padding: 16px 0;
     flex-wrap: wrap;
 }
 .btn {
-    padding: 12px 26px;
+    padding: 11px 24px;
     border: none; border-radius: 10px;
     font-weight: 700; font-size: 13px;
     cursor: pointer;
@@ -1091,6 +1136,7 @@ html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
     .waiting-actions .btn { width: 100%; justify-content: center; }
     .waiting-title { font-size: 20px; }
     .waiting-icon { width: 70px; height: 70px; font-size: 32px; }
+    .page-header .header-left h2 { font-size: 16px; }
 }
 </style>
 

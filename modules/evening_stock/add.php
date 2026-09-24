@@ -1,173 +1,293 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/add.php
-// WAKALA FINANCIAL SYSTEM - ADD EVENING STOCK
-// WITH FULL DARK MODE SUPPORT
+// WAKALA FINANCIAL SYSTEM - ADD EVENING STOCK (ADMIN) - FINAL
+// ✅ GREEN THEME
+// ✅ AUTO-FILL from daily_reports
+// ✅ Cash inachukuliwa kutoka daily_reports.current_cash
+// ✅ READONLY ONLY - No edit/delete
+// ✅ Cash JUU, Providers CHINI (3 kwa row)
 // ================================================================
 
-// ============================================================
-// INCLUDE CONFIG BEFORE SESSION
-// ============================================================
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once '../../config/config.php';
 require_once '../../config/database.php';
 require_once '../../includes/functions.php';
 
-// ============================================================
-// START SESSION
-// ============================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ============================================================
-// CHECK LOGIN
-// ============================================================
-if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+$role = $_SESSION['role'] ?? 'employee';
+
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
 
 // ============================================================
-// GET USER DATA
+// GET BRANCH & DATE
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+$selected_branch = 0;
+if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
+    $selected_branch = intval($_GET['branch_id']);
+} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
+    $selected_branch = intval($_GET['branch']);
+}
+
+$selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
 
 // ============================================================
-// GET BRANCHES FOR REFERENCE
+// GET BRANCHES
 // ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
-$branches = $stmt->fetchAll();
+$all_branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ============================================================
-// GET SELECTED BRANCH FROM SESSION OR GET
-// ============================================================
-$selected_branch = isset($_GET['branch']) ? intval($_GET['branch']) : 0;
-
-if (isset($_GET['branch'])) {
-    $_SESSION['selected_branch'] = $selected_branch;
-} elseif (isset($_SESSION['selected_branch']) && !isset($_GET['branch'])) {
-    $selected_branch = $_SESSION['selected_branch'];
-}
-
-$selected_branch = $selected_branch ?? 0;
-
-// Get branch name for display
-$branch_name = 'All Branches';
+$selected_branch_name = 'All Branches';
+$selected_branch_code = '';
 if ($selected_branch > 0) {
-    foreach ($branches as $b) {
+    foreach ($all_branches as $b) {
         if ($b['id'] == $selected_branch) {
-            $branch_name = $b['branch_name'];
+            $selected_branch_name = $b['branch_name'];
+            $selected_branch_code = $b['branch_code'] ?? '';
             break;
         }
     }
 }
 
 // ============================================================
-// GET PROVIDERS
+// CHECK EXISTING STOCK
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM providers WHERE is_active = 1 ORDER BY display_order, provider_name");
-$stmt->execute();
-$providers = $stmt->fetchAll();
+$existing_stock = null;
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("
+        SELECT id, stock_number 
+        FROM evening_stocks 
+        WHERE branch_id = ? AND stock_date = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch, $selected_date]);
+    $existing_stock = $stmt->fetch(PDO::FETCH_ASSOC);
+}
 
 // ============================================================
-// HANDLE FORM SUBMISSION
+// GET DAILY REPORT & PROVIDERS (AUTO-FILL SOURCE)
 // ============================================================
-$success_message = '';
-$error_message = '';
-$show_success = false;
-$show_error = false;
+$daily_report = null;
+$daily_report_providers = [];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_evening_stock') {
-    try {
-        $stock_date = $_POST['stock_date'] ?? date('Y-m-d');
-        $branch_id = intval($_POST['branch_id'] ?? 0);
-        $cash_balance = floatval(str_replace(',', '', $_POST['cash_balance'] ?? 0));
-        $status = $_POST['status'] ?? 'pending';
-        $notes = $_POST['notes'] ?? '';
-        
-        if ($branch_id <= 0) {
-            throw new Exception('Please select a branch.');
-        }
-        
-        $branch_name_selected = '';
-        foreach ($branches as $b) {
-            if ($b['id'] == $branch_id) {
-                $branch_name_selected = $b['branch_name'];
-                break;
-            }
-        }
-        
-        $provider_data = [];
-        $total_float = 0;
-        
-        foreach ($_POST as $key => $value) {
-            if (strpos($key, 'provider_') === 0 && !empty($value)) {
-                $provider_id = str_replace('provider_', '', $key);
-                $amount = floatval(str_replace(',', '', $value));
-                if ($amount > 0) {
-                    $provider_data[$provider_id] = $amount;
-                    $total_float += $amount;
-                }
-            }
-        }
-        
-        if (empty($provider_data)) {
-            throw new Exception('Please enter at least one provider amount.');
-        }
-        
-        $stock_number = 'ES-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-        
-        $check_stmt = $db->prepare("SELECT COUNT(*) FROM evening_stocks WHERE stock_date = ? AND branch_id = ?");
-        $check_stmt->execute([$stock_date, $branch_id]);
-        $exists = $check_stmt->fetchColumn();
-        
-        if ($exists > 0) {
-            throw new Exception('An evening stock already exists for this date and branch.');
-        }
-        
-        $provider_json = json_encode($provider_data);
-        
-        $insert_stmt = $db->prepare("INSERT INTO evening_stocks 
-            (stock_number, employee_id, branch, branch_id, stock_date, provider_data, cash_balance, cumm_total, status, notes) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        
-        $insert_stmt->execute([
-            $stock_number,
-            $user_id,
-            $branch_name_selected,
-            $branch_id,
-            $stock_date,
-            $provider_json,
-            $cash_balance,
-            $total_float,
-            $status,
-            $notes
-        ]);
-        
-        $stock_id = $db->lastInsertId();
-        
-        logActivity($user_id, 'Add Evening Stock', 'Evening Stock', $stock_id, '', 'New evening stock added for branch: ' . $branch_name_selected);
-        
-        $success_message = 'Evening stock added successfully! Stock Number: ' . $stock_number;
-        $show_success = true;
-        
-        $_POST = [];
-        
-    } catch (Exception $e) {
-        $error_message = $e->getMessage();
-        $show_error = true;
+if ($selected_branch > 0 && !$existing_stock) {
+    $stmt = $db->prepare("
+        SELECT dr.*
+        FROM daily_reports dr
+        WHERE dr.branch_id = ? AND dr.report_date = ?
+        ORDER BY dr.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch, $selected_date]);
+    $daily_report = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($daily_report) {
+        $stmt = $db->prepare("
+            SELECT drp.*, p.icon_class, p.color_code, p.display_order
+            FROM daily_report_providers drp
+            LEFT JOIN providers p ON drp.provider_id = p.id
+            WHERE drp.daily_report_id = ?
+            ORDER BY p.display_order ASC, drp.id ASC
+        ");
+        $stmt->execute([$daily_report['id']]);
+        $daily_report_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
 // ============================================================
-// INCLUDE HEADER, SIDEBAR & TOPBAR
+// CALCULATE TOTALS
+// ✅ Float inachukuliwa kutoka daily_report_providers
+// ✅ Cash inachukuliwa kutoka daily_reports.current_cash
 // ============================================================
+$total_float = 0;
+foreach ($daily_report_providers as $drp) {
+    $total_float += floatval(str_replace(',', '', $drp['current_float'] ?? 0));
+}
+
+// ✅ Cash kutoka daily_reports (SIO providers)
+$total_cash = $daily_report ? floatval(str_replace(',', '', $daily_report['current_cash'] ?? 0)) : 0;
+$grand_total = $total_float + $total_cash;
+
+// ============================================================
+// HANDLE FORM SUBMISSION
+// ============================================================
+$error_message = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_stock') {
+    try {
+        $branch_id = intval($_POST['branch_id'] ?? 0);
+        $stock_date = $_POST['stock_date'] ?? date('Y-m-d');
+        $notes = trim($_POST['notes'] ?? '');
+
+        if ($branch_id <= 0) {
+            throw new Exception('Please select a branch.');
+        }
+
+        // Check duplicate
+        $stmt = $db->prepare("SELECT id FROM evening_stocks WHERE branch_id = ? AND stock_date = ?");
+        $stmt->execute([$branch_id, $stock_date]);
+        if ($stmt->fetch()) {
+            throw new Exception('Evening stock already exists for this branch and date.');
+        }
+
+        // Get daily report
+        $stmt = $db->prepare("
+            SELECT * FROM daily_reports 
+            WHERE branch_id = ? AND report_date = ?
+            ORDER BY id DESC LIMIT 1
+        ");
+        $stmt->execute([$branch_id, $stock_date]);
+        $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$dr) {
+            throw new Exception('No daily report found for this branch and date.');
+        }
+
+        // Get providers
+        $stmt = $db->prepare("
+            SELECT * FROM daily_report_providers 
+            WHERE daily_report_id = ?
+            ORDER BY id ASC
+        ");
+        $stmt->execute([$dr['id']]);
+        $dr_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($dr_providers)) {
+            throw new Exception('No providers found in daily report.');
+        }
+
+        $db->beginTransaction();
+
+        $stock_number = 'ES-' . date('Ymd', strtotime($stock_date)) . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+
+        // ====================================================
+        // CALCULATE TOTALS - FIXED
+        // ====================================================
+        $total_float_new = 0;
+        $provider_data_array = [];
+
+        foreach ($dr_providers as $drp) {
+            $pid = $drp['provider_id'];
+            $closing_float = floatval(str_replace(',', '', $drp['current_float'] ?? 0));
+            $closing_cash = floatval(str_replace(',', '', $drp['current_cash'] ?? 0));
+
+            $total_float_new += $closing_float;
+
+            $provider_data_array[$pid] = [
+                'provider_name' => $drp['provider_name'],
+                'provider_code' => $drp['provider_code'],
+                'opening_float' => floatval(str_replace(',', '', $drp['morning_float'] ?? 0)),
+                'opening_cash' => floatval(str_replace(',', '', $drp['morning_cash'] ?? 0)),
+                'closing_float' => $closing_float,
+                'closing_cash' => $closing_cash,
+                'total_deposits' => floatval(str_replace(',', '', $drp['total_deposits'] ?? 0)),
+                'total_withdrawals' => floatval(str_replace(',', '', $drp['total_withdrawals'] ?? 0))
+            ];
+        }
+
+        // ✅ Cash inachukuliwa kutoka daily_reports (SIO providers)
+        $total_cash_new = floatval(str_replace(',', '', $dr['current_cash'] ?? 0));
+        $grand_total_new = $total_float_new + $total_cash_new;
+
+        // Get branch name
+        $branch_name = '';
+        foreach ($all_branches as $b) {
+            if ($b['id'] == $branch_id) {
+                $branch_name = $b['branch_name'];
+                break;
+            }
+        }
+
+        // Insert evening stock
+        $stmt = $db->prepare("
+            INSERT INTO evening_stocks 
+            (stock_number, employee_id, branch, branch_id, stock_date,
+             provider_data, cash_balance, cumm_total, status, submitted_at, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NOW(), ?)
+        ");
+        $stmt->execute([
+            $stock_number,
+            $user_id,
+            $branch_name,
+            $branch_id,
+            $stock_date,
+            json_encode($provider_data_array),
+            $total_cash_new,
+            $grand_total_new,
+            $notes
+        ]);
+
+        $stock_id = $db->lastInsertId();
+
+        // Insert providers
+        $stmt = $db->prepare("
+            INSERT INTO evening_stock_providers 
+            (evening_stock_id, provider_id, provider_code, provider_name,
+             opening_float, opening_cash, closing_float, closing_cash,
+             total_deposits, total_withdrawals, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+
+        foreach ($dr_providers as $drp) {
+            $closing_float = floatval(str_replace(',', '', $drp['current_float'] ?? 0));
+            $closing_cash = floatval(str_replace(',', '', $drp['current_cash'] ?? 0));
+
+            $stmt->execute([
+                $stock_id,
+                $drp['provider_id'],
+                $drp['provider_code'],
+                $drp['provider_name'],
+                floatval(str_replace(',', '', $drp['morning_float'] ?? 0)),
+                floatval(str_replace(',', '', $drp['morning_cash'] ?? 0)),
+                $closing_float,
+                $closing_cash,
+                floatval(str_replace(',', '', $drp['total_deposits'] ?? 0)),
+                floatval(str_replace(',', '', $drp['total_withdrawals'] ?? 0))
+            ]);
+        }
+
+        logActivity(
+            $user_id,
+            'Add Evening Stock',
+            'Evening Stock',
+            $stock_id,
+            '',
+            'New evening stock added for branch: ' . $branch_name . ' on ' . $stock_date
+        );
+
+        $db->commit();
+
+        $_SESSION['success_message'] = 'Evening stock ' . $stock_number . ' created successfully!';
+        header('Location: view.php?id=' . $stock_id);
+        exit();
+
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        $error_message = $e->getMessage();
+    }
+}
+
+$success_message_session = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message_session = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
 include_once '../../includes/admin_topbar.php';
@@ -176,180 +296,278 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ===== BRANCH CARD ===== -->
-        <div class="branch-card">
-            <i class="fas fa-store-alt"></i>
-            <span class="branch-label">Current Branch:</span>
-            <span class="branch-name"><?php echo htmlspecialchars($branch_name); ?></span>
-        </div>
-
-        <div class="page-header">
-            <div class="page-header-left">
-                <h2><i class="fas fa-moon"></i> Add Evening Stock</h2>
-                <span class="page-subtitle">Create a new evening stock record</span>
+        <!-- BRANCH INDICATOR -->
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-moon"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Evening Stock For</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($selected_branch_name); ?></span>
+                    <?php if ($selected_branch_code): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($selected_branch_code); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="branch-location">
+                    <i class="fas fa-calendar"></i>
+                    <span><?php echo date('d M Y', strtotime($selected_date)); ?></span>
+                </div>
             </div>
-            <div class="page-header-right">
-                <a href="index.php" class="btn btn-back">
-                    <i class="fas fa-arrow-left"></i> Back to List
+            <div class="branch-indicator-right">
+                <a href="index.php<?php echo $selected_branch > 0 ? '?branch=' . $selected_branch : ''; ?>" class="btn-back-card">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back</span>
                 </a>
             </div>
         </div>
 
-        <?php if ($show_success && !empty($success_message)): ?>
+        <!-- PAGE HEADER -->
+        <div class="page-header">
+            <div class="header-left">
+                <h2><i class="fas fa-plus-circle" style="color:#059669;"></i> New Evening Stock</h2>
+            </div>
+        </div>
+
+        <!-- MESSAGES -->
+        <?php if (!empty($success_message_session)): ?>
             <div class="alert alert-success">
                 <i class="fas fa-check-circle"></i> 
-                <span><?php echo $success_message; ?></span>
+                <span><?php echo $success_message_session; ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
         
-        <?php if ($show_error && !empty($error_message)): ?>
+        <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo $error_message; ?></span>
+                <span><?php echo htmlspecialchars($error_message); ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
-        <div class="form-container">
-            <form method="POST" action="" class="main-form" id="eveningStockForm" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="add_evening_stock">
-                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
-                
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="stock_date">Stock Date <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
-                                <input type="date" id="stock_date" name="stock_date" 
-                                       value="<?php echo date('Y-m-d'); ?>" 
-                                       class="form-control" required>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="branch_display">Branch <span class="required">*</span></label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <input type="text" id="branch_display" 
-                                       value="<?php echo htmlspecialchars($branch_name); ?>" 
-                                       class="form-control" disabled>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="cash_balance">Cash Balance</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-money-bill-wave"></i></span>
-                                <input type="text" id="cash_balance" name="cash_balance" 
-                                       value="0" 
-                                       class="form-control money-input" 
-                                       placeholder="0.00"
-                                       oninput="formatMoneyInput(this); calculateTotals();">
-                            </div>
-                            <small>Physical cash balance in the till</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="status">Status</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-check-circle"></i></span>
-                                <select id="status" name="status" class="form-control">
-                                    <option value="pending">Pending</option>
-                                    <option value="waiting">Waiting</option>
-                                    <option value="approved">Approved</option>
-                                    <option value="adjusted">Adjusted</option>
-                                    <option value="rejected">Rejected</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
+        <?php if ($selected_branch == 0): ?>
+            <!-- SELECT BRANCH -->
+            <div class="waiting-card">
+                <div class="waiting-icon">
+                    <i class="fas fa-store-alt"></i>
                 </div>
-
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-university"></i> Provider Balances</h3>
-                        <span class="section-sub">Enter the float amount for each provider</span>
-                    </div>
-                    
-                    <div class="providers-grid">
-                        <?php foreach ($providers as $provider): ?>
-                            <div class="provider-item">
-                                <div class="provider-icon" style="background: <?php echo $provider['color_code'] ?? '#0B5ED7'; ?>;">
-                                    <i class="<?php echo $provider['icon_class'] ?? 'fas fa-university'; ?>"></i>
-                                </div>
-                                <div class="provider-info">
-                                    <span class="provider-name"><?php echo htmlspecialchars($provider['provider_name']); ?></span>
-                                    <span class="provider-code"><?php echo htmlspecialchars($provider['provider_code']); ?></span>
-                                </div>
-                                <div class="provider-input">
-                                    <input type="text" 
-                                           id="provider_<?php echo $provider['id']; ?>" 
-                                           name="provider_<?php echo $provider['id']; ?>" 
-                                           class="form-control provider-amount money-input" 
-                                           placeholder="0.00" 
-                                           oninput="formatMoneyInput(this); calculateTotals();">
-                                </div>
+                <h3 class="waiting-title">Please Select a Branch</h3>
+                <p class="waiting-text">
+                    Chagua branch ili kuongeza evening stock.
+                </p>
+                <div class="branch-picker-grid">
+                    <?php foreach ($all_branches as $b): ?>
+                        <a href="add.php?branch=<?php echo $b['id']; ?>&date=<?php echo $selected_date; ?>" 
+                           class="branch-picker-card">
+                            <div class="bpc-icon">
+                                <i class="fas fa-store-alt"></i>
                             </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-sticky-note"></i> Additional Information</h3>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group full-width">
-                            <label for="notes">Notes</label>
-                            <div class="input-group">
-                                <span class="input-icon"><i class="fas fa-sticky-note"></i></span>
-                                <textarea id="notes" name="notes" class="form-control" rows="3" placeholder="Any additional notes..."></textarea>
+                            <div class="bpc-info">
+                                <span class="bpc-name"><?php echo htmlspecialchars($b['branch_name']); ?></span>
+                                <?php if (!empty($b['branch_code'])): ?>
+                                    <span class="bpc-code"><?php echo htmlspecialchars($b['branch_code']); ?></span>
+                                <?php endif; ?>
                             </div>
-                        </div>
-                    </div>
+                            <i class="fas fa-arrow-right bpc-arrow"></i>
+                        </a>
+                    <?php endforeach; ?>
                 </div>
+            </div>
 
-                <div class="form-section summary-section">
-                    <div class="section-header">
-                        <h3><i class="fas fa-calculator"></i> Summary</h3>
-                    </div>
-                    
-                    <div class="summary-grid">
-                        <div class="summary-item">
-                            <span class="summary-label">Total Float:</span>
-                            <span class="summary-value" id="totalFloatDisplay">TSh 0.00</span>
-                        </div>
-                        <div class="summary-item">
-                            <span class="summary-label">Cash Balance:</span>
-                            <span class="summary-value" id="cashBalanceDisplay">TSh 0.00</span>
-                        </div>
-                        <div class="summary-item total">
-                            <span class="summary-label">Total Stock:</span>
-                            <span class="summary-value" id="totalStockDisplay">TSh 0.00</span>
-                        </div>
-                    </div>
+        <?php elseif ($existing_stock): ?>
+            <!-- EXISTING STOCK -->
+            <div class="waiting-card">
+                <div class="waiting-icon waiting-warning">
+                    <i class="fas fa-info-circle"></i>
                 </div>
-
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Save Evening Stock
-                    </button>
-                    <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                        <i class="fas fa-undo"></i> Reset Form
-                    </button>
-                    <a href="index.php" class="btn btn-cancel">
-                        <i class="fas fa-times"></i> Cancel
+                <h3 class="waiting-title">Evening Stock Already Exists</h3>
+                <p class="waiting-text">
+                    Evening stock <strong><?php echo htmlspecialchars($existing_stock['stock_number']); ?></strong> 
+                    already exists for this branch on <?php echo date('d M Y', strtotime($selected_date)); ?>.
+                </p>
+                <div class="waiting-actions">
+                    <a href="view.php?id=<?php echo $existing_stock['id']; ?>" class="btn btn-primary">
+                        <i class="fas fa-eye"></i> View Existing
+                    </a>
+                    <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Back
                     </a>
                 </div>
+            </div>
+
+        <?php elseif (!$daily_report): ?>
+            <!-- NO DAILY REPORT -->
+            <div class="waiting-card">
+                <div class="waiting-icon waiting-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <h3 class="waiting-title">Waiting for Daily Report</h3>
+                <p class="waiting-text">
+                    No Daily Report found for <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong> 
+                    at <strong><?php echo htmlspecialchars($selected_branch_name); ?></strong>.
+                    Please create a Daily Report first.
+                </p>
+                <div class="waiting-actions">
+                    <a href="../daily_report/add.php?branch=<?php echo $selected_branch; ?>&date=<?php echo $selected_date; ?>" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Create Daily Report
+                    </a>
+                    <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Back
+                    </a>
+                </div>
+            </div>
+
+        <?php else: ?>
+
+            <!-- SOURCE INFO -->
+            <div class="source-info-card source-daily">
+                <div class="source-info-header">
+                    <i class="fas fa-clipboard-check"></i>
+                    <span>Source: Daily Report</span>
+                </div>
+                <div class="source-info-body">
+                    <div class="source-detail">
+                        <span class="source-detail-label">Reference</span>
+                        <span class="source-detail-value"><?php echo htmlspecialchars($daily_report['report_number']); ?></span>
+                    </div>
+                    <div class="source-detail">
+                        <span class="source-detail-label">Date</span>
+                        <span class="source-detail-value"><?php echo date('d M Y', strtotime($daily_report['report_date'])); ?></span>
+                    </div>
+                    <div class="source-detail">
+                        <span class="source-detail-label">Providers</span>
+                        <span class="source-detail-value"><?php echo count($daily_report_providers); ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FORM -->
+            <form method="POST" action="" class="add-form" id="stockForm" onsubmit="return validateForm()">
+                <input type="hidden" name="action" value="add_stock">
+                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
+                <input type="hidden" name="stock_date" value="<?php echo $selected_date; ?>">
+
+                <!-- CASH SECTION -->
+                <div class="form-card">
+                    <div class="form-card-header">
+                        <i class="fas fa-money-bill-wave"></i>
+                        <h3>Cash Balance</h3>
+                    </div>
+                    <div class="form-card-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Stock Date</label>
+                                <input type="date" 
+                                       class="form-control" 
+                                       value="<?php echo htmlspecialchars($selected_date); ?>" 
+                                       readonly tabindex="-1">
+                            </div>
+                            <div class="form-group">
+                                <label>Total Cash Balance (TSh)</label>
+                                <input type="text" 
+                                       class="form-control money-input readonly-input" 
+                                       value="<?php echo number_format($total_cash); ?>" 
+                                       readonly tabindex="-1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PROVIDERS SECTION - 3 KWA ROW -->
+                <div class="form-card">
+                    <div class="form-card-header">
+                        <i class="fas fa-university"></i>
+                        <h3>Provider Closing Balances</h3>
+                        <span class="providers-count"><?php echo count($daily_report_providers); ?> providers</span>
+                    </div>
+                    <div class="form-card-body">
+                        <?php if (count($daily_report_providers) > 0): ?>
+                            <div class="providers-grid-3">
+                                <?php foreach ($daily_report_providers as $drp):
+                                    $color = $drp['color_code'] ?? '#0B5ED7';
+                                    $icon = $drp['icon_class'] ?? 'fas fa-university';
+                                    $closing_float = floatval(str_replace(',', '', $drp['current_float'] ?? 0));
+                                ?>
+                                    <div class="provider-input-card">
+                                        <div class="provider-input-header">
+                                            <div class="provider-input-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
+                                                <i class="<?php echo htmlspecialchars($icon); ?>"></i>
+                                            </div>
+                                            <div class="provider-input-info">
+                                                <span class="provider-input-name"><?php echo htmlspecialchars($drp['provider_name']); ?></span>
+                                                <span class="provider-input-code"><?php echo htmlspecialchars($drp['provider_code']); ?></span>
+                                            </div>
+                                        </div>
+                                        <div class="provider-input-body">
+                                            <label>Closing Float (TSh)</label>
+                                            <input type="text" 
+                                                   class="form-control money-input provider-float-input readonly-input" 
+                                                   value="<?php echo number_format($closing_float); ?>"
+                                                   readonly tabindex="-1">
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="empty-providers">
+                                <i class="fas fa-info-circle"></i>
+                                <p>No providers found.</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- NOTES -->
+                <div class="form-card">
+                    <div class="form-card-header">
+                        <i class="fas fa-sticky-note"></i>
+                        <h3>Notes</h3>
+                    </div>
+                    <div class="form-card-body">
+                        <div class="form-group">
+                            <label>Notes (Optional)</label>
+                            <textarea name="notes" class="form-control" rows="3" 
+                                      placeholder="Additional notes..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUMMARY -->
+                <div class="summary-panel">
+                    <div class="summary-panel-header">
+                        <i class="fas fa-calculator"></i>
+                        <span>Summary</span>
+                    </div>
+                    <div class="summary-panel-body">
+                        <div class="summary-line">
+                            <span>Total Float:</span>
+                            <span class="summary-value"><?php echo formatCurrency($total_float); ?></span>
+                        </div>
+                        <div class="summary-line">
+                            <span>Cash Balance:</span>
+                            <span class="summary-value"><?php echo formatCurrency($total_cash); ?></span>
+                        </div>
+                        <div class="summary-line summary-line-total">
+                            <span>Cumm. Total:</span>
+                            <span class="summary-value"><?php echo formatCurrency($grand_total); ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ACTIONS -->
+                <div class="actions-bottom">
+                    <a href="index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-secondary">
+                        <i class="fas fa-times"></i> Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary" id="submitBtn">
+                        <i class="fas fa-check-circle"></i> Create Evening Stock
+                    </button>
+                </div>
+
             </form>
-        </div>
+
+        <?php endif; ?>
 
     </div>
     <?php include_once '../../includes/admin_footer.php'; ?>
@@ -357,744 +575,546 @@ include_once '../../includes/admin_topbar.php';
 
 <style>
 :root {
-    --form-bg: #FFFFFF;
-    --form-text: #1F2937;
-    --form-text-secondary: #6B7280;
-    --form-text-light: #9CA3AF;
-    --form-border: #E5E7EB;
-    --form-card-bg: #FFFFFF;
-    --form-input-bg: #F9FAFB;
-    --form-hover: #F3F4F6;
-    --form-shadow: rgba(0,0,0,0.06);
-    --form-shadow-lg: rgba(0,0,0,0.12);
-    --form-dropdown-bg: #FFFFFF;
-    --form-dropdown-border: #E5E7EB;
-    --form-success-bg: #D1FAE5;
-    --form-success-text: #065F46;
-    --form-success-border: #A7F3D0;
-    --form-danger-bg: #FEE2E2;
-    --form-danger-text: #991B1B;
-    --form-danger-border: #FECACA;
-    --provider-bg: #EFF6FF;
-    --provider-bg-hover: #DBEAFE;
-    --provider-border: #93C5FD;
-    --provider-text: #1E40AF;
+    --bg-body: #f0f4f8;
+    --bg-card: #ffffff;
+    --bg-input: #f8fafc;
+    --text-primary: #1e293b;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+    --text-light: #94a3b8;
+    --border-color: #cbd5e1;
+    --shadow-color: rgba(5, 150, 105, 0.08);
+    --green-primary: #059669;
+    --green-dark: #047857;
+    --green-darker: #065F46;
+    --green-light: #D1FAE5;
+    --green-lighter: #A7F3D0;
 }
-
 html.dark-mode {
-    --form-bg: #1F2937;
-    --form-text: #F9FAFB;
-    --form-text-secondary: #9CA3AF;
-    --form-text-light: #6B7280;
-    --form-border: #374151;
-    --form-card-bg: #1F2937;
-    --form-input-bg: #374151;
-    --form-hover: #374151;
-    --form-shadow: rgba(0,0,0,0.3);
-    --form-shadow-lg: rgba(0,0,0,0.4);
-    --form-dropdown-bg: #1F2937;
-    --form-dropdown-border: #374151;
-    --form-success-bg: #065F46;
-    --form-success-text: #D1FAE5;
-    --form-success-border: #047857;
-    --form-danger-bg: #7F1D1D;
-    --form-danger-text: #FEE2E2;
-    --form-danger-border: #991B1B;
-    --provider-bg: #1A2A3A;
-    --provider-bg-hover: #1F3A4F;
-    --provider-border: #2D5A7D;
-    --provider-text: #93C5FD;
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+    --green-light: #065F46;
+    --green-lighter: #047857;
 }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+.main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-body {
-    background: var(--form-bg) !important;
-    color: var(--form-text);
-    transition: background 0.3s ease, color 0.3s ease;
+.branch-indicator {
+    background: linear-gradient(135deg, #059669 0%, #047857 50%, #065F46 100%);
+    border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+    flex-wrap: wrap; gap: 12px;
 }
-
-.main-wrapper { background: var(--form-bg) !important; }
-.main-content { background: var(--form-bg) !important; }
-
-/* ============================================================
-   BRANCH CARD - RED CARD
-   ============================================================ */
-.branch-card {
-    background: #bb0404;
-    color: #ffffff;
-    padding: 12px 20px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.3);
+.branch-indicator-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.branch-icon-wrapper {
+    width: 42px; height: 42px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #FFF; flex-shrink: 0;
+    border: 1.5px solid rgba(255,255,255,0.3);
 }
-
-.branch-card i {
-    font-size: 18px;
+.branch-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.branch-indicator-label {
+    font-size: 10px; font-weight: 600; opacity: 0.85;
+    text-transform: uppercase; letter-spacing: 1px; color: #FFF;
 }
-
-.branch-card .branch-label {
-    font-weight: 500;
-    font-size: 13px;
-    opacity: 0.9;
+.branch-indicator-name {
+    font-weight: 800; font-size: 16px; color: #FFF;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
 }
-
-.branch-card .branch-name {
-    font-weight: 700;
-    font-size: 15px;
+.branch-indicator-code {
+    font-size: 11px; font-weight: 700; color: #FFF;
+    padding: 3px 12px; background: rgba(255,255,255,0.2);
+    border-radius: 12px; border: 1px solid rgba(255,255,255,0.25);
 }
-
-/* Dark mode support for branch card */
-html.dark-mode .branch-card {
-    background: #bb0404;
-    color: #ffffff;
-    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.5);
+.branch-location {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: rgba(255,255,255,0.9);
+    padding: 4px 12px; background: rgba(255,255,255,0.12);
+    border-radius: 12px; white-space: nowrap;
 }
-
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 4px;
-}
-
-.page-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.page-header-left h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--form-text);
-    margin: 0;
-}
-
-.page-header-left h2 i {
-    color: #3B82F6;
-    margin-right: 8px;
-}
-
-.page-subtitle {
-    font-size: 13px;
-    color: var(--form-text-secondary);
-    background: var(--form-hover);
-    padding: 3px 12px;
-    border-radius: 12px;
-}
-
-.btn-back {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+.branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.btn-back-card {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 16px; background: rgba(255,255,255,0.12);
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    color: #FFF; text-decoration: none;
+    font-size: 13px; font-weight: 600;
     transition: all 0.3s ease;
 }
+.btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
 
-.btn-back:hover {
-    background: var(--form-border);
-    color: var(--form-text);
+.page-header {
+    display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;
 }
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
+.page-header .header-left h2 i { margin-right: 8px; }
 
-/* ============================================================
-   ALERT MESSAGES
-   ============================================================ */
 .alert {
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    position: relative;
-    animation: slideDown 0.4s ease forwards;
+    padding: 14px 18px; border-radius: 10px;
+    margin-bottom: 16px; display: flex;
+    align-items: center; gap: 12px;
+    box-shadow: 0 2px 8px var(--shadow-color);
 }
-
-.alert-success {
-    background: var(--form-success-bg);
-    color: var(--form-success-text);
-    border: 1px solid var(--form-success-border);
-}
-
-.alert-danger {
-    background: var(--form-danger-bg);
-    color: var(--form-danger-text);
-    border: 1px solid var(--form-danger-border);
-}
-
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
 .alert i { font-size: 20px; flex-shrink: 0; }
-.alert span { flex: 1; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
 .alert-close {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-}
-.alert-close:hover { opacity: 1; }
-
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
+    background: transparent; border: none; font-size: 22px;
+    color: inherit; cursor: pointer; opacity: 0.6;
 }
 
-/* ============================================================
-   FORM CONTAINER
-   ============================================================ */
-.form-container {
-    background: var(--form-card-bg);
+.waiting-card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    border: 2px dashed var(--green-primary);
+    padding: 60px 30px;
+    text-align: center;
+    box-shadow: 0 4px 16px var(--shadow-color);
+    margin-bottom: 20px;
+}
+.waiting-icon {
+    width: 90px; height: 90px;
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px; color: #059669;
+    margin: 0 auto 20px;
+    border: 3px solid #6EE7B7;
+    animation: pulse 2s ease-in-out infinite;
+}
+.waiting-icon.waiting-warning {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    color: #D97706;
+    border-color: #FCD34D;
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+html.dark-mode .waiting-icon {
+    background: linear-gradient(135deg, #065F46, #047857);
+    color: #6EE7B7;
+    border-color: #10B981;
+}
+html.dark-mode .waiting-icon.waiting-warning {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    color: #FCD34D;
+    border-color: #F59E0B;
+}
+.waiting-title {
+    font-size: 24px; font-weight: 800;
+    color: var(--text-primary); margin: 0 0 12px 0;
+}
+.waiting-text {
+    font-size: 14px; color: var(--text-secondary);
+    max-width: 600px; margin: 0 auto 24px;
+    line-height: 1.7;
+}
+.waiting-text strong {
+    color: var(--green-primary);
+    background: var(--green-light);
+    padding: 2px 8px; border-radius: 6px;
+    font-weight: 800;
+}
+html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
+.waiting-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+.branch-picker-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px; max-width: 900px; margin: 0 auto; padding: 0 20px;
+}
+.branch-picker-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border: 2px solid var(--border-color);
     border-radius: 12px;
-    box-shadow: 0 1px 3px var(--form-shadow);
-    border: 1px solid var(--form-border);
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+.branch-picker-card:hover {
+    border-color: #059669;
+    background: var(--green-light);
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.25);
+}
+html.dark-mode .branch-picker-card:hover {
+    background: #065F46;
+}
+.bpc-icon {
+    width: 44px; height: 44px;
+    background: linear-gradient(135deg, #059669, #047857);
+    color: #FFF;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+}
+.bpc-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.bpc-name {
+    font-size: 14px; font-weight: 800;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bpc-code {
+    font-size: 10px; font-weight: 700;
+    color: #059669;
+    background: var(--green-light);
+    padding: 2px 8px; border-radius: 6px;
+    align-self: flex-start;
+    font-family: 'Courier New', monospace;
+}
+html.dark-mode .bpc-code { background: #065F46; color: #6EE7B7; }
+.bpc-arrow { color: #94a3b8; font-size: 14px; transition: all 0.3s ease; }
+.branch-picker-card:hover .bpc-arrow { color: #059669; transform: translateX(4px); }
+
+.source-info-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 2px solid #059669;
+    overflow: hidden;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.source-info-header {
+    padding: 12px 20px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 800;
+    color: #FFFFFF;
+    text-transform: uppercase; letter-spacing: 1px;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+.source-info-body {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+}
+.source-detail {
+    padding: 14px 20px;
+    display: flex; flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid var(--border-color);
+    min-width: 0;
+}
+.source-detail:last-child { border-right: none; }
+.source-detail-label {
+    font-size: 10px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+}
+.source-detail-value {
+    font-size: 13px; font-weight: 800;
+    color: var(--text-primary);
+    font-family: 'Courier New', monospace;
+    word-break: break-word;
+}
+
+.form-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    overflow: hidden;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.form-card-header {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    padding: 14px 20px;
+    display: flex; align-items: center; gap: 10px;
+    color: #FFF;
+}
+.form-card-header i { font-size: 18px; }
+.form-card-header h3 { font-size: 15px; font-weight: 800; margin: 0; flex: 1; }
+.providers-count {
+    font-size: 11px; font-weight: 700;
+    padding: 4px 12px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.3);
+}
+.form-card-body { padding: 20px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.form-group label {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.form-control {
+    padding: 11px 14px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    font-family: 'Inter', sans-serif;
+    transition: all 0.3s ease;
+    width: 100%;
+}
+.form-control:focus {
+    outline: none;
+    border-color: #059669;
+    box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+    background: var(--bg-card);
+}
+textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter', sans-serif; }
+.money-input {
+    font-size: 18px !important;
+    font-weight: 800 !important;
+    font-family: 'Inter', 'Courier New', monospace !important;
+    letter-spacing: 0.5px;
+    text-align: right;
+}
+.readonly-input {
+    background: #F0FDF4 !important;
+    border: 2px solid #86EFAC !important;
+    color: #065F46 !important;
+    cursor: not-allowed;
+    font-weight: 900;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+html.dark-mode .readonly-input {
+    background: #065F46 !important;
+    border-color: #10B981 !important;
+    color: #6EE7B7 !important;
+}
+
+.providers-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.provider-input-card {
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-color);
+    border-radius: 12px;
     overflow: hidden;
     transition: all 0.3s ease;
 }
-
-.form-section {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--form-border);
-    transition: all 0.3s ease;
+.provider-input-card:hover {
+    border-color: #059669;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+}
+.provider-input-header {
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 10px;
+}
+.provider-input-icon {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFF; font-size: 15px; flex-shrink: 0;
+}
+.provider-input-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.provider-input-name {
+    font-size: 12px; font-weight: 800;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.provider-input-code {
+    font-size: 9px; font-weight: 700;
+    color: #059669;
+    background: #D1FAE5;
+    padding: 1px 6px;
+    border-radius: 5px;
+    align-self: flex-start;
+    font-family: 'Courier New', monospace;
+}
+html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
+.provider-input-body { padding: 12px 14px; }
+.provider-input-body label {
+    font-size: 10px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block; margin-bottom: 6px;
+}
+.provider-input-body .form-control {
+    font-size: 14px;
+    padding: 9px 12px;
+    text-align: right;
+    font-family: 'Courier New', monospace;
+    font-weight: 700;
 }
 
-.form-section:last-child { border-bottom: none; }
+.empty-providers {
+    text-align: center;
+    padding: 30px 20px;
+    color: var(--text-muted);
+}
+.empty-providers i {
+    font-size: 36px; color: var(--text-light);
+    opacity: 0.5; display: block; margin-bottom: 10px;
+}
+.empty-providers p { margin: 0; font-size: 13px; }
 
-.section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.summary-panel {
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 12px;
+    overflow: hidden;
     margin-bottom: 16px;
 }
-
-.section-header h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--form-text);
-    margin: 0;
+html.dark-mode .summary-panel {
+    background: linear-gradient(135deg, #065F46, #047857);
+    border-color: #059669;
 }
-
-.section-header h3 i {
-    color: #3B82F6;
-    margin-right: 8px;
+.summary-panel-header {
+    padding: 12px 20px;
+    background: rgba(5, 150, 105, 0.1);
+    border-bottom: 2px solid #6EE7B7;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 800;
+    color: #065F46;
+    text-transform: uppercase; letter-spacing: 1px;
 }
-
-.section-sub {
-    font-size: 13px;
-    color: var(--form-text-secondary);
+html.dark-mode .summary-panel-header {
+    background: rgba(0,0,0,0.15);
+    border-color: #059669;
+    color: #D1FAE5;
 }
-
-.form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+.summary-panel-header i { color: #059669; }
+.summary-panel-body { padding: 16px 20px; }
+.summary-line {
+    display: flex; justify-content: space-between;
+    align-items: center; padding: 8px 0;
+    border-bottom: 1px dashed rgba(5, 150, 105, 0.3);
+    font-size: 13px; color: #065F46; font-weight: 600;
 }
-
-.form-row .full-width {
-    grid-column: span 2;
+html.dark-mode .summary-line { color: #D1FAE5; border-color: rgba(110, 231, 183, 0.3); }
+.summary-line:last-child { border-bottom: none; }
+.summary-line-total {
+    padding-top: 12px;
+    margin-top: 8px;
+    border-top: 2px solid #059669 !important;
+    font-size: 16px !important;
+    font-weight: 800 !important;
+    color: #065F46 !important;
 }
-
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.form-group label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--form-text);
-}
-
-.form-group label .required {
-    color: #DC2626;
-    font-weight: 700;
-}
-
-.input-group {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.input-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--form-text-light);
-    font-size: 14px;
-    z-index: 1;
-    pointer-events: none;
-}
-
-.input-group .form-control {
-    padding: 10px 14px 10px 40px;
-    border-radius: 8px;
-    border: 1px solid var(--form-border);
-    font-size: 14px;
-    outline: none;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    background: var(--form-input-bg);
-    color: var(--form-text);
-    width: 100%;
-}
-
-.input-group .form-control::placeholder {
-    color: var(--form-text-light);
-}
-
-.input-group .form-control:focus {
-    border-color: #3B82F6;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
-}
-
-.input-group .form-control:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-}
-
-.input-group select.form-control {
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
-}
-
-html.dark-mode .input-group select.form-control {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239CA3AF' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-}
-
-.input-group select.form-control option {
-    background: var(--form-dropdown-bg);
-    color: var(--form-text);
-}
-
-.input-group textarea.form-control {
-    padding: 10px 14px 10px 40px;
-    resize: vertical;
-    min-height: 80px;
-}
-
-.form-group small {
-    font-size: 12px;
-    color: var(--form-text-secondary);
-    margin-top: 2px;
-}
-
-/* ============================================================
-   PROVIDERS GRID
-   ============================================================ */
-.providers-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-}
-
-.provider-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    background: var(--provider-bg);
-    border-radius: 8px;
-    border: 2px solid var(--provider-border);
-    transition: all 0.3s ease;
-}
-
-.provider-item:hover {
-    background: var(--provider-bg-hover);
-    border-color: #60A5FA;
-}
-
-.provider-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-size: 14px;
-    flex-shrink: 0;
-}
-
-.provider-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.provider-name {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--provider-text);
-    display: block;
-}
-
-.provider-code {
-    font-size: 10px;
-    color: var(--form-text-light);
-    text-transform: uppercase;
-}
-
-.provider-input {
-    width: 100px;
-    flex-shrink: 0;
-}
-
-.provider-input .form-control {
-    padding: 6px 10px;
-    border-radius: 6px;
-    border: 2px solid var(--provider-border);
-    font-size: 13px;
-    outline: none;
-    transition: all 0.3s ease;
-    background: #FFFFFF;
-    color: var(--form-text);
-    width: 100%;
-    text-align: right;
-    font-weight: 600;
-}
-
-html.dark-mode .provider-input .form-control {
-    background: #1A2A3A;
-    color: #DBEAFE;
-}
-
-.provider-input .form-control:focus {
-    border-color: #3B82F6;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.2);
-}
-
-.money-input {
-    font-weight: 600;
-    letter-spacing: 0.5px;
-}
-
-/* ============================================================
-   SUMMARY SECTION
-   ============================================================ */
-.summary-section {
-    background: var(--form-hover);
-}
-
-.summary-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-}
-
-.summary-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px 16px;
-    border-radius: 8px;
-    background: var(--form-card-bg);
-    border: 1px solid var(--form-border);
-}
-
-.summary-item.total {
-    background: var(--form-success-bg);
-    border-color: var(--form-success-border);
-}
-
-html.dark-mode .summary-item.total {
-    background: #065F46;
-}
-
-.summary-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    color: var(--form-text-secondary);
-    font-weight: 600;
-}
-
+html.dark-mode .summary-line-total { color: #A7F3D0 !important; }
 .summary-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--form-text);
+    font-family: 'Courier New', monospace;
+    font-weight: 800;
+    color: #059669;
+    font-size: 15px;
 }
+html.dark-mode .summary-value { color: #6EE7B7; }
+.summary-line-total .summary-value { font-size: 20px; color: #065F46; }
+html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
 
-.summary-item.total .summary-value {
-    color: #10B981;
+.actions-bottom {
+    display: flex; gap: 12px;
+    justify-content: flex-end;
+    padding: 20px 0;
+    flex-wrap: wrap;
 }
-
-/* ============================================================
-   FORM ACTIONS
-   ============================================================ */
-.form-actions {
-    display: flex;
-    gap: 12px;
-    padding: 16px 24px;
-    border-top: 1px solid var(--form-border);
-    background: var(--form-hover);
-}
-
 .btn {
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    border: none;
+    padding: 12px 26px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
     cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
+    text-decoration: none; white-space: nowrap;
 }
-
-.btn-submit {
-    background: #3B82F6;
-    color: white;
+.btn-primary {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #FFF;
+    box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);
 }
-
-.btn-submit:hover {
-    background: #2563EB;
+.btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+    box-shadow: 0 6px 22px rgba(5, 150, 105, 0.5);
+    color: #FFF;
 }
-
-.btn-submit:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+.btn-secondary {
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
 }
+.btn-secondary:hover { background: var(--bg-input); color: var(--text-primary); }
 
-.btn-reset {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
-}
-
-.btn-reset:hover {
-    background: var(--form-border);
-    color: var(--form-text);
-}
-
-.btn-cancel {
-    background: var(--form-hover);
-    color: var(--form-text-secondary);
-}
-
-.btn-cancel:hover {
-    background: #FEE2E2;
-    color: #991B1B;
-}
-
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
 @media (max-width: 1024px) {
-    .providers-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+    .providers-grid-3 { grid-template-columns: repeat(2, 1fr); }
+    .source-info-body { grid-template-columns: repeat(2, 1fr); }
 }
-
 @media (max-width: 768px) {
-    .branch-card {
-        padding: 10px 16px;
-        font-size: 13px;
-        flex-wrap: wrap;
-    }
-    
-    .branch-card .branch-name {
-        font-size: 14px;
-    }
-    
-    .page-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
-    }
-    
-    .form-row {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-    
-    .form-row .full-width {
-        grid-column: span 1;
-    }
-    
-    .form-section {
-        padding: 16px 14px;
-    }
-    
-    .providers-grid {
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-    }
-    
-    .provider-item {
-        flex-wrap: wrap;
-        padding: 8px 10px;
-    }
-    
-    .provider-input {
-        width: 100%;
-    }
-    
-    .summary-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .form-actions {
-        flex-direction: column;
-    }
-    
-    .form-actions .btn {
-        justify-content: center;
-        width: 100%;
-    }
-}
-
-@media (max-width: 480px) {
-    .branch-card {
-        flex-direction: column;
-        text-align: center;
-        gap: 4px;
-    }
-    
-    .providers-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .section-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-    }
+    .main-content { padding: 12px !important; }
+    .branch-indicator { flex-direction: column; align-items: flex-start; }
+    .btn-back-card { width: 100%; justify-content: center; }
+    .form-row { grid-template-columns: 1fr; }
+    .providers-grid-3 { grid-template-columns: 1fr; }
+    .source-info-body { grid-template-columns: 1fr; }
+    .source-detail { border-right: none; border-bottom: 1px solid var(--border-color); }
+    .source-detail:last-child { border-bottom: none; }
+    .actions-bottom { flex-direction: column-reverse; }
+    .actions-bottom .btn { width: 100%; justify-content: center; }
+    .waiting-actions { flex-direction: column; }
+    .waiting-actions .btn { width: 100%; justify-content: center; }
+    .waiting-title { font-size: 20px; }
+    .waiting-icon { width: 70px; height: 70px; font-size: 32px; }
+    .branch-picker-grid { grid-template-columns: 1fr; padding: 0 10px; }
 }
 </style>
 
 <script>
-function formatMoneyInput(input) {
-    var value = input.value.replace(/[^0-9.]/g, '');
-    var parts = value.split('.');
-    var integerPart = parts[0] || '';
-    var decimalPart = parts[1] || '';
-    
-    if (integerPart.length > 0) {
-        integerPart = parseInt(integerPart).toLocaleString('en-US');
-    }
-    
-    if (decimalPart.length > 2) {
-        decimalPart = decimalPart.substring(0, 2);
-    }
-    
-    var formatted = integerPart;
-    if (decimalPart.length > 0) {
-        formatted += '.' + decimalPart;
-    }
-    
-    input.value = formatted;
-}
-
-function calculateTotals() {
-    var providerInputs = document.querySelectorAll('.provider-amount');
-    var totalFloat = 0;
-    
-    providerInputs.forEach(function(input) {
-        var rawValue = input.value.replace(/,/g, '');
-        var value = parseFloat(rawValue) || 0;
-        totalFloat += value;
-    });
-    
-    var cashBalanceInput = document.getElementById('cash_balance');
-    var rawCash = cashBalanceInput ? cashBalanceInput.value.replace(/,/g, '') : '0';
-    var cashBalance = parseFloat(rawCash) || 0;
-    var totalStock = totalFloat + cashBalance;
-    
-    document.getElementById('totalFloatDisplay').textContent = 'TSh ' + formatNumberDisplay(totalFloat);
-    document.getElementById('cashBalanceDisplay').textContent = 'TSh ' + formatNumberDisplay(cashBalance);
-    document.getElementById('totalStockDisplay').textContent = 'TSh ' + formatNumberDisplay(totalStock);
-}
-
-function formatNumberDisplay(num) {
-    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 function validateForm() {
-    var hasProvider = false;
-    var providerInputs = document.querySelectorAll('.provider-amount');
-    providerInputs.forEach(function(input) {
-        var rawValue = input.value.replace(/,/g, '');
-        var value = parseFloat(rawValue) || 0;
-        if (value > 0) {
-            hasProvider = true;
-        }
-    });
-    
-    if (!hasProvider) {
-        alert('Please enter at least one provider amount.');
-        return false;
-    }
-    
-    var submitBtn = document.getElementById('submitBtn');
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-    submitBtn.disabled = true;
-    
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
     return true;
 }
 
-function confirmReset() {
-    return confirm('Are you sure you want to reset the form? All entered data will be lost.');
-}
-
 document.addEventListener('DOMContentLoaded', function() {
-    calculateTotals();
-    
-    var cashBalance = document.getElementById('cash_balance');
-    if (cashBalance) {
-        cashBalance.addEventListener('input', function() {
-            formatMoneyInput(this);
-            calculateTotals();
-        });
-    }
-    
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
-        if (isDark) {
-            html.classList.add('dark-mode');
-        } else {
-            html.classList.remove('dark-mode');
-        }
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
     }
-    
     syncDarkMode();
-    document.addEventListener('darkModeChanged', function(e) {
-        syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
+
+    // Zuia readonly inputs kabisa
+    document.querySelectorAll('.readonly-input').forEach(function(input) {
+        input.addEventListener('keydown', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('paste', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('cut', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('drop', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('dragover', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+        input.addEventListener('focus', function(e) { this.blur(); });
     });
-    
+
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {
-        setTimeout(function() { successAlert.style.display = 'none'; }, 5000);
-    }
-    
-    var errorAlert = document.querySelector('.alert-danger');
-    if (errorAlert) {
-        setTimeout(function() { errorAlert.style.display = 'none'; }, 8000);
+        setTimeout(function() {
+            successAlert.style.transition = 'opacity 0.4s ease';
+            successAlert.style.opacity = '0';
+            setTimeout(function() {
+                if (successAlert.parentElement) successAlert.remove();
+            }, 400);
+        }, 8000);
     }
 });
 </script>
+
 </body>
 </html>

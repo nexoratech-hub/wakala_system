@@ -1,8 +1,9 @@
 <?php
 // ================================================================
-// FILE: modules/expenses/edit.php
-// WAKALA FINANCIAL SYSTEM - EDIT EXPENSE (ADMIN)
+// FILE: modules/expenses/add_employee.php
+// WAKALA FINANCIAL SYSTEM - ADD EXPENSE (EMPLOYEE)
 // ✅ RED theme only
+// ✅ Employee adds for THEIR branch only
 // ================================================================
 
 error_reporting(E_ALL);
@@ -24,59 +25,51 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
 $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
 
-if ($role !== 'admin' && $role !== 'super_admin') {
+if ($role !== 'employee') {
+    header('Location: add.php');
+    exit();
+}
+
+// Employee data
+$stmt = $db->prepare("SELECT * FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$employee = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$employee || intval($employee['branch_id']) <= 0) {
+    $_SESSION['error_message'] = 'Your account is not assigned to any branch.';
     header('Location: index_employee.php');
     exit();
 }
 
-$expense_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+$employee_branch_id = intval($employee['branch_id']);
 
-if ($expense_id <= 0) {
-    $_SESSION['error_message'] = 'Invalid expense selected.';
-    header('Location: index.php');
+// Branch info
+$stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
+$stmt->execute([$employee_branch_id]);
+$branch = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$branch) {
+    $_SESSION['error_message'] = 'Branch not found.';
+    header('Location: index_employee.php');
     exit();
 }
 
-// ============================================================
-// GET EXPENSE
-// ============================================================
-$stmt = $db->prepare("
-    SELECT e.*, emp.full_name as employee_name, b.branch_name as branch_display_name, b.branch_code
-    FROM expenses e
-    LEFT JOIN employees emp ON e.employee_id = emp.id
-    LEFT JOIN branches b ON e.branch_id = b.id
-    WHERE e.id = ?
-");
-$stmt->execute([$expense_id]);
-$expense = $stmt->fetch(PDO::FETCH_ASSOC);
+$branch_name = $branch['branch_name'];
+$branch_code = $branch['branch_code'] ?? '';
+$branch_location = $branch['location'] ?? '';
 
-if (!$expense) {
-    $_SESSION['error_message'] = 'Expense not found.';
-    header('Location: index.php');
-    exit();
-}
-
-// ============================================================
-// GET BRANCHES & CATEGORIES
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-$stmt->execute();
-$all_branches = $stmt->fetchAll();
-
+// Categories
 $stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
 $stmt->execute();
 $categories = $stmt->fetchAll();
 
-// ============================================================
-// HANDLE SUBMIT
-// ============================================================
+// Handle submission
 $error_message = '';
 $show_error = false;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'edit_expense') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_expense') {
     try {
         $expense_date = $_POST['expense_date'] ?? date('Y-m-d');
-        $branch_id = intval($_POST['branch_id'] ?? 0);
         $expense_name = trim($_POST['expense_name'] ?? '');
         $category = trim($_POST['category'] ?? '');
         $amount = floatval(str_replace(',', '', $_POST['amount'] ?? 0));
@@ -84,21 +77,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $is_business_expense = intval($_POST['is_business_expense'] ?? 1);
         $notes = trim($_POST['notes'] ?? '');
         
-        if ($branch_id <= 0) throw new Exception('Please select a branch.');
         if (empty($expense_name)) throw new Exception('Please enter expense name.');
         if (empty($category)) throw new Exception('Please select a category.');
         if ($amount <= 0) throw new Exception('Please enter a valid amount.');
         
-        $branch_name = '';
-        foreach ($all_branches as $b) {
-            if ($b['id'] == $branch_id) {
-                $branch_name = $b['branch_name'];
-                break;
-            }
-        }
-        
-        // Handle new receipt
-        $receipt_path = $expense['receipt_path'];
+        // Receipt upload
+        $receipt_path = null;
         if (isset($_FILES['receipt']) && $_FILES['receipt']['error'] === UPLOAD_ERR_OK) {
             $upload_dir = '../../uploads/receipts/';
             if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
@@ -110,31 +94,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if ($_FILES['receipt']['size'] > 5 * 1024 * 1024) throw new Exception('File too large.');
             
             $filename = 'receipt_' . date('Ymd') . '_' . uniqid() . '.' . $ext;
-            $upload_path = $upload_dir . $filename;
-            
-            if (move_uploaded_file($_FILES['receipt']['tmp_name'], $upload_path)) {
-                // Delete old
-                if (!empty($expense['receipt_path']) && file_exists('../../' . $expense['receipt_path'])) {
-                    @unlink('../../' . $expense['receipt_path']);
-                }
+            if (move_uploaded_file($_FILES['receipt']['tmp_name'], $upload_dir . $filename)) {
                 $receipt_path = 'uploads/receipts/' . $filename;
             }
         }
         
-        $stmt = $db->prepare("UPDATE expenses SET 
-            expense_date = ?, branch = ?, branch_id = ?, expense_name = ?, category = ?,
-            amount = ?, description = ?, receipt_path = ?, is_business_expense = ?, notes = ?
-            WHERE id = ?");
+        $expense_number = 'EXP-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+        
+        $stmt = $db->prepare("INSERT INTO expenses 
+            (expense_number, employee_id, branch, branch_id, expense_date, expense_name, category, 
+             amount, description, receipt_path, is_business_expense, is_salary_related, notes) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)");
         
         $stmt->execute([
-            $expense_date, $branch_name, $branch_id, $expense_name, $category,
-            $amount, $description, $receipt_path, $is_business_expense, $notes, $expense_id
+            $expense_number, $user_id, $branch_name, $employee_branch_id,
+            $expense_date, $expense_name, $category, $amount, $description,
+            $receipt_path, $is_business_expense, $notes
         ]);
         
-        logActivity($user_id, 'Edit Expense', 'Expenses', $expense_id, '', 'Updated expense: ' . $expense['expense_number']);
+        $expense_id = $db->lastInsertId();
         
-        $_SESSION['success_message'] = 'Expense updated successfully!';
-        header('Location: view.php?id=' . $expense_id);
+        logActivity($user_id, 'Add Expense', 'Expenses', $expense_id, '', 
+            'Employee added expense: ' . $expense_number . ' - ' . formatCurrency($amount));
+        
+        $_SESSION['success_message'] = 'Expense added successfully! Ref: ' . $expense_number;
+        header('Location: index_employee.php');
         exit();
         
     } catch (Exception $e) {
@@ -143,46 +127,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-$edit_branch_name = $expense['branch_display_name'] ?? $expense['branch'] ?? 'Main';
-$edit_branch_code = $expense['branch_code'] ?? '';
+$success_message_session = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message_session = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- BLUE... wait, RED BRANCH CARD -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
-                <i class="fas fa-edit"></i>
+                <i class="fas fa-store-alt"></i>
             </div>
             <div class="branch-status-info">
-                <span class="branch-status-label">Editing Expense</span>
-                <span class="branch-status-name"><?php echo htmlspecialchars($edit_branch_name); ?></span>
-                <?php if (!empty($edit_branch_code)): ?>
-                    <span class="branch-status-code"><?php echo htmlspecialchars($edit_branch_code); ?></span>
+                <span class="branch-status-label">Adding Expense For</span>
+                <span class="branch-status-name"><?php echo htmlspecialchars($branch_name); ?></span>
+                <?php if ($branch_code): ?>
+                    <span class="branch-status-code"><?php echo htmlspecialchars($branch_code); ?></span>
+                <?php endif; ?>
+                <?php if ($branch_location): ?>
+                    <span class="branch-status-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <?php echo htmlspecialchars($branch_location); ?>
+                    </span>
                 <?php endif; ?>
             </div>
-            <a href="view.php?id=<?php echo $expense_id; ?>" class="btn-back-card">
+            <a href="index_employee.php" class="btn-back-card">
                 <i class="fas fa-arrow-left"></i>
-                <span>Back to View</span>
+                <span>Back</span>
             </a>
         </div>
 
         <div class="page-header">
             <div class="page-header-left">
-                <h2><i class="fas fa-edit"></i> Edit Expense</h2>
-                <span class="page-subtitle"><?php echo htmlspecialchars($expense['expense_number']); ?></span>
-            </div>
-            <div class="page-header-right">
-                <a href="view.php?id=<?php echo $expense_id; ?>" class="btn btn-view">
-                    <i class="fas fa-eye"></i> View
-                </a>
+                <h2><i class="fas fa-plus-circle"></i> Add Expense</h2>
+                <span class="page-subtitle">Record a new expense</span>
             </div>
         </div>
 
+        <?php if (!empty($success_message_session)): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> 
+                <span><?php echo htmlspecialchars($success_message_session); ?></span>
+                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+        <?php endif; ?>
+        
         <?php if ($show_error && !empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i> 
@@ -191,13 +188,31 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
+        <!-- INFO NOTE -->
+        <div class="info-note">
+            <div class="ine-icon">
+                <i class="fas fa-info-circle"></i>
+            </div>
+            <div class="ine-content">
+                <span class="ine-text">
+                    Expense will be saved for <strong><?php echo htmlspecialchars($employee['full_name']); ?></strong>
+                    at <strong><?php echo htmlspecialchars($branch_name); ?></strong>.
+                </span>
+                <span class="ine-badge">
+                    <i class="fas fa-receipt"></i> Recorded under your name
+                </span>
+            </div>
+        </div>
+
+        <!-- FORM -->
         <div class="form-container">
             <form method="POST" action="" id="expenseForm" enctype="multipart/form-data" onsubmit="return validateForm()">
-                <input type="hidden" name="action" value="edit_expense">
+                <input type="hidden" name="action" value="add_expense">
                 
                 <div class="form-section">
                     <div class="section-header">
                         <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
+                        <span class="section-badge">* Required fields</span>
                     </div>
                     
                     <div class="form-row">
@@ -206,23 +221,16 @@ include_once '../../includes/admin_topbar.php';
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-calendar-alt"></i></span>
                                 <input type="date" id="expense_date" name="expense_date" 
-                                       value="<?php echo htmlspecialchars($expense['expense_date']); ?>" 
+                                       value="<?php echo date('Y-m-d'); ?>" 
                                        class="form-control" required>
                             </div>
                         </div>
                         <div class="form-group">
-                            <label for="branch_id">Branch <span class="required">*</span></label>
+                            <label>Branch</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-store-alt"></i></span>
-                                <select id="branch_id" name="branch_id" class="form-control" required>
-                                    <option value="">Select Branch</option>
-                                    <?php foreach ($all_branches as $br): ?>
-                                        <option value="<?php echo $br['id']; ?>" <?php echo ($expense['branch_id'] == $br['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($br['branch_name']); ?>
-                                            <?php if ($br['branch_code']): ?>(<?php echo htmlspecialchars($br['branch_code']); ?>)<?php endif; ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <input type="text" value="<?php echo htmlspecialchars($branch_name); ?>" 
+                                       class="form-control" disabled>
                             </div>
                         </div>
                     </div>
@@ -239,8 +247,7 @@ include_once '../../includes/admin_topbar.php';
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-tag"></i></span>
                                 <input type="text" id="expense_name" name="expense_name" 
-                                       class="form-control" 
-                                       value="<?php echo htmlspecialchars($expense['expense_name']); ?>" required>
+                                       class="form-control" placeholder="e.g. Office Rent" required maxlength="200">
                             </div>
                         </div>
                         <div class="form-group">
@@ -250,8 +257,7 @@ include_once '../../includes/admin_topbar.php';
                                 <select id="category" name="category" class="form-control" required>
                                     <option value="">Select Category</option>
                                     <?php foreach ($categories as $cat): ?>
-                                        <option value="<?php echo htmlspecialchars($cat['category_name']); ?>" 
-                                            <?php echo ($expense['category'] == $cat['category_name']) ? 'selected' : ''; ?>>
+                                        <option value="<?php echo htmlspecialchars($cat['category_name']); ?>">
                                             <?php echo htmlspecialchars($cat['category_name']); ?>
                                         </option>
                                     <?php endforeach; ?>
@@ -267,7 +273,7 @@ include_once '../../includes/admin_topbar.php';
                                 <span class="input-icon"><i class="fas fa-money-bill-wave"></i></span>
                                 <input type="text" id="amount" name="amount" 
                                        class="form-control money-input" 
-                                       value="<?php echo number_format($expense['amount'], 0, '.', ','); ?>"
+                                       placeholder="0" inputmode="numeric"
                                        oninput="formatMoneyInput(this)" required>
                             </div>
                         </div>
@@ -276,8 +282,8 @@ include_once '../../includes/admin_topbar.php';
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-briefcase"></i></span>
                                 <select id="is_business_expense" name="is_business_expense" class="form-control">
-                                    <option value="1" <?php echo ($expense['is_business_expense'] == 1) ? 'selected' : ''; ?>>Business Expense</option>
-                                    <option value="0" <?php echo ($expense['is_business_expense'] == 0) ? 'selected' : ''; ?>>Personal / Other</option>
+                                    <option value="1">Business Expense</option>
+                                    <option value="0">Personal / Other</option>
                                 </select>
                             </div>
                         </div>
@@ -288,7 +294,7 @@ include_once '../../includes/admin_topbar.php';
                             <label for="description">Description</label>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-align-left"></i></span>
-                                <textarea id="description" name="description" class="form-control textarea-control" rows="3"><?php echo htmlspecialchars($expense['description'] ?? ''); ?></textarea>
+                                <textarea id="description" name="description" class="form-control textarea-control" rows="2" placeholder="Brief description..."></textarea>
                             </div>
                         </div>
                     </div>
@@ -296,19 +302,13 @@ include_once '../../includes/admin_topbar.php';
                     <div class="form-row">
                         <div class="form-group full-width">
                             <label for="receipt">Receipt (Optional)</label>
-                            <?php if (!empty($expense['receipt_path'])): ?>
-                                <div class="current-receipt">
-                                    <i class="fas fa-paperclip"></i>
-                                    <span>Current: <?php echo basename($expense['receipt_path']); ?></span>
-                                </div>
-                            <?php endif; ?>
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-paperclip"></i></span>
                                 <input type="file" id="receipt" name="receipt" 
                                        class="form-control file-input" 
                                        accept=".jpg,.jpeg,.png,.pdf,.gif">
                             </div>
-                            <small>Max 5MB • Leave empty to keep current</small>
+                            <small>Max 5MB • JPG, PNG, PDF, GIF</small>
                         </div>
                     </div>
                 </div>
@@ -319,7 +319,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="form-row">
                         <div class="form-group full-width">
-                            <textarea id="notes" name="notes" class="form-control textarea-control" rows="2"><?php echo htmlspecialchars($expense['notes'] ?? ''); ?></textarea>
+                            <textarea id="notes" name="notes" class="form-control textarea-control" rows="2" placeholder="Additional notes (optional)..."></textarea>
                         </div>
                     </div>
                 </div>
@@ -331,30 +331,30 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                         <div class="summary-box-content">
                             <span class="summary-box-label">Expense Amount</span>
-                            <span class="summary-box-value" id="amountDisplay"><?php echo formatCurrency($expense['amount']); ?></span>
+                            <span class="summary-box-value" id="amountDisplay">TSh 0</span>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-actions">
                     <button type="submit" class="btn btn-submit" id="submitBtn">
-                        <i class="fas fa-save"></i> Update Expense
+                        <i class="fas fa-save"></i> Save Expense
                     </button>
                     <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
                         <i class="fas fa-undo"></i> Reset
                     </button>
-                    <a href="view.php?id=<?php echo $expense_id; ?>" class="btn btn-cancel">
+                    <a href="index_employee.php" class="btn btn-cancel">
                         <i class="fas fa-times"></i> Cancel
                     </a>
                 </div>
             </form>
         </div>
+
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
-/* Same CSS as add.php - RED theme */
 <?php include __DIR__ . '/_styles.php'; ?>
 </style>
 
@@ -375,25 +375,22 @@ function formatMoneyInput(input) {
     updateSummary();
 }
 function updateSummary() {
-    var amountInput = document.getElementById('amount');
-    var amount = 0;
-    if (amountInput && amountInput.value) amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
+    var a = document.getElementById('amount');
+    var amount = (a && a.value) ? parseFloat(a.value.replace(/,/g, '')) || 0 : 0;
     var d = document.getElementById('amountDisplay');
     if (d) d.textContent = 'TSh ' + amount.toLocaleString('en-US');
 }
 function validateForm() {
-    var b = document.getElementById('branch_id');
-    if (!b || b.value === '') { alert('Please select a branch.'); b.focus(); return false; }
     var n = document.getElementById('expense_name');
-    if (!n || n.value.trim() === '') { alert('Please enter expense name.'); n.focus(); return false; }
+    if (!n || n.value.trim() === '') { alert('Enter expense name.'); n.focus(); return false; }
     var c = document.getElementById('category');
-    if (!c || c.value === '') { alert('Please select category.'); c.focus(); return false; }
+    if (!c || c.value === '') { alert('Select category.'); c.focus(); return false; }
     var a = document.getElementById('amount');
     var amount = parseFloat(a.value.replace(/,/g, '')) || 0;
-    if (amount <= 0) { alert('Please enter a valid amount.'); a.focus(); return false; }
-    var btn = document.getElementById('submitBtn');
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
-    btn.disabled = true;
+    if (amount <= 0) { alert('Enter valid amount.'); a.focus(); return false; }
+    var b = document.getElementById('submitBtn');
+    b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    b.disabled = true;
     return true;
 }
 function confirmReset() { return confirm('Reset form?'); }

@@ -1,16 +1,13 @@
 <?php
 // ================================================================
-// FILE: modules/evening_stock/index.php
-// EVENING STOCK - ADMIN INDEX (BLUE THEME)
-// ✅ Blue theme (badala ya purple)
-// ✅ Summaries cards (Total, Waiting, Approved, Float, Cash, Grand)
-// ✅ Add button + Daily Reports link
-// ✅ Filters (Date range, Branch, Status)
-// ✅ Continuous table na branch separators
-// ✅ Scroll buttons <> kwa horizontal scroll
-// ✅ Search functionality
-// ✅ Continuous numbering
-// ✅ Edit + View actions
+// FILE: modules/evening_stock/index_employee.php
+// EVENING STOCK - EMPLOYEE VIEW ONLY
+// ✅ Inafanana na admin index.php
+// ✅ Cards ni BLUE (sio purple)
+// ✅ Button ya Add Evening Stock imewekwa
+// ✅ Employee anaona branch yake pekee
+// ✅ Content haifichwi na sidebar wala topbar
+// ✅ Footer inakaa CHINI kabisa
 // ================================================================
 
 error_reporting(E_ALL);
@@ -30,12 +27,17 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
-$role = $_SESSION['role'] ?? 'employee';
+$role    = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin') {
-    header('Location: ../dashboard/employee.php');
-    exit();
-}
+// ============================================================
+// GET EMPLOYEE INFO
+// ============================================================
+$stmt = $db->prepare("SELECT branch_id, branch, full_name FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$emp = $stmt->fetch(PDO::FETCH_ASSOC);
+$employee_branch_id = $emp['branch_id'] ?? 0;
+$employee_branch    = $emp['branch'] ?? 'Main';
+$employee_name      = $emp['full_name'] ?? 'Employee';
 
 // ============================================================
 // GET FILTERS
@@ -44,42 +46,33 @@ $from_date     = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01')
 $to_date       = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
 $status_filter = isset($_GET['status'])    ? $_GET['status']    : '';
 
-$selected_branch = 0;
-if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
-    $selected_branch = intval($_GET['branch_id']);
-} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
-    $selected_branch = intval($_GET['branch']);
-    if ($selected_branch < 0) $selected_branch = 0;
-}
+// Employee anaona branch yake pekee
+$selected_branch = $employee_branch_id;
 
 // ============================================================
-// GET BRANCHES
+// GET BRANCH INFO (for filter card display)
 // ============================================================
-try {
-    $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
-    $stmt->execute();
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    $branches = [];
-}
-
-// Selected branch info
-$filter_branch_name     = 'All Branches';
+$filter_branch_name     = $employee_branch;
 $filter_branch_code     = '';
 $filter_branch_location = '';
-if ($selected_branch > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch) {
+
+try {
+    if ($selected_branch > 0) {
+        $stmt = $db->prepare("SELECT * FROM branches WHERE id = ? LIMIT 1");
+        $stmt->execute([$selected_branch]);
+        $b = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($b) {
             $filter_branch_name     = $b['branch_name'];
             $filter_branch_code     = $b['branch_code'] ?? '';
             $filter_branch_location = $b['location'] ?? '';
-            break;
         }
     }
+} catch (PDOException $e) {
+    // fallback
 }
 
 // ============================================================
-// BUILD QUERY
+// BUILD QUERY (employee = branch yake pekee)
 // ============================================================
 try {
     $sql = "SELECT es.*,
@@ -108,7 +101,7 @@ try {
         $params[] = $status_filter;
     }
 
-    $sql .= " ORDER BY es.branch_id ASC, es.stock_date DESC, es.id DESC";
+    $sql .= " ORDER BY es.stock_date DESC, es.id DESC";
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -120,7 +113,7 @@ try {
 }
 
 // ============================================================
-// BUILD FLAT LIST (with branch transitions)
+// BUILD FLAT LIST + TOTALS
 // ============================================================
 $flat_stocks = [];
 $grand_totals = [
@@ -135,19 +128,6 @@ $grand_totals = [
     'branches_count' => 0
 ];
 
-$branch_summary = [];
-foreach ($branches as $b) {
-    $branch_summary[$b['id']] = [
-        'branch_id'   => $b['id'],
-        'branch_name' => $b['branch_name'],
-        'branch_code' => $b['branch_code'] ?? '',
-        'count'       => 0,
-        'float'       => 0,
-        'cash'        => 0,
-        'total'       => 0
-    ];
-}
-
 $previous_branch_id = null;
 $branch_ids_seen    = [];
 
@@ -155,19 +135,13 @@ foreach ($all_stocks as $s) {
     $b_id = $s['branch_id'] ?? 0;
     $is_new_branch = ($previous_branch_id !== null && $previous_branch_id != $b_id);
 
-    if (isset($branch_summary[$b_id])) {
-        $branch_summary[$b_id]['count']++;
-        $branch_summary[$b_id]['float'] += floatval($s['cumm_total'] ?? 0);
-        $branch_summary[$b_id]['cash']  += floatval($s['cash_balance'] ?? 0);
-        $branch_summary[$b_id]['total'] += floatval($s['cumm_total'] ?? 0) + floatval($s['cash_balance'] ?? 0);
-    }
     if (!in_array($b_id, $branch_ids_seen)) {
         $branch_ids_seen[] = $b_id;
     }
 
     $grand_totals['count']++;
     $grand_totals[$s['status']] = ($grand_totals[$s['status']] ?? 0) + 1;
-    $grand_totals['total_float'] += floatval($s['cumm_total'] ?? 0);
+    $grand_totals['total_float'] += floatval($s['cumm_total']   ?? 0);
     $grand_totals['total_cash']  += floatval($s['cash_balance'] ?? 0);
     $grand_totals['grand_total'] += floatval($s['cumm_total'] ?? 0) + floatval($s['cash_balance'] ?? 0);
 
@@ -201,37 +175,32 @@ if (isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <div class="main-wrapper">
     <div class="main-content">
 
         <!-- ============================================================
-        BRANCH FILTER CARD — BLUE
+        BRANCH FILTER CARD
         ============================================================ -->
-        <div class="branch-filter-card <?php echo $selected_branch > 0 ? 'filter-active' : 'filter-all'; ?>">
+        <div class="branch-filter-card filter-active">
             <div class="filter-left">
-                <i class="fas <?php echo $selected_branch > 0 ? 'fa-store-alt' : 'fa-globe-africa'; ?>"></i>
+                <i class="fas fa-store-alt"></i>
                 <span class="filter-label">Showing:</span>
                 <span class="filter-name"><?php echo htmlspecialchars($filter_branch_name); ?></span>
                 <?php if ($filter_branch_code): ?>
                     <span class="filter-code">(<?php echo htmlspecialchars($filter_branch_code); ?>)</span>
                 <?php endif; ?>
-                <?php if ($selected_branch > 0): ?>
-                    <a href="?branch_id=0&branch=0&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>&status=<?php echo $status_filter; ?>" class="filter-clear">
-                        <i class="fas fa-times-circle"></i> Show All Branches
-                    </a>
-                <?php endif; ?>
+                <span class="filter-view-only">
+                    <i class="fas fa-eye"></i> View Only
+                </span>
             </div>
             <div class="filter-right">
-                <a href="add.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn btn-add">
+                <a href="add_employee.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn btn-add">
                     <i class="fas fa-plus"></i> New Evening Stock
-                </a>
-                <a href="../daily_report/index.php?branch=<?php echo $selected_branch; ?>" class="btn btn-info">
-                    <i class="fas fa-clipboard-check"></i> Daily Reports
                 </a>
             </div>
         </div>
@@ -243,11 +212,7 @@ include_once '../../includes/admin_topbar.php';
             <div class="header-left">
                 <h2><i class="fas fa-moon" style="color:#2563EB;"></i> Evening Stock</h2>
                 <p class="text-muted">
-                    <?php if ($selected_branch > 0): ?>
-                        Evening stock reports for <strong><?php echo htmlspecialchars($filter_branch_name); ?></strong>
-                    <?php else: ?>
-                        All evening stock reports (continuous view)
-                    <?php endif; ?>
+                    Evening stock reports for <strong><?php echo htmlspecialchars($filter_branch_name); ?></strong>
                 </p>
             </div>
         </div>
@@ -283,7 +248,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="sh-info">
                         <span class="sh-title">Evening Stock Summary</span>
                         <span class="sh-subtitle">
-                            <?php echo $selected_branch > 0 ? htmlspecialchars($filter_branch_name) : 'All Branches'; ?>
+                            <?php echo htmlspecialchars($filter_branch_name); ?>
                             • <?php echo date('d M Y', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
                         </span>
                     </div>
@@ -303,7 +268,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="sc-content">
                         <span class="sc-label">Total Stocks</span>
                         <span class="sc-value"><?php echo $grand_totals['count']; ?></span>
-                        <span class="sc-sub"><?php echo $grand_totals['branches_count']; ?> branches</span>
+                        <span class="sc-sub"><?php echo $grand_totals['branches_count']; ?> branch</span>
                     </div>
                 </div>
 
@@ -383,17 +348,6 @@ include_once '../../includes/admin_topbar.php';
                     <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
                 </div>
                 <div class="filter-group">
-                    <label>Branch</label>
-                    <select name="branch_id" class="form-control">
-                        <option value="0">All Branches</option>
-                        <?php foreach ($branches as $b): ?>
-                            <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($b['branch_name']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="filter-group">
                     <label>Status</label>
                     <select name="status" class="form-control">
                         <option value="">All Status</option>
@@ -406,7 +360,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
                 <div class="filter-group filter-buttons">
                     <button type="submit" class="btn btn-filter"><i class="fas fa-search"></i> Filter</button>
-                    <a href="index.php" class="btn btn-reset"><i class="fas fa-undo"></i> Reset</a>
+                    <a href="index_employee.php" class="btn btn-reset"><i class="fas fa-undo"></i> Reset</a>
                 </div>
             </form>
         </div>
@@ -418,7 +372,7 @@ include_once '../../includes/admin_topbar.php';
 
             <div class="table-container-main">
 
-                <!-- BLUE HEADER -->
+                <!-- RED HEADER (Blue for employee) -->
                 <div class="table-header-blue">
 
                     <div class="thb-left">
@@ -451,8 +405,8 @@ include_once '../../includes/admin_topbar.php';
 
                     <div class="thb-right">
                         <span class="thb-branches-badge">
-                            <i class="fas fa-store-alt"></i>
-                            <?php echo $grand_totals['branches_count']; ?> branches
+                            <i class="fas fa-eye"></i>
+                            View Only
                         </span>
                     </div>
                 </div>
@@ -472,7 +426,7 @@ include_once '../../includes/admin_topbar.php';
                                 <th class="text-right">Cash</th>
                                 <th class="text-right">Total</th>
                                 <th>Status</th>
-                                <th style="width: 100px;">Actions</th>
+                                <th style="width: 80px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -513,7 +467,7 @@ include_once '../../includes/admin_topbar.php';
                                         </span>
                                     </td>
                                     <td>
-                                        <a href="view.php?id=<?php echo $s['id']; ?>" class="stock-link">
+                                        <a href="view_employee.php?id=<?php echo $s['id']; ?>" class="stock-link">
                                             <?php echo htmlspecialchars($s['stock_number']); ?>
                                         </a>
                                     </td>
@@ -558,11 +512,8 @@ include_once '../../includes/admin_topbar.php';
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $s['id']; ?>" class="btn-action btn-view" title="View">
+                                            <a href="view_employee.php?id=<?php echo $s['id']; ?>" class="btn-action btn-view" title="View">
                                                 <i class="fas fa-eye"></i>
-                                            </a>
-                                            <a href="edit.php?id=<?php echo $s['id']; ?>" class="btn-action btn-edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
                                             </a>
                                         </div>
                                     </td>
@@ -587,21 +538,17 @@ include_once '../../includes/admin_topbar.php';
                 <i class="fas fa-moon"></i>
                 <h3>No Evening Stocks</h3>
                 <p>No evening stock reports found for the selected period.</p>
-                <?php if ($selected_branch > 0): ?>
-                    <a href="add.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Add First Evening Stock
-                    </a>
-                <?php else: ?>
-                    <a href="add.php" class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Select Branch & Add
-                    </a>
-                <?php endif; ?>
+                <a href="add_employee.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Add First Evening Stock
+                </a>
             </div>
         <?php endif; ?>
 
-    </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
-</div>
+    </div><!-- /.main-content -->
+
+    <?php include_once '../../includes/employee_footer.php'; ?>
+
+</div><!-- /.main-wrapper -->
 
 <style>
 /* ============================================================
@@ -619,11 +566,15 @@ include_once '../../includes/admin_topbar.php';
     --es-shadow: rgba(0,0,0,0.06);
     --es-shadow-md: rgba(0,0,0,0.1);
 
+    /* Blue theme colors */
     --es-blue-900: #1E3A8A;
     --es-blue-700: #1D4ED8;
     --es-blue-600: #2563EB;
     --es-blue-500: #3B82F6;
     --es-blue-100: #DBEAFE;
+
+    --sidebar-width: 220px;
+    --topbar-height: 70px;
 }
 
 html.dark-mode {
@@ -640,6 +591,7 @@ html.dark-mode {
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+
 html, body {
     overflow-x: hidden !important;
     max-width: 100vw !important;
@@ -649,9 +601,68 @@ html, body {
 body {
     background: var(--es-bg) !important;
     color: var(--es-text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding-top: 0 !important;
+    margin: 0 !important;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
-.main-wrapper { background: var(--es-bg) !important; overflow-x: hidden !important; }
-.main-content { background: var(--es-bg) !important; overflow-x: hidden !important; max-width: 100% !important; padding: 16px 20px !important; }
+
+/* ============================================================
+   MAIN WRAPPER
+   ============================================================ */
+.main-wrapper {
+    background: var(--es-bg) !important;
+    margin-left: var(--sidebar-width) !important;
+    padding-top: var(--topbar-height);
+    width: calc(100% - var(--sidebar-width)) !important;
+    max-width: calc(100% - var(--sidebar-width)) !important;
+    min-height: 100vh;
+    overflow-x: hidden !important;
+    display: flex;
+    flex-direction: column;
+}
+
+.main-content {
+    background: var(--es-bg) !important;
+    padding: 16px 20px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    overflow-x: hidden !important;
+    flex: 1;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.employee-footer {
+    margin-left: 0 !important;
+    margin-top: auto !important;
+    margin-bottom: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: #ffffff !important;
+    border-top: 1px solid var(--es-border) !important;
+    padding: 10px 20px !important;
+    transition: background 0.3s ease, border-color 0.3s ease;
+}
+html.dark-mode .employee-footer {
+    background: #1e293b !important;
+    border-color: #334155 !important;
+}
+.employee-footer .footer-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: #6b7280;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
+.employee-footer .footer-version { font-weight: 600; color: #bb0404; }
 
 /* ============================================================
    BRANCH FILTER CARD — BLUE
@@ -679,11 +690,11 @@ body {
     border-radius: 50%;
     pointer-events: none;
 }
-.branch-filter-card.filter-all {
-    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
-}
 .branch-filter-card.filter-active {
     background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
+}
+.branch-filter-card.filter-all {
+    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
 }
 .filter-left {
     display: flex;
@@ -706,21 +717,20 @@ body {
     border-radius: 10px;
     font-family: 'Courier New', monospace;
 }
-.filter-clear {
-    margin-left: 8px;
-    color: #FFFFFF;
-    text-decoration: none;
-    font-size: 12px;
-    padding: 5px 14px;
-    background: rgba(255,255,255,0.15);
-    border-radius: 12px;
-    transition: all 0.3s ease;
+.filter-view-only {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
+    color: #FFFFFF;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
 }
-.filter-clear:hover { background: rgba(255,255,255,0.25); color: #FFFFFF; transform: translateY(-1px); }
 .filter-right { display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 1; }
 
 /* ============================================================
@@ -789,7 +799,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 
 /* ============================================================
-   STATS WRAPPER — BLUE
+   STATS WRAPPER — BLUE THEME
    ============================================================ */
 .stats-wrapper {
     background: linear-gradient(135deg, #2563EB 0%, #1E40AF 100%);
@@ -916,10 +926,10 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     border: 1.5px solid rgba(255, 255, 255, 0.3);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
-/* Blue theme icons */
-.sc-icon-blue   { background: linear-gradient(135deg, #3B82F6, #2563EB); }
-.sc-icon-sky    { background: linear-gradient(135deg, #0EA5E9, #0284C7); }
-.sc-icon-cyan   { background: linear-gradient(135deg, #06B6D4, #0891B2); }
+/* ⭐ Blue theme icons */
+.sc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); }
+.sc-icon-sky  { background: linear-gradient(135deg, #0EA5E9, #0284C7); }
+.sc-icon-cyan { background: linear-gradient(135deg, #06B6D4, #0891B2); }
 .sc-icon-orange { background: linear-gradient(135deg, #F59E0B, #D97706); }
 .sc-icon-green  { background: linear-gradient(135deg, #10B981, #059669); }
 .sc-icon-teal   { background: linear-gradient(135deg, #14B8A6, #0D9488); }
@@ -1055,7 +1065,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 .btn-secondary:hover { background: var(--es-border); color: var(--es-text); }
 
 /* ============================================================
-   MAIN TABLE
+   TABLE CONTAINER
    ============================================================ */
 .table-container-main {
     background: var(--es-card-bg);
@@ -1067,7 +1077,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     max-width: 100%;
 }
 
-/* BLUE table header */
+/* ⭐ Blue table header (badala ya purple) */
 .table-header-blue {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -1529,19 +1539,7 @@ html.dark-mode .type-badge.type-gray { background: #374151; color: #9CA3AF; }
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(29, 78, 216, 0.4);
 }
-.btn-edit {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #D97706;
-    border: 1.5px solid #FCD34D;
-}
-.btn-edit:hover {
-    background: linear-gradient(135deg, #D97706, #F59E0B);
-    color: #FFFFFF;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
-}
 html.dark-mode .btn-view { background: linear-gradient(135deg, #1E3A5F, #1E40AF); color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .btn-edit { background: linear-gradient(135deg, #5F3A1E, #78350F); color: #FCD34D; border-color: #F59E0B; }
 
 .no-results-main {
     text-align: center;
@@ -1598,6 +1596,7 @@ html.dark-mode .btn-edit { background: linear-gradient(135deg, #5F3A1E, #78350F)
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1024px) {
+    .main-content { padding: 16px 18px !important; }
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
     .sc-value { font-size: 14px; }
     .table-header-blue {
@@ -1612,7 +1611,28 @@ html.dark-mode .btn-edit { background: linear-gradient(135deg, #5F3A1E, #78350F)
     .scroll-btn-header { width: 40px; height: 40px; }
 }
 @media (max-width: 768px) {
+    .main-wrapper {
+        margin-left: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        padding-top: 62px;
+        min-height: 100vh;
+    }
     .main-content { padding: 12px !important; }
+
+    .employee-footer {
+        margin-left: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        padding: 10px 14px !important;
+    }
+    .employee-footer .footer-content {
+        font-size: 11px;
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+    }
+
     .branch-filter-card { flex-direction: column; align-items: flex-start; padding: 14px 18px; }
     .filter-right { width: 100%; }
     .filter-right .btn { flex: 1; justify-content: center; }
@@ -1633,6 +1653,11 @@ html.dark-mode .btn-edit { background: linear-gradient(135deg, #5F3A1E, #78350F)
     .scroll-btn-header i { font-size: 13px; }
 }
 @media (max-width: 480px) {
+    .main-wrapper { padding-top: 58px; }
+    .main-content { padding: 12px !important; }
+    .employee-footer { padding: 8px 12px !important; }
+    .employee-footer .footer-content { font-size: 10px; }
+
     .stats-grid { grid-template-columns: 1fr; }
     .sc-value { font-size: 16px; }
     .stat-card { padding: 14px 16px; }
