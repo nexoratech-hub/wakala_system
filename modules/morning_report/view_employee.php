@@ -1,12 +1,14 @@
 <?php
 // ================================================================
 // FILE: modules/morning_report/view_employee.php
-// WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT (EMPLOYEE)
-// ✅ BLUE THEME (matching na Admin & Add Evening Stock)
+// WAKALA FINANCIAL SYSTEM - VIEW MORNING REPORT (EMPLOYEE) - FINAL
+// 
+// ✅ BLUE THEME (matching with admin & other pages)
+// ✅ GREEN THEME providers cards (soft green background)
 // ✅ 3 Providers per row (grid layout)
-// ✅ Cash + Grand Total chini
-// ✅ Employee anaona reports za branch yake tu
-// ✅ Branch selector imefichwa kwenye topbar
+// ✅ Cash + Grand Total at bottom
+// ✅ Employee sees only their own branch's reports
+// ✅ Branch selector hidden from topbar
 // ================================================================
 
 require_once '../../config/config.php';
@@ -383,7 +385,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-             PROVIDERS - CARDS (3 KWA ROW) - Blue Theme
+             PROVIDERS - GREEN THEME CARDS (3 PER ROW)
              ============================================================ -->
         <div class="providers-section">
             
@@ -403,10 +405,10 @@ include_once '../../includes/admin_topbar.php';
 
             <?php if (count($providers) > 0): ?>
                 
-                <!-- Providers Grid - 3 kwa row -->
+                <!-- ✅ Providers Grid - 3 per row - GREEN THEME -->
                 <div class="providers-grid">
                     <?php $pi = 1; foreach ($providers as $p): 
-                        $p_color = $p['color_code'] ?? '#2563EB';
+                        $p_color = $p['color_code'] ?? '#059669';
                         $p_icon = $p['icon_class'] ?? 'fas fa-university';
                         $p_type = $p['provider_type'] ?? 'bank';
                         $p_type_label = ucfirst(str_replace('_', ' ', $p_type));
@@ -414,9 +416,9 @@ include_once '../../includes/admin_topbar.php';
                         $p_name = $p['provider_name'] ?? 'N/A';
                         $p_float = floatval(str_replace(',', '', $p['float_balance']));
                     ?>
-                        <div class="provider-card">
+                        <div class="provider-card provider-card-green">
                             
-                            <!-- Card Header -->
+                            <!-- Card Header - GREEN -->
                             <div class="provider-card-header">
                                 <div class="provider-card-number"><?php echo $pi++; ?></div>
                                 <div class="provider-card-icon" style="background: <?php echo htmlspecialchars($p_color); ?>;">
@@ -430,7 +432,7 @@ include_once '../../includes/admin_topbar.php';
                                 </div>
                             </div>
                             
-                            <!-- Card Body -->
+                            <!-- Card Body - GREEN TEXT -->
                             <div class="provider-card-body">
                                 <div class="provider-card-name">
                                     <?php echo htmlspecialchars($p_name); ?>
@@ -441,7 +443,7 @@ include_once '../../includes/admin_topbar.php';
                                 </div>
                             </div>
                             
-                            <!-- Card Footer - Float (BLUE) -->
+                            <!-- Card Footer - Float (GREEN) -->
                             <div class="provider-card-footer">
                                 <span class="provider-card-footer-label">
                                     <i class="fas fa-coins"></i> Float Balance
@@ -455,7 +457,7 @@ include_once '../../includes/admin_topbar.php';
                     <?php endforeach; ?>
                 </div>
 
-                <!-- CASH SUMMARY - 3 CARDS (CHINI YA PROVIDERS) -->
+                <!-- CASH SUMMARY - 3 CARDS (BELOW PROVIDERS) -->
                 <div class="cash-summary-section">
                     
                     <div class="cash-summary-card float-card">
@@ -552,7 +554,13 @@ include_once '../../includes/admin_topbar.php';
     --blue-accent: #60a5fa;
     
     --green-primary: #059669;
+    --green-dark: #047857;
+    --green-darker: #065F46;
     --green-light: #10b981;
+    --green-lighter: #d1fae5;
+    --green-lightest: #ecfdf5;
+    --green-accent: #34d399;
+    
     --orange-primary: #d97706;
     --red-primary: #bb0404;
     --purple-primary: #7c3aed;
@@ -572,6 +580,8 @@ html.dark-mode {
     --border-color: #334155;
     --blue-lighter: #1e3a5f;
     --blue-lightest: #1e293b;
+    --green-lighter: #065f46;
+    --green-lightest: #064e3b;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -720,7 +730,7 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
 .employee-code { display: inline-block; padding: 2px 10px; background: #059669; color: #FFF; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; align-self: flex-start; }
 
 /* ============================================================
-   PROVIDERS SECTION - BLUE
+   PROVIDERS SECTION - BLUE HEADER
    ============================================================ */
 .providers-section {
     background: var(--bg-card);
@@ -731,7 +741,6 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     overflow: hidden;
 }
 
-/* Section Header - BLUE THEME */
 .section-header {
     background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
     padding: 18px 24px;
@@ -792,7 +801,9 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     z-index: 1;
 }
 
-/* Providers Grid - 3 KWA ROW */
+/* ============================================================
+   ✅ PROVIDERS GRID - GREEN THEME - 3 PER ROW
+   ============================================================ */
 .providers-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -800,45 +811,86 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
     padding: 20px;
 }
 
+/* ✅ PROVIDER CARD - GREEN THEME */
 .provider-card {
-    background: var(--bg-card);
-    border: 2px solid var(--border-color);
-    border-radius: 14px;
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 16px;
     overflow: hidden;
     transition: all 0.3s ease;
     position: relative;
     min-width: 0;
-}
-.provider-card:hover {
-    border-color: #2563EB;
-    transform: translateY(-4px);
-    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.12);
 }
 
+/* Decorative circle */
+.provider-card::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    right: -40px;
+    width: 120px;
+    height: 120px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* Dark mode */
+html.dark-mode .provider-card {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+}
+html.dark-mode .provider-card::before {
+    background: rgba(16, 185, 129, 0.2);
+}
+
+.provider-card:hover {
+    border-color: #059669;
+    transform: translateY(-6px);
+    box-shadow: 0 12px 32px rgba(5, 150, 105, 0.3);
+}
+html.dark-mode .provider-card:hover {
+    border-color: #34D399;
+    box-shadow: 0 12px 32px rgba(16, 185, 129, 0.4);
+}
+
+/* ============================================================
+   ✅ PROVIDER CARD HEADER
+   ============================================================ */
 .provider-card-header {
     padding: 14px 16px;
-    background: var(--bg-table-even);
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
     display: flex;
     align-items: center;
     gap: 12px;
-    border-bottom: 1.5px solid var(--border-color);
+    border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
     position: relative;
+    z-index: 1;
 }
+html.dark-mode .provider-card-header {
+    background: rgba(15, 23, 42, 0.3);
+    border-bottom-color: rgba(16, 185, 129, 0.3);
+}
+
 .provider-card-number {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
-    background: var(--blue-lighter);
-    color: var(--blue-primary);
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #059669, #10B981);
+    color: #FFFFFF;
     font-size: 12px;
     font-weight: 800;
-    border: 1px solid #BFDBFE;
+    border: 2px solid rgba(255, 255, 255, 0.5);
     flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(5, 150, 105, 0.3);
 }
-html.dark-mode .provider-card-number { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+
 .provider-card-icon {
     width: 42px;
     height: 42px;
@@ -849,10 +901,15 @@ html.dark-mode .provider-card-number { background: #1e3a5f; color: #93c5fd; bord
     color: #FFFFFF;
     font-size: 17px;
     flex-shrink: 0;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.4);
 }
-.provider-card-type { margin-left: auto; flex-shrink: 0; }
+.provider-card-type {
+    margin-left: auto;
+    flex-shrink: 0;
+}
 
+/* Type Badges */
 .provider-type-badge {
     display: inline-flex;
     align-items: center;
@@ -864,89 +921,112 @@ html.dark-mode .provider-card-number { background: #1e3a5f; color: #93c5fd; bord
     text-transform: uppercase;
     letter-spacing: 0.5px;
     white-space: nowrap;
+    border: 1px solid;
 }
 .provider-type-badge i { font-size: 10px; }
-.type-bank { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
-.type-mobile_money { background: #EDE9FE; color: #7C3AED; border: 1px solid #C4B5FD; }
-.type-other { background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A; }
-html.dark-mode .type-bank { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
-html.dark-mode .type-mobile_money { background: #4c1d95; color: #ddd6fe; border-color: #8b5cf6; }
-html.dark-mode .type-other { background: #5f3a1e; color: #fbbf24; border-color: #d97706; }
+.type-bank { background: rgba(5, 150, 105, 0.15); color: #047857; border-color: rgba(5, 150, 105, 0.3); }
+.type-mobile_money { background: rgba(124, 58, 237, 0.15); color: #6D28D9; border-color: rgba(124, 58, 237, 0.3); }
+.type-other { background: rgba(217, 119, 6, 0.15); color: #B45309; border-color: rgba(217, 119, 6, 0.3); }
+html.dark-mode .type-bank { background: rgba(16, 185, 129, 0.25); color: #6EE7B7; border-color: rgba(16, 185, 129, 0.4); }
+html.dark-mode .type-mobile_money { background: rgba(167, 139, 250, 0.25); color: #C4B5FD; border-color: rgba(139, 92, 246, 0.4); }
+html.dark-mode .type-other { background: rgba(251, 191, 36, 0.25); color: #FCD34D; border-color: rgba(245, 158, 11, 0.4); }
 
+/* ============================================================
+   ✅ PROVIDER CARD BODY - GREEN TEXT
+   ============================================================ */
 .provider-card-body {
-    padding: 16px;
+    padding: 18px 16px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
+    position: relative;
+    z-index: 1;
 }
 .provider-card-name {
     font-size: 15px;
     font-weight: 800;
-    color: var(--text-primary);
+    color: #065F46;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.3;
+    letter-spacing: -0.2px;
 }
+html.dark-mode .provider-card-name {
+    color: #D1FAE5;
+}
+
 .provider-card-code {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 800;
     font-family: 'Courier New', monospace;
-    color: #D97706;
-    background: #FEF3C7;
-    padding: 4px 10px;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 5px 12px;
     border-radius: 8px;
     align-self: flex-start;
-    border: 1px solid #FDE68A;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.1);
 }
-.provider-card-code i { font-size: 10px; }
-html.dark-mode .provider-card-code { background: #5f3a1e; color: #fbbf24; border-color: #92400e; }
+.provider-card-code i { font-size: 10px; color: #059669; }
+html.dark-mode .provider-card-code {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+html.dark-mode .provider-card-code i { color: #34D399; }
 
-/* Provider Card Footer - Float (BLUE) */
+/* ============================================================
+   ✅ PROVIDER CARD FOOTER - FLOAT (GREEN)
+   ============================================================ */
 .provider-card-footer {
-    padding: 14px 16px;
-    background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
-    border-top: 1.5px solid #BFDBFE;
+    padding: 16px;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    border-top: 2px solid #065F46;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+    position: relative;
+    z-index: 1;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 html.dark-mode .provider-card-footer {
-    background: linear-gradient(135deg, #1e3a5f, #1e40af);
-    border-top-color: #3b82f6;
+    background: linear-gradient(135deg, #047857 0%, #065F46 100%);
+    border-top-color: #10B981;
 }
+
 .provider-card-footer-label {
     font-size: 10px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #1E40AF;
+    letter-spacing: 1.2px;
+    color: rgba(255, 255, 255, 0.85);
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
 }
-.provider-card-footer-label i { font-size: 11px; }
-html.dark-mode .provider-card-footer-label { color: #93c5fd; }
+.provider-card-footer-label i { font-size: 11px; color: #FCD34D; }
+
 .provider-card-footer-value {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
-    color: #1E3A8A;
-    letter-spacing: -0.3px;
+    color: #FFFFFF;
+    letter-spacing: -0.5px;
     line-height: 1.2;
     word-break: break-all;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
-html.dark-mode .provider-card-footer-value { color: #60a5fa; }
 
 /* ============================================================
-   CASH SUMMARY - 3 CARDS (CHINI YA PROVIDERS)
+   CASH SUMMARY - 3 CARDS (BELOW PROVIDERS)
    ============================================================ */
 .cash-summary-section {
     padding: 0 20px 20px 20px;
@@ -1114,7 +1194,7 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
     .employee-footer .footer-content { font-size: 11px; flex-direction: column; text-align: center; gap: 4px; }
 }
 @media (max-width: 480px) {
-    .provider-card-footer-value { font-size: 16px; }
+    .provider-card-footer-value { font-size: 18px; }
     .cash-summary-value { font-size: 15px; }
     .provider-card-icon { width: 38px; height: 38px; font-size: 15px; }
     .cash-summary-icon { width: 46px; height: 46px; font-size: 18px; }
@@ -1131,7 +1211,8 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
         width: 100% !important;
         padding-top: 0 !important;
     }
-    .main-card, .total-card, .section-header, .cash-summary-card, .provider-card-footer {
+    .main-card, .total-card, .section-header, .cash-summary-card,
+    .provider-card, .provider-card-header, .provider-card-footer {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
     }

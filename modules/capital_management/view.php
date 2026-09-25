@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: modules/capital_management/view.php
 // WAKALA FINANCIAL SYSTEM - VIEW CAPITAL TRANSACTION
+// ✅ BEAUTIFUL CARDS (matching na add.php + view.php ya morning_report)
 // ✅ Shows full transaction details
 // ✅ Provider info (if float transaction)
 // ✅ Employee who created it
@@ -84,17 +85,18 @@ if (!$transaction) {
 // PARSE DATA
 // ============================================================
 $type_labels = [
-    'opening' => ['label' => 'Opening Capital', 'icon' => 'fa-play', 'color' => 'blue'],
-    'additional' => ['label' => 'Additional Capital', 'icon' => 'fa-plus-circle', 'color' => 'green'],
-    'profit_allocation' => ['label' => 'Profit Allocation', 'icon' => 'fa-chart-line', 'color' => 'purple'],
-    'cash_out' => ['label' => 'Cash Out', 'icon' => 'fa-money-bill-wave', 'color' => 'red'],
-    'adjustment' => ['label' => 'Adjustment', 'icon' => 'fa-sliders-h', 'color' => 'orange']
+    'opening' => ['label' => 'Opening Capital', 'icon' => 'fa-play', 'color' => 'blue', 'gradient' => 'linear-gradient(135deg, #1E40AF 0%, #2563EB 100%)'],
+    'additional' => ['label' => 'Additional Capital', 'icon' => 'fa-plus-circle', 'color' => 'green', 'gradient' => 'linear-gradient(135deg, #059669 0%, #10B981 100%)'],
+    'profit_allocation' => ['label' => 'Profit Allocation', 'icon' => 'fa-chart-line', 'color' => 'purple', 'gradient' => 'linear-gradient(135deg, #7C3AED 0%, #A855F7 100%)'],
+    'cash_out' => ['label' => 'Cash Out', 'icon' => 'fa-money-bill-wave', 'color' => 'red', 'gradient' => 'linear-gradient(135deg, #DC2626 0%, #EF4444 100%)'],
+    'adjustment' => ['label' => 'Adjustment', 'icon' => 'fa-sliders-h', 'color' => 'orange', 'gradient' => 'linear-gradient(135deg, #D97706 0%, #F59E0B 100%)']
 ];
 
 $type_info = $type_labels[$transaction['transaction_type']] ?? [
     'label' => ucfirst(str_replace('_', ' ', $transaction['transaction_type'])),
     'icon' => 'fa-circle',
-    'color' => 'gray'
+    'color' => 'gray',
+    'gradient' => 'linear-gradient(135deg, #4B5563 0%, #6B7280 100%)'
 ];
 
 $is_outgoing = in_array($transaction['transaction_type'], ['cash_out', 'adjustment']);
@@ -121,7 +123,7 @@ include_once '../../includes/admin_topbar.php';
     <div class="main-content">
         
         <!-- ============================================================
-        BRANCH CARD
+        BRANCH CARD - RED THEME
         ============================================================ -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
@@ -154,7 +156,7 @@ include_once '../../includes/admin_topbar.php';
         <div class="page-header">
             <div class="header-left">
                 <h2>
-                    <i class="fas fa-file-invoice" style="color:#bb0404;"></i>
+                    <i class="fas fa-file-invoice" style="color:#DC2626;"></i>
                     Capital Transaction Details
                 </h2>
                 <p class="text-muted">
@@ -193,9 +195,9 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-        HERO CARD - AMOUNT
+        HERO CARD - BEAUTIFUL
         ============================================================ -->
-        <div class="hero-card hero-<?php echo $type_info['color']; ?>">
+        <div class="hero-card hero-<?php echo $type_info['color']; ?>" style="background: <?php echo $type_info['gradient']; ?>;">
             <div class="hero-icon">
                 <i class="fas <?php echo $type_info['icon']; ?>"></i>
             </div>
@@ -208,7 +210,7 @@ include_once '../../includes/admin_topbar.php';
                     <?php echo formatCurrency($transaction['amount']); ?>
                 </span>
                 <span class="hero-type">
-                    <span class="hero-type-badge type-<?php echo $type_info['color']; ?>">
+                    <span class="hero-type-badge">
                         <i class="fas <?php echo $type_info['icon']; ?>"></i>
                         <?php echo $type_info['label']; ?>
                     </span>
@@ -232,7 +234,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        SUMMARY CARDS
+        SUMMARY CARDS - 4 CARDS
         ============================================================ -->
         <div class="summary-grid">
             <!-- TRANSACTION TYPE -->
@@ -366,7 +368,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
             
             <!-- ============================================================
-            PROVIDER INFO (if applicable)
+            PROVIDER INFO (GREEN THEME - kama view.php ya morning_report)
             ============================================================ -->
             <?php if ($is_float): ?>
             <div class="section-header">
@@ -377,18 +379,19 @@ include_once '../../includes/admin_topbar.php';
             </div>
             
             <div class="provider-card">
-                <div class="provider-icon-lg" style="background: <?php echo htmlspecialchars($transaction['provider_color'] ?? '#0B5ED7'); ?>;">
+                <div class="provider-icon-lg" style="background: <?php echo htmlspecialchars($transaction['provider_color'] ?? '#059669'); ?>;">
                     <i class="<?php echo htmlspecialchars($transaction['provider_icon'] ?? 'fas fa-university'); ?>"></i>
                 </div>
                 <div class="provider-info-lg">
                     <span class="provider-name-lg"><?php echo htmlspecialchars($transaction['provider_name']); ?></span>
                     <div class="provider-meta-lg">
-                        <span class="code-pill">
-                            <i class="fas fa-tag"></i>
+                        <span class="code-pill-green">
+                            <i class="fas fa-barcode"></i>
                             <?php echo htmlspecialchars($transaction['branch_provider_code'] ?? $transaction['main_provider_code'] ?? 'N/A'); ?>
                         </span>
                         <?php if (!empty($transaction['provider_type'])): ?>
-                            <span class="type-pill">
+                            <span class="type-pill-green">
+                                <i class="fas fa-tag"></i>
                                 <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $transaction['provider_type']))); ?>
                             </span>
                         <?php endif; ?>
@@ -398,7 +401,7 @@ include_once '../../includes/admin_topbar.php';
             <?php endif; ?>
             
             <!-- ============================================================
-            AMOUNT BREAKDOWN
+            AMOUNT BREAKDOWN - BEAUTIFUL
             ============================================================ -->
             <div class="section-header">
                 <h3>
@@ -572,6 +575,14 @@ include_once '../../includes/admin_topbar.php';
     --cv-hover: #F3F4F6;
     --cv-shadow: rgba(0,0,0,0.06);
     --cv-shadow-md: rgba(0,0,0,0.1);
+    
+    --red-primary: #DC2626;
+    --red-dark: #B91C1C;
+    --green-primary: #059669;
+    --green-dark: #047857;
+    --green-darker: #065F46;
+    --green-light: #D1FAE5;
+    --green-lighter: #A7F3D0;
 }
 
 html.dark-mode {
@@ -586,6 +597,9 @@ html.dark-mode {
     --cv-hover: #334155;
     --cv-shadow: rgba(0,0,0,0.3);
     --cv-shadow-md: rgba(0,0,0,0.5);
+    
+    --green-light: #065F46;
+    --green-lighter: #047857;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -609,7 +623,7 @@ body {
 }
 
 /* ============================================================
-   BRANCH STATUS CARD
+   BRANCH STATUS CARD - RED THEME
    ============================================================ */
 .branch-status-card {
     display: flex;
@@ -770,14 +784,30 @@ body {
     text-decoration: none;
     white-space: nowrap;
 }
-.btn-edit { background: #F59E0B; color: white; }
-.btn-edit:hover { background: #D97706; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4); color: white; }
-.btn-delete { background: #DC2626; color: white; }
-.btn-delete:hover { background: #B91C1C; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4); color: white; }
+.btn-edit { 
+    background: linear-gradient(135deg, #F59E0B, #D97706); 
+    color: white; 
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
+.btn-edit:hover { 
+    transform: translateY(-2px); 
+    box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5); 
+    color: white; 
+}
+.btn-delete { 
+    background: linear-gradient(135deg, #DC2626, #B91C1C); 
+    color: white; 
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+.btn-delete:hover { 
+    transform: translateY(-2px); 
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5); 
+    color: white; 
+}
 .btn-secondary {
     background: var(--cv-card-bg);
     color: var(--cv-text-secondary);
-    border: 1px solid var(--cv-border);
+    border: 1.5px solid var(--cv-border);
 }
 .btn-secondary:hover { background: var(--cv-hover); color: var(--cv-text); }
 
@@ -817,7 +847,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 
 /* ============================================================
-   HERO CARD
+   HERO CARD - BEAUTIFUL
    ============================================================ */
 .hero-card {
     border-radius: 16px;
@@ -950,7 +980,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 
 /* ============================================================
-   SUMMARY CARDS
+   SUMMARY CARDS - 4 CARDS
    ============================================================ */
 .summary-grid {
     display: grid;
@@ -977,11 +1007,13 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     position: absolute;
     top: 0; left: 0;
     width: 4px; height: 100%;
-    background: #3B82F6;
+    background: linear-gradient(180deg, #3B82F6, #1E40AF);
+    border-radius: 14px 0 0 14px;
 }
 .summary-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 12px 28px var(--cv-shadow-md);
+    border-color: #3B82F6;
 }
 .sc-icon {
     width: 48px;
@@ -993,6 +1025,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     font-size: 20px;
     flex-shrink: 0;
     border: 1.5px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
 }
 .sc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); color: #FFFFFF; }
 .sc-icon-green { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; }
@@ -1125,15 +1158,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     letter-spacing: 0.5px;
 }
 html.dark-mode .code-pill { background: #1E3A5F; color: #60A5FA; }
-.type-pill {
-    font-size: 11px;
-    font-weight: 700;
-    color: #7C3AED;
-    background: #EDE9FE;
-    padding: 3px 10px;
-    border-radius: 8px;
-}
-html.dark-mode .type-pill { background: #4C1D95; color: #C4B5FD; }
 
 .type-badge-inline {
     display: inline-flex;
@@ -1160,21 +1184,34 @@ html.dark-mode .type-badge-inline.type-orange { background: #5F3A1E; color: #FBB
 html.dark-mode .type-badge-inline.type-gray { background: #374151; color: #9CA3AF; }
 
 /* ============================================================
-   PROVIDER CARD
+   ✅ PROVIDER CARD - GREEN THEME (kama view.php ya morning_report)
    ============================================================ */
 .provider-card {
     display: flex;
     align-items: center;
     gap: 18px;
     padding: 20px 24px;
-    background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
-    border-radius: 12px;
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border-radius: 14px;
     margin: 20px 24px;
-    border: 1.5px solid #93C5FD;
+    border: 2px solid #6EE7B7;
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.15);
+    position: relative;
+    overflow: hidden;
+}
+.provider-card::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 120px; height: 120px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 50%;
+    pointer-events: none;
 }
 html.dark-mode .provider-card {
-    background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%);
-    border-color: #3B82F6;
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
 }
 .provider-icon-lg {
     width: 64px;
@@ -1186,8 +1223,10 @@ html.dark-mode .provider-card {
     font-size: 28px;
     color: #FFFFFF;
     flex-shrink: 0;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.4);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    position: relative;
+    z-index: 1;
 }
 .provider-info-lg {
     display: flex;
@@ -1195,13 +1234,17 @@ html.dark-mode .provider-card {
     gap: 8px;
     flex: 1;
     min-width: 0;
+    position: relative;
+    z-index: 1;
 }
 .provider-name-lg {
     font-size: 20px;
     font-weight: 800;
-    color: var(--cv-text);
+    color: #065F46;
     letter-spacing: 0.3px;
+    word-break: break-word;
 }
+html.dark-mode .provider-name-lg { color: #D1FAE5; }
 .provider-meta-lg {
     display: flex;
     align-items: center;
@@ -1209,8 +1252,55 @@ html.dark-mode .provider-card {
     flex-wrap: wrap;
 }
 
+/* Green pills */
+.code-pill-green {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.1);
+}
+.code-pill-green i { font-size: 10px; color: #059669; }
+html.dark-mode .code-pill-green {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+html.dark-mode .code-pill-green i { color: #34D399; }
+
+.type-pill-green {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.1);
+}
+.type-pill-green i { font-size: 10px; color: #059669; }
+html.dark-mode .type-pill-green {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+html.dark-mode .type-pill-green i { color: #34D399; }
+
 /* ============================================================
-   AMOUNT BREAKDOWN
+   AMOUNT BREAKDOWN - BEAUTIFUL
    ============================================================ */
 .amount-breakdown {
     margin: 20px 24px;
@@ -1223,26 +1313,27 @@ html.dark-mode .provider-card {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 22px;
+    padding: 18px 22px;
     gap: 16px;
     border-bottom: 1px solid var(--cv-border);
     flex-wrap: wrap;
+    position: relative;
 }
 .amount-row:last-child { border-bottom: none; }
 .amount-row.amount-in {
-    background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.02));
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(16, 185, 129, 0.02));
 }
 .amount-row.amount-out {
-    background: linear-gradient(135deg, rgba(220, 38, 38, 0.08), rgba(220, 38, 38, 0.02));
+    background: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(220, 38, 38, 0.02));
 }
 .amount-row.amount-total {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.02));
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.02));
     border-top: 2px solid #3B82F6;
 }
 .amount-label {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     font-size: 13px;
     font-weight: 700;
     color: var(--cv-text-secondary);
@@ -1250,19 +1341,37 @@ html.dark-mode .provider-card {
     letter-spacing: 0.5px;
 }
 .amount-label i {
-    font-size: 14px;
+    font-size: 16px;
     color: #3B82F6;
-    width: 20px;
-    text-align: center;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 10px;
+    border: 1.5px solid rgba(59, 130, 246, 0.2);
 }
-.amount-row.amount-in .amount-label i { color: #10B981; }
-.amount-row.amount-out .amount-label i { color: #DC2626; }
-.amount-row.amount-total .amount-label i { color: #3B82F6; }
+.amount-row.amount-in .amount-label i { 
+    color: #10B981; 
+    background: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.2);
+}
+.amount-row.amount-out .amount-label i { 
+    color: #DC2626; 
+    background: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.2);
+}
+.amount-row.amount-total .amount-label i { 
+    color: #3B82F6; 
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.3);
+}
 .amount-value {
-    font-size: clamp(16px, 1.5vw, 22px);
+    font-size: clamp(18px, 1.8vw, 26px);
     font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px;
+    letter-spacing: -0.5px;
     word-break: break-word;
 }
 .amount-row.amount-in .amount-value { color: #059669; }
@@ -1289,6 +1398,7 @@ html.dark-mode .amount-row.amount-total .amount-value { color: #60A5FA; }
     display: flex;
     flex-direction: column;
     gap: 8px;
+    box-shadow: 0 2px 6px var(--cv-shadow);
 }
 .note-label {
     font-size: 11px;
@@ -1323,20 +1433,23 @@ html.dark-mode .amount-row.amount-total .amount-value { color: #60A5FA; }
     display: flex;
     align-items: flex-start;
     gap: 14px;
+    transition: background 0.2s ease;
 }
+.audit-item:hover { background: var(--cv-hover); }
 .audit-item:last-child { border-right: none; }
 .audit-icon {
-    width: 42px;
-    height: 42px;
+    width: 48px;
+    height: 48px;
     border-radius: 12px;
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1D4ED8;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
+    font-size: 18px;
     flex-shrink: 0;
     border: 1.5px solid #93C5FD;
+    box-shadow: 0 2px 6px rgba(29, 78, 216, 0.15);
 }
 html.dark-mode .audit-icon {
     background: linear-gradient(135deg, #1E3A5F, #1E40AF);
@@ -1387,6 +1500,14 @@ html.dark-mode .audit-icon {
     padding: 12px 24px;
     font-size: 14px;
 }
+
+/* ============================================================
+   TEXT COLORS
+   ============================================================ */
+.text-success { color: #059669; font-weight: 800; }
+.text-danger { color: #DC2626; font-weight: 800; }
+html.dark-mode .text-success { color: #34D399; }
+html.dark-mode .text-danger { color: #FCA5A5; }
 
 /* ============================================================
    RESPONSIVE
@@ -1440,9 +1561,10 @@ html.dark-mode .audit-icon {
     
     .provider-card { flex-direction: column; text-align: center; padding: 18px; }
     .provider-meta-lg { justify-content: center; }
+    .provider-name-lg { font-size: 18px; }
     
-    .amount-row { flex-direction: column; align-items: flex-start; gap: 8px; }
-    .amount-value { width: 100%; text-align: right; }
+    .amount-row { flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+    .amount-value { width: 100%; text-align: right; font-size: 18px; }
     
     .audit-item { flex-direction: column; align-items: flex-start; }
     
@@ -1462,6 +1584,7 @@ html.dark-mode .audit-icon {
     .detail-value { font-size: 14px; }
     .provider-name-lg { font-size: 16px; }
     .amount-value { font-size: 16px; }
+    .provider-icon-lg { width: 56px; height: 56px; font-size: 24px; }
 }
 </style>
 

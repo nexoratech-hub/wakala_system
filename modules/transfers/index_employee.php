@@ -3,7 +3,12 @@
 // FILE: modules/transfers/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE TRANSFERS
 // EMPLOYEE SEES ONLY THEIR OWN TRANSFERS
-// NO BRANCH SELECTOR IN TOPBAR
+// 
+// ✅ Larger cards
+// ✅ Page Header TOUCHES sidebar
+// ✅ Branch Indicator TOUCHES sidebar
+// ✅ Cards have proper margins
+// ✅ Full English
 // ================================================================
 
 require_once '../../config/config.php';
@@ -310,9 +315,10 @@ if (isset($_SESSION['success_message'])) {
     unset($_SESSION['success_message']);
 }
 
-include_once '../../includes/admin_header.php';
+include_once '../../includes/employee_header.php';
 include_once '../../includes/employee_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_topbar.php';
+
 ?>
 
 <!-- ============================================================
@@ -367,7 +373,19 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Branch Card -->
+        <!-- ============================================================
+             PAGE HEADER - TOUCHES SIDEBAR
+             ============================================================ -->
+        <div class="page-header-top">
+            <div class="page-header-top-inner">
+                <h2><i class="fas fa-exchange-alt"></i> My Transfers</h2>
+                <p class="text-muted">Move money between Cash and Provider Float</p>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             BRANCH INDICATOR - TOUCHES SIDEBAR
+             ============================================================ -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
@@ -395,565 +413,625 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- Capital Summary -->
-        <div class="capital-summary-compact">
-            <div class="capital-item-compact capital-float">
-                <div class="capital-icon-compact">
-                    <i class="fas fa-coins"></i>
-                </div>
-                <div class="capital-info-compact">
-                    <span class="capital-label-compact">Total Float</span>
-                    <span class="capital-value-compact"><?php echo formatCurrency($current_float); ?></span>
-                </div>
-            </div>
-            
-            <div class="capital-item-compact capital-cash">
-                <div class="capital-icon-compact">
-                    <i class="fas fa-money-bill-wave"></i>
-                </div>
-                <div class="capital-info-compact">
-                    <span class="capital-label-compact">Cash Balance</span>
-                    <span class="capital-value-compact"><?php echo formatCurrency($current_cash); ?></span>
-                </div>
-            </div>
-            
-            <div class="capital-item-compact capital-total">
-                <div class="capital-icon-compact">
-                    <i class="fas fa-building"></i>
-                </div>
-                <div class="capital-info-compact">
-                    <span class="capital-label-compact">Total Capital</span>
-                    <span class="capital-value-compact"><?php echo formatCurrency($current_capital); ?></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Page Header -->
-        <div class="page-header">
-            <div class="header-left">
-                <h2><i class="fas fa-exchange-alt" style="color:#7C3AED;"></i> My Transfers</h2>
-                <p class="text-muted">Move money between Cash and Provider Float</p>
-            </div>
-        </div>
-
-        <?php if (!empty($success_message_session)): ?>
-            <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i>
-                <span><?php echo $success_message_session; ?></span>
-                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
-            </div>
-        <?php endif; ?>
-        
-        <?php if (!empty($error_message)): ?>
-            <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i>
-                <span><?php echo htmlspecialchars($error_message); ?></span>
-                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
-            </div>
-        <?php endif; ?>
-
         <!-- ============================================================
-        TRANSFER FORM
-        ============================================================ -->
-        <div class="transfer-form-container">
-            <div class="transfer-form-header">
-                <div class="transfer-form-header-left">
-                    <i class="fas fa-exchange-alt"></i>
-                    <div>
-                        <h3>New Transfer</h3>
-                        <p>Transfer between Cash and Float</p>
+             CAPITAL SUMMARY - BIGGER CARDS
+             ============================================================ -->
+        <div class="content-with-margin">
+            <div class="capital-summary-compact">
+                <div class="capital-item-compact capital-float">
+                    <div class="capital-icon-compact">
+                        <i class="fas fa-coins"></i>
+                    </div>
+                    <div class="capital-info-compact">
+                        <span class="capital-label-compact">Total Float</span>
+                        <span class="capital-value-compact"><?php echo formatCurrency($current_float); ?></span>
                     </div>
                 </div>
-                <button type="button" class="btn-toggle-transfer" onclick="toggleTransferForm()">
-                    <i class="fas fa-chevron-up" id="transferToggleIcon"></i>
-                </button>
+                
+                <div class="capital-item-compact capital-cash">
+                    <div class="capital-icon-compact">
+                        <i class="fas fa-money-bill-wave"></i>
+                    </div>
+                    <div class="capital-info-compact">
+                        <span class="capital-label-compact">Cash Balance</span>
+                        <span class="capital-value-compact"><?php echo formatCurrency($current_cash); ?></span>
+                    </div>
+                </div>
+                
+                <div class="capital-item-compact capital-total">
+                    <div class="capital-icon-compact">
+                        <i class="fas fa-building"></i>
+                    </div>
+                    <div class="capital-info-compact">
+                        <span class="capital-label-compact">Total Capital</span>
+                        <span class="capital-value-compact"><?php echo formatCurrency($current_capital); ?></span>
+                    </div>
+                </div>
             </div>
-            
-            <form method="POST" action="" class="transfer-form" id="transferForm" onsubmit="return validateTransfer()">
-                <input type="hidden" name="action" value="add_transfer">
-                <input type="hidden" name="provider_id" id="hiddenProviderId" value="">
-                
-                <!-- Transfer Type Selection -->
-                <div class="transfer-type-selector">
-                    <label class="transfer-type-option">
-                        <input type="radio" name="transfer_type" value="cash_to_float" checked onchange="updateTransferUI()">
-                        <div class="transfer-type-card type-cash-to-float">
-                            <div class="type-icon">
-                                <i class="fas fa-arrow-right"></i>
-                            </div>
-                            <div class="type-info">
-                                <span class="type-title">Cash → Float</span>
-                                <span class="type-desc">Move from Cash to Provider Float</span>
-                            </div>
-                        </div>
-                    </label>
-                    
-                    <label class="transfer-type-option">
-                        <input type="radio" name="transfer_type" value="float_to_cash" onchange="updateTransferUI()">
-                        <div class="transfer-type-card type-float-to-cash">
-                            <div class="type-icon">
-                                <i class="fas fa-arrow-left"></i>
-                            </div>
-                            <div class="type-info">
-                                <span class="type-title">Float → Cash</span>
-                                <span class="type-desc">Move from Provider Float to Cash</span>
-                            </div>
-                        </div>
-                    </label>
-                </div>
-                
-                <!-- ============================================================
-                PROVIDER SELECTION - 3 CARDS PER ROW
-                ============================================================ -->
-                <div class="provider-select-section">
-                    <label class="provider-select-label">
-                        <i class="fas fa-university"></i>
-                        Select Provider <span class="required">*</span>
-                    </label>
-                    
-                    <div class="custom-provider-dropdown" id="customProviderDropdown">
-                        <div class="provider-dropdown-trigger" onclick="toggleProviderDropdown()">
-                            <div class="provider-dropdown-trigger-content" id="providerTriggerContent">
-                                <div class="provider-placeholder">
-                                    <i class="fas fa-hand-pointer"></i>
-                                    <span>Click to select a provider...</span>
-                                </div>
-                            </div>
-                            <i class="fas fa-chevron-down provider-dropdown-arrow" id="providerDropdownArrow"></i>
-                        </div>
-                        
-                        <div class="provider-dropdown-menu" id="providerDropdownMenu">
-                            <!-- Search -->
-                            <div class="provider-dropdown-search">
-                                <i class="fas fa-search"></i>
-                                <input type="text" 
-                                       id="providerSearchInput"
-                                       placeholder="Search provider..." 
-                                       oninput="filterProviders(this.value)"
-                                       onclick="event.stopPropagation()">
-                            </div>
-                            
-                            <!-- Provider Cards Grid (3 per row) -->
-                            <div class="provider-dropdown-list" id="providerDropdownList">
-                                <div class="provider-cards-grid">
-                                    <?php foreach ($providers_list as $p): 
-                                        $color = $p['color_code'] ?? '#0B5ED7';
-                                        $icon = $p['icon_class'] ?? 'fas fa-university';
-                                        $provider_float = floatval($p['current_float']);
-                                        $provider_code = $p['branch_provider_code'] ?? $p['main_code'];
-                                    ?>
-                                        <div class="provider-card-item" 
-                                             data-provider-id="<?php echo $p['id']; ?>"
-                                             data-provider-name="<?php echo htmlspecialchars(strtolower($p['provider_name'])); ?>"
-                                             data-provider-code="<?php echo htmlspecialchars(strtolower($provider_code)); ?>"
-                                             data-float="<?php echo $provider_float; ?>"
-                                             data-name="<?php echo htmlspecialchars($p['provider_name']); ?>"
-                                             data-code="<?php echo htmlspecialchars($provider_code); ?>"
-                                             data-color="<?php echo $color; ?>"
-                                             data-icon="<?php echo $icon; ?>"
-                                             onclick="selectProvider(this)">
-                                            
-                                            <div class="provider-card-check">
-                                                <i class="fas fa-check-circle"></i>
-                                            </div>
-                                            
-                                            <div class="provider-card-icon" style="background: <?php echo $color; ?>;">
-                                                <i class="<?php echo $icon; ?>"></i>
-                                            </div>
-                                            
-                                            <div class="provider-card-name">
-                                                <?php echo htmlspecialchars($p['provider_name']); ?>
-                                            </div>
-                                            
-                                            <div class="provider-card-code">
-                                                <?php echo htmlspecialchars($provider_code); ?>
-                                            </div>
-                                            
-                                            <div class="provider-card-float">
-                                                <span class="provider-float-label">
-                                                    <i class="fas fa-coins"></i> Float
-                                                </span>
-                                                <span class="provider-float-value">
-                                                    <?php echo formatCurrency($provider_float); ?>
-                                                </span>
-                                            </div>
-                                            
-                                            <div class="provider-card-type">
-                                                <i class="fas fa-<?php echo $p['provider_type'] == 'mobile_money' ? 'mobile-alt' : 'university'; ?>"></i>
-                                                <?php echo ucfirst(str_replace('_', ' ', $p['provider_type'] ?? 'Bank')); ?>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                            
-                            <div class="provider-dropdown-empty" id="providerDropdownEmpty" style="display:none;">
-                                <i class="fas fa-search-minus"></i>
-                                <p>No providers found</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Amount + Date -->
-                <div class="transfer-form-row">
-                    <div class="transfer-form-group">
-                        <label>Amount (TSh) <span class="required">*</span></label>
-                        <input type="text" 
-                               name="amount" 
-                               id="transferAmount" 
-                               class="transfer-form-control transfer-amount-input" 
-                               placeholder="1,000,000" 
-                               inputmode="numeric"
-                               autocomplete="off"
-                               required
-                               oninput="formatMoneyInput(this); updatePreview();">
-                    </div>
-                    
-                    <div class="transfer-form-group">
-                        <label>Transfer Date <span class="required">*</span></label>
-                        <input type="date" name="transfer_date" class="transfer-form-control" 
-                               value="<?php echo date('Y-m-d'); ?>" required>
-                    </div>
-                </div>
-                
-                <!-- Live Preview -->
-                <div class="transfer-preview" id="transferPreview" style="display:none;">
-                    <div class="preview-header">
-                        <i class="fas fa-eye"></i> Transfer Preview
-                    </div>
-                    <div class="preview-grid">
-                        <div class="preview-item">
-                            <span class="preview-label">Provider</span>
-                            <span class="preview-value" id="previewProvider">-</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">Current Float</span>
-                            <span class="preview-value preview-float" id="previewCurrentFloat">TSh 0</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">Current Cash</span>
-                            <span class="preview-value preview-cash" id="previewCurrentCash">TSh 0</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">After Transfer</span>
-                            <span class="preview-value preview-after" id="previewAfter">TSh 0</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="transfer-form-row">
-                    <div class="transfer-form-group">
-                        <label>Reference Number</label>
-                        <input type="text" name="reference_number" class="transfer-form-control" 
-                               placeholder="Optional reference">
-                    </div>
-                    <div class="transfer-form-group">
-                        <label>Description</label>
-                        <input type="text" name="description" class="transfer-form-control" 
-                               placeholder="Optional description">
-                    </div>
-                </div>
-                
-                <div class="transfer-form-actions">
-                    <button type="submit" class="btn btn-transfer" id="transferSubmitBtn">
-                        <i class="fas fa-exchange-alt"></i> Execute Transfer
-                    </button>
-                    <button type="reset" class="btn btn-reset" onclick="resetTransfer()">
-                        <i class="fas fa-undo"></i> Reset
-                    </button>
-                </div>
-            </form>
-        </div>
 
-        <!-- Summary Cards - MY TRANSFERS -->
-        <div class="transfer-summary-cards">
-            <div class="transfer-summary-card">
-                <div class="ts-icon ts-icon-purple">
-                    <i class="fas fa-exchange-alt"></i>
-                </div>
-                <div class="ts-info">
-                    <span class="ts-label">My Transfers</span>
-                    <span class="ts-value"><?php echo number_format($total_transfers); ?></span>
-                </div>
-            </div>
-            
-            <div class="transfer-summary-card">
-                <div class="ts-icon ts-icon-green">
-                    <i class="fas fa-coins"></i>
-                </div>
-                <div class="ts-info">
-                    <span class="ts-label">My Total Amount</span>
-                    <span class="ts-value"><?php echo formatCurrency($total_amount); ?></span>
-                </div>
-            </div>
-            
-            <div class="transfer-summary-card">
-                <div class="ts-icon ts-icon-blue">
-                    <i class="fas fa-arrow-right"></i>
-                </div>
-                <div class="ts-info">
-                    <span class="ts-label">My Cash → Float</span>
-                    <span class="ts-value"><?php echo formatCurrency($total_cash_to_float); ?></span>
-                </div>
-            </div>
-            
-            <div class="transfer-summary-card">
-                <div class="ts-icon ts-icon-orange">
-                    <i class="fas fa-arrow-left"></i>
-                </div>
-                <div class="ts-info">
-                    <span class="ts-label">My Float → Cash</span>
-                    <span class="ts-value"><?php echo formatCurrency($total_float_to_cash); ?></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Filters -->
-        <div class="filters-bar">
-            <form method="GET" action="" class="filters-form">
-                <div class="filter-group">
-                    <label>From Date</label>
-                    <input type="date" name="from_date" value="<?php echo htmlspecialchars($from_date); ?>" class="form-control">
-                </div>
-                <div class="filter-group">
-                    <label>To Date</label>
-                    <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
-                </div>
-                <div class="filter-group">
-                    <button type="submit" class="btn btn-filter">
-                        <i class="fas fa-search"></i> Filter
-                    </button>
-                    <a href="index_employee.php" class="btn btn-reset">
-                        <i class="fas fa-undo"></i> Reset
-                    </a>
-                </div>
-            </form>
-        </div>
-
-        <!-- ============================================================
-        TRANSFER HISTORY TABLE - MY TRANSFERS ONLY
-        ============================================================ -->
-        <div class="table-container">
-            
-            <!-- RED HEADER -->
-            <div class="table-red-header">
-                <div class="table-red-header-left">
-                    <i class="fas fa-history"></i>
-                    <h3>My Transfer History</h3>
-                    <span class="count-badge"><?php echo count($transfers); ?></span>
-                </div>
-            </div>
-            
-            <?php if (count($transfers) > 0): ?>
-                <div class="table-wrapper" id="transferTableWrapper">
-                    <table class="data-table" id="transferTable">
-                        <thead>
-                            <!-- SEARCH + SCROLL -->
-                            <tr class="table-search-row">
-                                <th colspan="11" class="table-search-cell">
-                                    <div class="table-search-row-content">
-                                        <!-- Search (LEFT) -->
-                                        <div class="table-search-wrapper">
-                                            <i class="fas fa-search table-search-icon"></i>
-                                            <input type="text" 
-                                                   class="table-search-input" 
-                                                   id="tableSearchInput"
-                                                   placeholder="Search transfer #, provider..."
-                                                   oninput="onTableSearch(this)">
-                                            <button type="button" class="table-search-clear" 
-                                                    id="tableSearchClear"
-                                                    onclick="clearTableSearch()" 
-                                                    style="display:none;">
-                                                <i class="fas fa-times"></i>
-                                            </button>
-                                            <span class="table-search-count" 
-                                                  id="tableSearchCount" 
-                                                  style="display:none;">0</span>
-                                        </div>
-                                        
-                                        <!-- Scroll Controls (CENTER) -->
-                                        <div class="table-scroll-center">
-                                            <button type="button" class="scroll-btn scroll-left" 
-                                                    onclick="scrollTable('left')" 
-                                                    title="Scroll Left">
-                                                <i class="fas fa-chevron-left"></i>
-                                            </button>
-                                            <span class="scroll-label">
-                                                <i class="fas fa-arrows-alt-h"></i> SCROLL
-                                            </span>
-                                            <button type="button" class="scroll-btn scroll-right" 
-                                                    onclick="scrollTable('right')" 
-                                                    title="Scroll Right">
-                                                <i class="fas fa-chevron-right"></i>
-                                            </button>
-                                        </div>
-                                        
-                                        <!-- Spacer -->
-                                        <div class="table-search-spacer"></div>
-                                    </div>
-                                </th>
-                            </tr>
-                            <!-- Column Headers -->
-                            <tr>
-                                <th style="width: 50px;">#</th>
-                                <th>Transfer #</th>
-                                <th>Type</th>
-                                <th>Date & Time</th>
-                                <th>Provider</th>
-                                <th>Code</th>
-                                <th class="text-right">Amount</th>
-                                <th>Float Change</th>
-                                <th>Employee</th>
-                                <th>Reference</th>
-                                <th style="width: 100px;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="transferTableBody">
-                            <?php 
-                            $i = 1;
-                            foreach ($transfers as $t): 
-                                $is_cash_to_float = $t['transfer_type'] === 'cash_to_float';
-                                $type_label = $is_cash_to_float ? 'Cash → Float' : 'Float → Cash';
-                                $type_class = $is_cash_to_float ? 'type-cash-to-float' : 'type-float-to-cash';
-                                $color = $t['color_code'] ?? '#0B5ED7';
-                                $icon = $t['icon_class'] ?? 'fas fa-university';
-                                
-                                $employee_avatar = $t['employee_avatar'] ?? '';
-                                $employee_initial = strtoupper(substr($t['employee_name'] ?? 'N', 0, 1));
-                                
-                                $search_data = strtolower(
-                                    ($t['transfer_number'] ?? '') . ' ' .
-                                    ($t['provider_name'] ?? '') . ' ' .
-                                    ($t['provider_code'] ?? '') . ' ' .
-                                    ($t['employee_name'] ?? '') . ' ' .
-                                    ($t['reference_number'] ?? '')
-                                );
-                            ?>
-                                <tr class="transfer-row" data-search="<?php echo htmlspecialchars($search_data); ?>">
-                                    <td class="row-number"><?php echo $i++; ?></td>
-                                    <td>
-                                        <span class="transfer-number"><?php echo htmlspecialchars($t['transfer_number']); ?></span>
-                                    </td>
-                                    <td>
-                                        <span class="type-badge-txn <?php echo $type_class; ?>">
-                                            <i class="fas fa-arrow-<?php echo $is_cash_to_float ? 'right' : 'left'; ?>"></i>
-                                            <?php echo $type_label; ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="date-cell">
-                                            <i class="far fa-calendar"></i>
-                                            <?php echo date('d M Y', strtotime($t['transfer_date'])); ?>
-                                            <span class="time-cell">
-                                                <?php echo date('H:i', strtotime($t['transfer_time'] ?? $t['created_at'])); ?>
-                                            </span>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="provider-cell">
-                                            <div class="provider-icon" style="background:<?php echo $color; ?>;">
-                                                <i class="<?php echo $icon; ?>"></i>
-                                            </div>
-                                            <span><?php echo htmlspecialchars($t['provider_name'] ?? 'N/A'); ?></span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="code-badge"><?php echo htmlspecialchars($t['provider_code'] ?? '-'); ?></span>
-                                    </td>
-                                    <td class="text-right">
-                                        <span class="amount-transfer <?php echo $type_class; ?>">
-                                            <?php echo formatCurrency($t['amount']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="float-change">
-                                            <span class="float-before"><?php echo formatCurrency($t['before_float']); ?></span>
-                                            <i class="fas fa-arrow-right"></i>
-                                            <span class="float-after"><?php echo formatCurrency($t['after_float']); ?></span>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="employee-cell-full">
-                                            <?php if ($employee_avatar && file_exists('../../' . $employee_avatar)): ?>
-                                                <img src="../../<?php echo htmlspecialchars($employee_avatar); ?>" 
-                                                     alt="<?php echo htmlspecialchars($t['employee_name']); ?>"
-                                                     class="employee-avatar-img"
-                                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                                <div class="employee-avatar" style="display:none;">
-                                                    <?php echo $employee_initial; ?>
-                                                </div>
-                                            <?php else: ?>
-                                                <div class="employee-avatar">
-                                                    <?php echo $employee_initial; ?>
-                                                </div>
-                                            <?php endif; ?>
-                                            <div class="employee-name-details">
-                                                <span class="employee-name-full">
-                                                    <?php echo htmlspecialchars($t['employee_name'] ?? 'N/A'); ?>
-                                                </span>
-                                                <?php if (!empty($t['employee_code'])): ?>
-                                                    <span class="employee-code">
-                                                        <?php echo htmlspecialchars($t['employee_code']); ?>
-                                                    </span>
-                                                <?php endif; ?>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="reference-cell">
-                                            <?php echo htmlspecialchars($t['reference_number'] ?: '-'); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <!-- VIEW BUTTON ONLY -->
-                                        <div class="transfer-actions">
-                                            <a href="view_employee.php?id=<?php echo $t['id']; ?>" 
-                                               class="btn-action-txn btn-view-txn" 
-                                               title="View Transfer Details">
-                                                <i class="fas fa-eye"></i>
-                                                <span>View</span>
-                                            </a>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                    
-                    <div class="no-results" id="noResults" style="display:none;">
-                        <i class="fas fa-search-minus"></i>
-                        <p>No transfers match your search</p>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="clearTableSearch()">
-                            <i class="fas fa-times"></i> Clear Search
-                        </button>
-                    </div>
-                </div>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-exchange-alt"></i>
-                    <h3>No Transfers Yet</h3>
-                    <p>You haven't made any transfers in this period.</p>
+            <?php if (!empty($success_message_session)): ?>
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i>
+                    <span><?php echo $success_message_session; ?></span>
+                    <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
                 </div>
             <?php endif; ?>
-        </div>
+            
+            <?php if (!empty($error_message)): ?>
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <span><?php echo htmlspecialchars($error_message); ?></span>
+                    <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
+                </div>
+            <?php endif; ?>
 
-    </div>
+            <!-- ============================================================
+            TRANSFER FORM
+            ============================================================ -->
+            <div class="transfer-form-container">
+                <div class="transfer-form-header">
+                    <div class="transfer-form-header-left">
+                        <i class="fas fa-exchange-alt"></i>
+                        <div>
+                            <h3>New Transfer</h3>
+                            <p>Transfer between Cash and Float</p>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-toggle-transfer" onclick="toggleTransferForm()">
+                        <i class="fas fa-chevron-up" id="transferToggleIcon"></i>
+                    </button>
+                </div>
+                
+                <form method="POST" action="" class="transfer-form" id="transferForm" onsubmit="return validateTransfer()">
+                    <input type="hidden" name="action" value="add_transfer">
+                    <input type="hidden" name="provider_id" id="hiddenProviderId" value="">
+                    
+                    <!-- Transfer Type Selection -->
+                    <div class="transfer-type-selector">
+                        <label class="transfer-type-option">
+                            <input type="radio" name="transfer_type" value="cash_to_float" checked onchange="updateTransferUI()">
+                            <div class="transfer-type-card type-cash-to-float">
+                                <div class="type-icon">
+                                    <i class="fas fa-arrow-right"></i>
+                                </div>
+                                <div class="type-info">
+                                    <span class="type-title">Cash → Float</span>
+                                    <span class="type-desc">Move from Cash to Provider Float</span>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="transfer-type-option">
+                            <input type="radio" name="transfer_type" value="float_to_cash" onchange="updateTransferUI()">
+                            <div class="transfer-type-card type-float-to-cash">
+                                <div class="type-icon">
+                                    <i class="fas fa-arrow-left"></i>
+                                </div>
+                                <div class="type-info">
+                                    <span class="type-title">Float → Cash</span>
+                                    <span class="type-desc">Move from Provider Float to Cash</span>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- Provider Selection -->
+                    <div class="provider-select-section">
+                        <label class="provider-select-label">
+                            <i class="fas fa-university"></i>
+                            Select Provider <span class="required">*</span>
+                        </label>
+                        
+                        <div class="custom-provider-dropdown" id="customProviderDropdown">
+                            <div class="provider-dropdown-trigger" onclick="toggleProviderDropdown()">
+                                <div class="provider-dropdown-trigger-content" id="providerTriggerContent">
+                                    <div class="provider-placeholder">
+                                        <i class="fas fa-hand-pointer"></i>
+                                        <span>Click to select a provider...</span>
+                                    </div>
+                                </div>
+                                <i class="fas fa-chevron-down provider-dropdown-arrow" id="providerDropdownArrow"></i>
+                            </div>
+                            
+                            <div class="provider-dropdown-menu" id="providerDropdownMenu">
+                                <!-- Search -->
+                                <div class="provider-dropdown-search">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" 
+                                           id="providerSearchInput"
+                                           placeholder="Search provider..." 
+                                           oninput="filterProviders(this.value)"
+                                           onclick="event.stopPropagation()">
+                                </div>
+                                
+                                <!-- Provider Cards Grid (3 per row) -->
+                                <div class="provider-dropdown-list" id="providerDropdownList">
+                                    <div class="provider-cards-grid">
+                                        <?php foreach ($providers_list as $p): 
+                                            $color = $p['color_code'] ?? '#0B5ED7';
+                                            $icon = $p['icon_class'] ?? 'fas fa-university';
+                                            $provider_float = floatval($p['current_float']);
+                                            $provider_code = $p['branch_provider_code'] ?? $p['main_code'];
+                                        ?>
+                                            <div class="provider-card-item" 
+                                                 data-provider-id="<?php echo $p['id']; ?>"
+                                                 data-provider-name="<?php echo htmlspecialchars(strtolower($p['provider_name'])); ?>"
+                                                 data-provider-code="<?php echo htmlspecialchars(strtolower($provider_code)); ?>"
+                                                 data-float="<?php echo $provider_float; ?>"
+                                                 data-name="<?php echo htmlspecialchars($p['provider_name']); ?>"
+                                                 data-code="<?php echo htmlspecialchars($provider_code); ?>"
+                                                 data-color="<?php echo $color; ?>"
+                                                 data-icon="<?php echo $icon; ?>"
+                                                 onclick="selectProvider(this)">
+                                                
+                                                <div class="provider-card-check">
+                                                    <i class="fas fa-check-circle"></i>
+                                                </div>
+                                                
+                                                <div class="provider-card-icon" style="background: <?php echo $color; ?>;">
+                                                    <i class="<?php echo $icon; ?>"></i>
+                                                </div>
+                                                
+                                                <div class="provider-card-name">
+                                                    <?php echo htmlspecialchars($p['provider_name']); ?>
+                                                </div>
+                                                
+                                                <div class="provider-card-code">
+                                                    <?php echo htmlspecialchars($provider_code); ?>
+                                                </div>
+                                                
+                                                <div class="provider-card-float">
+                                                    <span class="provider-float-label">
+                                                        <i class="fas fa-coins"></i> Float
+                                                    </span>
+                                                    <span class="provider-float-value">
+                                                        <?php echo formatCurrency($provider_float); ?>
+                                                    </span>
+                                                </div>
+                                                
+                                                <div class="provider-card-type">
+                                                    <i class="fas fa-<?php echo $p['provider_type'] == 'mobile_money' ? 'mobile-alt' : 'university'; ?>"></i>
+                                                    <?php echo ucfirst(str_replace('_', ' ', $p['provider_type'] ?? 'Bank')); ?>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                                
+                                <div class="provider-dropdown-empty" id="providerDropdownEmpty" style="display:none;">
+                                    <i class="fas fa-search-minus"></i>
+                                    <p>No providers found</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Amount + Date -->
+                    <div class="transfer-form-row">
+                        <div class="transfer-form-group">
+                            <label>Amount (TSh) <span class="required">*</span></label>
+                            <input type="text" 
+                                   name="amount" 
+                                   id="transferAmount" 
+                                   class="transfer-form-control transfer-amount-input" 
+                                   placeholder="1,000,000" 
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   required
+                                   oninput="formatMoneyInput(this); updatePreview();">
+                        </div>
+                        
+                        <div class="transfer-form-group">
+                            <label>Transfer Date <span class="required">*</span></label>
+                            <input type="date" name="transfer_date" class="transfer-form-control" 
+                                   value="<?php echo date('Y-m-d'); ?>" required>
+                        </div>
+                    </div>
+                    
+                    <!-- Live Preview -->
+                    <div class="transfer-preview" id="transferPreview" style="display:none;">
+                        <div class="preview-header">
+                            <i class="fas fa-eye"></i> Transfer Preview
+                        </div>
+                        <div class="preview-grid">
+                            <div class="preview-item">
+                                <span class="preview-label">Provider</span>
+                                <span class="preview-value" id="previewProvider">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="preview-label">Current Float</span>
+                                <span class="preview-value preview-float" id="previewCurrentFloat">TSh 0</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="preview-label">Current Cash</span>
+                                <span class="preview-value preview-cash" id="previewCurrentCash">TSh 0</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="preview-label">After Transfer</span>
+                                <span class="preview-value preview-after" id="previewAfter">TSh 0</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="transfer-form-row">
+                        <div class="transfer-form-group">
+                            <label>Reference Number</label>
+                            <input type="text" name="reference_number" class="transfer-form-control" 
+                                   placeholder="Optional reference">
+                        </div>
+                        <div class="transfer-form-group">
+                            <label>Description</label>
+                            <input type="text" name="description" class="transfer-form-control" 
+                                   placeholder="Optional description">
+                        </div>
+                    </div>
+                    
+                    <div class="transfer-form-actions">
+                        <button type="submit" class="btn btn-transfer" id="transferSubmitBtn">
+                            <i class="fas fa-exchange-alt"></i> Execute Transfer
+                        </button>
+                        <button type="reset" class="btn btn-reset" onclick="resetTransfer()">
+                            <i class="fas fa-undo"></i> Reset
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Summary Cards -->
+            <div class="transfer-summary-cards">
+                <div class="transfer-summary-card">
+                    <div class="ts-icon ts-icon-purple">
+                        <i class="fas fa-exchange-alt"></i>
+                    </div>
+                    <div class="ts-info">
+                        <span class="ts-label">My Transfers</span>
+                        <span class="ts-value"><?php echo number_format($total_transfers); ?></span>
+                    </div>
+                </div>
+                
+                <div class="transfer-summary-card">
+                    <div class="ts-icon ts-icon-green">
+                        <i class="fas fa-coins"></i>
+                    </div>
+                    <div class="ts-info">
+                        <span class="ts-label">My Total Amount</span>
+                        <span class="ts-value"><?php echo formatCurrency($total_amount); ?></span>
+                    </div>
+                </div>
+                
+                <div class="transfer-summary-card">
+                    <div class="ts-icon ts-icon-blue">
+                        <i class="fas fa-arrow-right"></i>
+                    </div>
+                    <div class="ts-info">
+                        <span class="ts-label">My Cash → Float</span>
+                        <span class="ts-value"><?php echo formatCurrency($total_cash_to_float); ?></span>
+                    </div>
+                </div>
+                
+                <div class="transfer-summary-card">
+                    <div class="ts-icon ts-icon-orange">
+                        <i class="fas fa-arrow-left"></i>
+                    </div>
+                    <div class="ts-info">
+                        <span class="ts-label">My Float → Cash</span>
+                        <span class="ts-value"><?php echo formatCurrency($total_float_to_cash); ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="filters-bar">
+                <form method="GET" action="" class="filters-form">
+                    <div class="filter-group">
+                        <label>From Date</label>
+                        <input type="date" name="from_date" value="<?php echo htmlspecialchars($from_date); ?>" class="form-control">
+                    </div>
+                    <div class="filter-group">
+                        <label>To Date</label>
+                        <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
+                    </div>
+                    <div class="filter-group">
+                        <button type="submit" class="btn btn-filter">
+                            <i class="fas fa-search"></i> Filter
+                        </button>
+                        <a href="index_employee.php" class="btn btn-reset">
+                            <i class="fas fa-undo"></i> Reset
+                        </a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Transfer History Table -->
+            <div class="table-container">
+                
+                <div class="table-red-header">
+                    <div class="table-red-header-left">
+                        <i class="fas fa-history"></i>
+                        <h3>My Transfer History</h3>
+                        <span class="count-badge"><?php echo count($transfers); ?></span>
+                    </div>
+                </div>
+                
+                <?php if (count($transfers) > 0): ?>
+                    <div class="table-wrapper" id="transferTableWrapper">
+                        <table class="data-table" id="transferTable">
+                            <thead>
+                                <tr class="table-search-row">
+                                    <th colspan="11" class="table-search-cell">
+                                        <div class="table-search-row-content">
+                                            <div class="table-search-wrapper">
+                                                <i class="fas fa-search table-search-icon"></i>
+                                                <input type="text" 
+                                                       class="table-search-input" 
+                                                       id="tableSearchInput"
+                                                       placeholder="Search transfer #, provider..."
+                                                       oninput="onTableSearch(this)">
+                                                <button type="button" class="table-search-clear" 
+                                                        id="tableSearchClear"
+                                                        onclick="clearTableSearch()" 
+                                                        style="display:none;">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <span class="table-search-count" 
+                                                      id="tableSearchCount" 
+                                                      style="display:none;">0</span>
+                                            </div>
+                                            
+                                            <div class="table-scroll-center">
+                                                <button type="button" class="scroll-btn scroll-left" 
+                                                        onclick="scrollTable('left')" 
+                                                        title="Scroll Left">
+                                                    <i class="fas fa-chevron-left"></i>
+                                                </button>
+                                                <span class="scroll-label">
+                                                    <i class="fas fa-arrows-alt-h"></i> SCROLL
+                                                </span>
+                                                <button type="button" class="scroll-btn scroll-right" 
+                                                        onclick="scrollTable('right')" 
+                                                        title="Scroll Right">
+                                                    <i class="fas fa-chevron-right"></i>
+                                                </button>
+                                            </div>
+                                            
+                                            <div class="table-search-spacer"></div>
+                                        </div>
+                                    </th>
+                                </tr>
+                                <tr>
+                                    <th style="width: 50px;">#</th>
+                                    <th>Transfer #</th>
+                                    <th>Type</th>
+                                    <th>Date & Time</th>
+                                    <th>Provider</th>
+                                    <th>Code</th>
+                                    <th class="text-right">Amount</th>
+                                    <th>Float Change</th>
+                                    <th>Employee</th>
+                                    <th>Reference</th>
+                                    <th style="width: 100px;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="transferTableBody">
+                                <?php 
+                                $i = 1;
+                                foreach ($transfers as $t): 
+                                    $is_cash_to_float = $t['transfer_type'] === 'cash_to_float';
+                                    $type_label = $is_cash_to_float ? 'Cash → Float' : 'Float → Cash';
+                                    $type_class = $is_cash_to_float ? 'type-cash-to-float' : 'type-float-to-cash';
+                                    $color = $t['color_code'] ?? '#0B5ED7';
+                                    $icon = $t['icon_class'] ?? 'fas fa-university';
+                                    
+                                    $employee_avatar = $t['employee_avatar'] ?? '';
+                                    $employee_initial = strtoupper(substr($t['employee_name'] ?? 'N', 0, 1));
+                                    
+                                    $search_data = strtolower(
+                                        ($t['transfer_number'] ?? '') . ' ' .
+                                        ($t['provider_name'] ?? '') . ' ' .
+                                        ($t['provider_code'] ?? '') . ' ' .
+                                        ($t['employee_name'] ?? '') . ' ' .
+                                        ($t['reference_number'] ?? '')
+                                    );
+                                ?>
+                                    <tr class="transfer-row" data-search="<?php echo htmlspecialchars($search_data); ?>">
+                                        <td class="row-number"><?php echo $i++; ?></td>
+                                        <td>
+                                            <span class="transfer-number"><?php echo htmlspecialchars($t['transfer_number']); ?></span>
+                                        </td>
+                                        <td>
+                                            <span class="type-badge-txn <?php echo $type_class; ?>">
+                                                <i class="fas fa-arrow-<?php echo $is_cash_to_float ? 'right' : 'left'; ?>"></i>
+                                                <?php echo $type_label; ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="date-cell">
+                                                <i class="far fa-calendar"></i>
+                                                <?php echo date('d M Y', strtotime($t['transfer_date'])); ?>
+                                                <span class="time-cell">
+                                                    <?php echo date('H:i', strtotime($t['transfer_time'] ?? $t['created_at'])); ?>
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="provider-cell">
+                                                <div class="provider-icon" style="background:<?php echo $color; ?>;">
+                                                    <i class="<?php echo $icon; ?>"></i>
+                                                </div>
+                                                <span><?php echo htmlspecialchars($t['provider_name'] ?? 'N/A'); ?></span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="code-badge"><?php echo htmlspecialchars($t['provider_code'] ?? '-'); ?></span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="amount-transfer <?php echo $type_class; ?>">
+                                                <?php echo formatCurrency($t['amount']); ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="float-change">
+                                                <span class="float-before"><?php echo formatCurrency($t['before_float']); ?></span>
+                                                <i class="fas fa-arrow-right"></i>
+                                                <span class="float-after"><?php echo formatCurrency($t['after_float']); ?></span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="employee-cell-full">
+                                                <?php if ($employee_avatar && file_exists('../../' . $employee_avatar)): ?>
+                                                    <img src="../../<?php echo htmlspecialchars($employee_avatar); ?>" 
+                                                         alt="<?php echo htmlspecialchars($t['employee_name']); ?>"
+                                                         class="employee-avatar-img"
+                                                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                                    <div class="employee-avatar" style="display:none;">
+                                                        <?php echo $employee_initial; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div class="employee-avatar">
+                                                        <?php echo $employee_initial; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <div class="employee-name-details">
+                                                    <span class="employee-name-full">
+                                                        <?php echo htmlspecialchars($t['employee_name'] ?? 'N/A'); ?>
+                                                    </span>
+                                                    <?php if (!empty($t['employee_code'])): ?>
+                                                        <span class="employee-code">
+                                                            <?php echo htmlspecialchars($t['employee_code']); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="reference-cell">
+                                                <?php echo htmlspecialchars($t['reference_number'] ?: '-'); ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="transfer-actions">
+                                                <a href="view_employee.php?id=<?php echo $t['id']; ?>" 
+                                                   class="btn-action-txn btn-view-txn" 
+                                                   title="View Transfer Details">
+                                                    <i class="fas fa-eye"></i>
+                                                    <span>View</span>
+                                                </a>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                        
+                        <div class="no-results" id="noResults" style="display:none;">
+                            <i class="fas fa-search-minus"></i>
+                            <p>No transfers match your search</p>
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="clearTableSearch()">
+                                <i class="fas fa-times"></i> Clear Search
+                            </button>
+                        </div>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-exchange-alt"></i>
+                        <h3>No Transfers Yet</h3>
+                        <p>You haven't made any transfers in this period.</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div><!-- /.content-with-margin -->
+
+    </div><!-- /.main-content -->
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
 <style>
 /* ============================================================
-   GLOBAL
+   GLOBAL - SIDEBAR 220px, TOPBAR 70px
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
-html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
-.main-content {
-    overflow-x: hidden !important; max-width: 100% !important;
-    width: 100% !important; padding: 16px 20px !important;
+html, body { 
+    overflow-x: hidden !important; 
+    max-width: 100vw !important; 
+    width: 100% !important; 
 }
 
+/* ============================================================
+   MAIN WRAPPER - Starts AFTER sidebar (220px)
+   ============================================================ */
+.main-wrapper { 
+    overflow-x: hidden !important; 
+    max-width: 100% !important; 
+    margin-left: 220px !important;
+    width: calc(100% - 220px) !important;
+    padding-top: 70px !important;
+    min-height: 100vh;
+    background: var(--bg-body);
+    transition: margin-left 0.3s ease, width 0.3s ease;
+    position: relative;
+}
+
+/* ============================================================
+   MAIN CONTENT - ZERO left padding (allows header/branch to touch sidebar)
+   ============================================================ */
+.main-content {
+    overflow-x: hidden !important; 
+    max-width: 100% !important;
+    width: 100% !important; 
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* ============================================================
+   CONTENT WITH MARGIN - Wraps cards that need spacing from sidebar
+   ============================================================ */
+.content-with-margin {
+    padding: 0 16px 16px 16px;
+}
+
+/* ============================================================
+   PAGE HEADER - TOUCHES SIDEBAR
+   Container has NO left padding, only inner content has padding
+   ============================================================ */
+.page-header-top {
+    padding: 16px 20px 12px 0;              /* ⭐ NO left padding */
+    margin: 0 0 16px -1px;                   /* ⭐ -1px to overlap sidebar border */
+    width: calc(100% + 1px);
+    background: transparent;
+    border-bottom: 1px solid var(--border-color);
+    position: relative;
+}
+
+.page-header-top-inner {
+    padding-left: 20px;                      /* ⭐ Padding on inner content */
+}
+
+.page-header-top h2 {
+    font-size: 22px;
+    font-weight: 800;
+    margin: 0;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+}
+
+.page-header-top h2 i {
+    color: #7C3AED;
+    font-size: 22px;
+}
+
+.page-header-top .text-muted {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 6px 0 0 0;
+    font-weight: 500;
+}
+
+/* ============================================================
+   CSS VARIABLES - LIGHT MODE
+   ============================================================ */
 :root {
     --bg-body: #f3f4f6;
     --bg-card: #ffffff;
@@ -969,6 +1047,9 @@ html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 
     --shadow-hover: rgba(0,0,0,0.12);
 }
 
+/* ============================================================
+   CSS VARIABLES - DARK MODE
+   ============================================================ */
 html.dark-mode {
     --bg-body: #0f172a;
     --bg-card: #1e293b;
@@ -986,98 +1067,169 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper { background: var(--bg-body) !important; }
 .main-content { background: var(--bg-body) !important; }
 
-/* Branch Card */
+/* ============================================================
+   BRANCH INDICATOR - TOUCHES SIDEBAR
+   Border-radius on right only, left flat
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
-    border-radius: 10px; padding: 12px 20px; margin-bottom: 12px;
-    display: flex; justify-content: space-between; align-items: center;
+    border-radius: 0 14px 14px 0;            /* ⭐ Left flat, right rounded */
+    padding: 18px 24px;
+    margin: 0 16px 16px -1px;                 /* ⭐ -1px left, margin right/bottom */
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
     box-shadow: 0 3px 12px rgba(220, 38, 38, 0.3);
-    flex-wrap: wrap; gap: 10px; max-width: 100%;
+    flex-wrap: wrap; 
+    gap: 14px; 
+    width: calc(100% - 15px);                 /* ⭐ Compensate for margins */
+    max-width: calc(100% - 15px);
+    position: relative;
+    overflow: hidden;
 }
-.branch-indicator-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; flex: 1; }
-.branch-icon-wrapper {
-    width: 38px; height: 38px; background: rgba(255, 255, 255, 0.15);
-    border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; font-size: 16px; color: #FFFFFF; flex-shrink: 0;
-}
-.branch-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.branch-indicator-label {
-    font-size: 10px; font-weight: 500; opacity: 0.7;
-    text-transform: uppercase; letter-spacing: 1px; color: #FFFFFF;
-}
-.branch-indicator-name {
-    font-weight: 700; font-size: 14px; color: #FFFFFF;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;
-}
-.branch-indicator-code {
-    font-size: 10px; font-weight: 600; color: #FFFFFF;
-    padding: 2px 10px; background: rgba(255, 255, 255, 0.15); border-radius: 12px;
-}
-.branch-location {
-    display: flex; align-items: center; gap: 5px; font-size: 11px;
-    color: rgba(255,255,255,0.85); padding: 3px 10px;
-    background: rgba(255, 255, 255, 0.08); border-radius: 12px; white-space: nowrap;
-}
-.branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.branch-indicator-right .date-display {
-    font-size: 12px; color: rgba(255,255,255,0.85);
-    padding: 5px 12px; background: rgba(255, 255, 255, 0.1);
-    border-radius: 16px; display: flex; align-items: center; gap: 5px;
-    white-space: nowrap;
+.branch-indicator::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 280px; height: 280px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
 }
 
-/* Capital Summary */
+.branch-indicator-left { 
+    display: flex; 
+    align-items: center; 
+    gap: 16px; 
+    flex-wrap: wrap; 
+    min-width: 0; 
+    flex: 1; 
+    position: relative; 
+    z-index: 1; 
+}
+.branch-icon-wrapper {
+    width: 48px; 
+    height: 48px; 
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 12px; 
+    display: flex; 
+    align-items: center;
+    justify-content: center; 
+    font-size: 20px; 
+    color: #FFFFFF; 
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+}
+.branch-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.branch-indicator-label {
+    font-size: 10px; font-weight: 700; opacity: 0.85;
+    text-transform: uppercase; letter-spacing: 1.2px; color: #FFFFFF;
+}
+.branch-indicator-name {
+    font-weight: 800; font-size: 16px; color: #FFFFFF;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}
+.branch-indicator-code {
+    font-size: 11px; font-weight: 700; color: #FFFFFF;
+    padding: 3px 12px; background: rgba(255, 255, 255, 0.2); 
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.branch-location {
+    display: flex; align-items: center; gap: 6px; font-size: 12px;
+    color: rgba(255,255,255,0.9); padding: 5px 14px;
+    background: rgba(255, 255, 255, 0.12); 
+    border-radius: 12px; 
+    white-space: nowrap;
+}
+.branch-indicator-right { 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    flex-shrink: 0; 
+    position: relative; 
+    z-index: 1; 
+}
+.branch-indicator-right .date-display {
+    font-size: 13px; color: rgba(255,255,255,0.95);
+    padding: 7px 16px; background: rgba(255, 255, 255, 0.15);
+    border-radius: 16px; display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; font-weight: 600;
+}
+
+/* ============================================================
+   CAPITAL SUMMARY - BIGGER CARDS
+   ============================================================ */
 .capital-summary-compact {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 16px;
+    margin-bottom: 20px;
 }
+
 .capital-item-compact {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 18px;
-    border-radius: 12px;
+    gap: 18px;
+    padding: 22px 26px;
+    border-radius: 16px;
     color: #FFFFFF;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
     position: relative;
     overflow: hidden;
     min-width: 0;
+    min-height: 110px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.capital-item-compact:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.18);
 }
 .capital-item-compact::before {
     content: '';
     position: absolute;
     top: -50%; right: -20%;
-    width: 120px; height: 120px;
+    width: 160px; height: 160px;
     background: rgba(255,255,255,0.08);
     border-radius: 50%;
 }
 .capital-float { background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%); }
 .capital-cash { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
 .capital-total { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
+
 .capital-icon-compact {
-    width: 44px; height: 44px;
-    background: rgba(255,255,255,0.2);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; flex-shrink: 0;
-    position: relative; z-index: 1;
+    width: 60px; 
+    height: 60px;
+    background: rgba(255,255,255,0.22);
+    border-radius: 16px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 26px; 
+    flex-shrink: 0;
+    position: relative; 
+    z-index: 1;
     backdrop-filter: blur(8px);
-    border: 1.5px solid rgba(255,255,255,0.2);
+    border: 1.5px solid rgba(255,255,255,0.25);
 }
 .capital-info-compact {
-    display: flex; flex-direction: column; gap: 3px;
-    min-width: 0; flex: 1;
-    position: relative; z-index: 1;
+    display: flex; 
+    flex-direction: column; 
+    gap: 5px;
+    min-width: 0; 
+    flex: 1;
+    position: relative; 
+    z-index: 1;
 }
 .capital-label-compact {
-    font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 1px;
+    font-size: 12px; 
+    font-weight: 800;
+    text-transform: uppercase; 
+    letter-spacing: 1.2px;
     opacity: 0.9;
 }
 .capital-value-compact {
-    font-size: clamp(15px, 1.4vw, 20px);
+    font-size: clamp(20px, 2vw, 28px);
     font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: 0.3px;
@@ -1087,19 +1239,16 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* Page Header */
-.page-header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 16px; flex-wrap: wrap; gap: 12px;
-}
-.page-header .header-left h2 { font-size: 20px; font-weight: 700; margin: 0; }
-.page-header .header-left h2 i { margin-right: 8px; }
-.page-header .header-left .text-muted { font-size: 12px; color: var(--text-muted); margin: 4px 0 0 0; }
-
-/* Alerts */
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
-    padding: 14px 18px; border-radius: 10px;
-    margin-bottom: 16px; display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; 
+    border-radius: 10px;
+    margin-bottom: 16px; 
+    display: flex; 
+    align-items: center; 
+    gap: 12px;
     animation: slideDown 0.4s ease forwards;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
@@ -1121,58 +1270,76 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* Transfer Form */
+/* ============================================================
+   TRANSFER FORM
+   ============================================================ */
 .transfer-form-container {
     background: var(--bg-card);
     border-radius: 14px;
     border: 1.5px solid var(--border-color);
-    margin-bottom: 18px;
+    margin-bottom: 20px;
     overflow: hidden;
     box-shadow: 0 4px 16px var(--shadow-color);
 }
 .transfer-form-header {
     background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-    padding: 16px 24px;
-    display: flex; justify-content: space-between; align-items: center;
-    color: #FFFFFF; gap: 12px; flex-wrap: wrap;
+    padding: 18px 26px;
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    color: #FFFFFF; 
+    gap: 12px; 
+    flex-wrap: wrap;
 }
 .transfer-form-header-left { display: flex; align-items: center; gap: 14px; }
 .transfer-form-header-left > i {
-    font-size: 24px; width: 46px; height: 46px;
+    font-size: 24px; 
+    width: 50px; 
+    height: 50px;
     background: rgba(255,255,255,0.15);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
+    border-radius: 14px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
     border: 1px solid rgba(255,255,255,0.2);
     backdrop-filter: blur(8px);
 }
-.transfer-form-header h3 { font-size: 16px; font-weight: 800; margin: 0 0 2px 0; color: #FFFFFF; }
+.transfer-form-header h3 { font-size: 18px; font-weight: 800; margin: 0 0 2px 0; color: #FFFFFF; }
 .transfer-form-header p { font-size: 12px; margin: 0; color: rgba(255,255,255,0.8); font-weight: 500; }
 .btn-toggle-transfer {
-    width: 34px; height: 34px;
-    border-radius: 8px;
+    width: 38px; 
+    height: 38px;
+    border-radius: 10px;
     background: rgba(255,255,255,0.15);
     color: #FFFFFF;
     border: 1px solid rgba(255,255,255,0.2);
     cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 15px;
     transition: all 0.2s ease;
 }
 .btn-toggle-transfer:hover { background: rgba(255,255,255,0.3); }
-.transfer-form { padding: 24px; }
+.transfer-form { padding: 26px; }
 .transfer-form.hidden { display: none; }
 
 .transfer-type-selector {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 12px; margin-bottom: 20px;
+    display: grid; 
+    grid-template-columns: 1fr 1fr;
+    gap: 14px; 
+    margin-bottom: 22px;
 }
 .transfer-type-option { cursor: pointer; position: relative; }
 .transfer-type-option input[type="radio"] {
     position: absolute; opacity: 0; pointer-events: none;
 }
 .transfer-type-card {
-    display: flex; align-items: center; gap: 14px;
-    padding: 16px 18px; border-radius: 12px;
+    display: flex; 
+    align-items: center; 
+    gap: 16px;
+    padding: 18px 20px; 
+    border-radius: 14px;
     border: 2px solid var(--border-color);
     background: var(--bg-input);
     transition: all 0.3s ease;
@@ -1182,15 +1349,20 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 .transfer-type-option input[type="radio"]:checked + .transfer-type-card {
     border-color: #7C3AED;
     background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%);
-    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.25);
+    box-shadow: 0 6px 20px rgba(124, 58, 237, 0.25);
 }
 html.dark-mode .transfer-type-option input[type="radio"]:checked + .transfer-type-card {
     background: linear-gradient(135deg, #4C1D95 0%, #6D28D9 100%);
 }
 .type-icon {
-    width: 46px; height: 46px; border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; flex-shrink: 0;
+    width: 52px; 
+    height: 52px; 
+    border-radius: 14px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 22px; 
+    flex-shrink: 0;
 }
 .type-cash-to-float .type-icon {
     background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
@@ -1203,16 +1375,22 @@ html.dark-mode .transfer-type-option input[type="radio"]:checked + .transfer-typ
 html.dark-mode .type-cash-to-float .type-icon { background: #065F46; color: #34D399; }
 html.dark-mode .type-float-to-cash .type-icon { background: #5F3A1E; color: #FBBF24; }
 .type-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.type-title { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+.type-title { font-size: 15px; font-weight: 800; color: var(--text-primary); }
 .type-desc { font-size: 11px; font-weight: 500; color: var(--text-muted); }
 
-/* PROVIDER SELECTION */
-.provider-select-section { margin-bottom: 20px; }
+/* ============================================================
+   PROVIDER SELECTION
+   ============================================================ */
+.provider-select-section { margin-bottom: 22px; }
 .provider-select-label {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 700;
+    display: flex; 
+    align-items: center; 
+    gap: 6px;
+    font-size: 12px; 
+    font-weight: 700;
     color: var(--text-secondary);
-    text-transform: uppercase; letter-spacing: 0.5px;
+    text-transform: uppercase; 
+    letter-spacing: 0.5px;
     margin-bottom: 8px;
 }
 .provider-select-label i { color: #7C3AED; font-size: 13px; }
@@ -1221,13 +1399,17 @@ html.dark-mode .type-float-to-cash .type-icon { background: #5F3A1E; color: #FBB
 .custom-provider-dropdown { position: relative; width: 100%; }
 
 .provider-dropdown-trigger {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 14px 18px;
+    display: flex; 
+    align-items: center; 
+    justify-content: space-between;
+    gap: 12px; 
+    padding: 16px 20px;
     background: var(--bg-input);
     border: 2px solid var(--border-color);
-    border-radius: 12px;
-    cursor: pointer; transition: all 0.3s ease;
-    min-height: 60px;
+    border-radius: 14px;
+    cursor: pointer; 
+    transition: all 0.3s ease;
+    min-height: 68px;
 }
 .provider-dropdown-trigger:hover {
     border-color: #7C3AED;
@@ -1240,50 +1422,80 @@ html.dark-mode .type-float-to-cash .type-icon { background: #5F3A1E; color: #FBB
 }
 .provider-dropdown-trigger-content { flex: 1; min-width: 0; }
 .provider-placeholder {
-    display: flex; align-items: center; gap: 10px;
-    color: var(--text-muted); font-size: 14px; font-weight: 500;
+    display: flex; 
+    align-items: center; 
+    gap: 10px;
+    color: var(--text-muted); 
+    font-size: 14px; 
+    font-weight: 500;
 }
 .provider-placeholder i { font-size: 18px; color: #7C3AED; }
 
 .selected-provider-display {
-    display: flex; align-items: center; gap: 14px; min-width: 0;
+    display: flex; 
+    align-items: center; 
+    gap: 16px; 
+    min-width: 0;
 }
 .selected-provider-icon {
-    width: 42px; height: 42px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 18px; flex-shrink: 0;
+    width: 48px; 
+    height: 48px; 
+    border-radius: 50%;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    color: #FFFFFF; 
+    font-size: 20px; 
+    flex-shrink: 0;
     box-shadow: 0 3px 10px rgba(0,0,0,0.15);
 }
 .selected-provider-info {
-    display: flex; flex-direction: column; gap: 2px;
-    min-width: 0; flex: 1;
+    display: flex; 
+    flex-direction: column; 
+    gap: 3px;
+    min-width: 0; 
+    flex: 1;
 }
 .selected-provider-name {
-    font-size: 15px; font-weight: 800;
+    font-size: 16px; 
+    font-weight: 800;
     color: var(--text-primary);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; 
+    overflow: hidden; 
+    text-overflow: ellipsis;
 }
 .selected-provider-meta {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    display: flex; 
+    align-items: center; 
+    gap: 10px; 
+    flex-wrap: wrap;
 }
 .selected-provider-code {
-    font-size: 11px; font-weight: 700;
-    color: #7C3AED; background: #EDE9FE;
-    padding: 2px 10px; border-radius: 8px;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #7C3AED; 
+    background: #EDE9FE;
+    padding: 3px 12px; 
+    border-radius: 8px;
     font-family: 'Courier New', monospace;
 }
 html.dark-mode .selected-provider-code { background: #4C1D95; color: #DDD6FE; }
 .selected-provider-float {
-    font-size: 11px; font-weight: 700;
+    font-size: 12px; 
+    font-weight: 700;
     color: #059669;
-    display: flex; align-items: center; gap: 4px;
+    display: flex; 
+    align-items: center; 
+    gap: 5px;
 }
-.selected-provider-float i { font-size: 10px; }
+.selected-provider-float i { font-size: 11px; }
 html.dark-mode .selected-provider-float { color: #34D399; }
 
 .provider-dropdown-arrow {
-    font-size: 14px; color: var(--text-muted);
-    transition: transform 0.3s ease; flex-shrink: 0;
+    font-size: 14px; 
+    color: var(--text-muted);
+    transition: transform 0.3s ease; 
+    flex-shrink: 0;
 }
 .custom-provider-dropdown.open .provider-dropdown-arrow {
     transform: rotate(180deg);
@@ -1293,13 +1505,14 @@ html.dark-mode .selected-provider-float { color: #34D399; }
 .provider-dropdown-menu {
     position: absolute;
     top: calc(100% + 6px);
-    left: 0; right: 0;
+    left: 0; 
+    right: 0;
     background: var(--bg-card);
     border: 1.5px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 14px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.15);
     z-index: 100;
-    max-height: 480px;
+    max-height: 500px;
     overflow: hidden;
     display: none;
     animation: dropIn 0.2s ease forwards;
@@ -1311,26 +1524,35 @@ html.dark-mode .selected-provider-float { color: #34D399; }
 }
 
 .provider-dropdown-search {
-    display: flex; align-items: center; gap: 8px;
-    padding: 12px 16px;
+    display: flex; 
+    align-items: center; 
+    gap: 8px;
+    padding: 14px 18px;
     border-bottom: 1.5px solid var(--border-color);
     background: var(--bg-input);
-    position: sticky; top: 0; z-index: 2;
+    position: sticky; 
+    top: 0; 
+    z-index: 2;
 }
-.provider-dropdown-search i { font-size: 13px; color: #7C3AED; flex-shrink: 0; }
+.provider-dropdown-search i { font-size: 14px; color: #7C3AED; flex-shrink: 0; }
 .provider-dropdown-search input {
-    flex: 1; border: none; background: transparent;
-    padding: 4px 0; font-size: 13px;
-    color: var(--text-primary); outline: none;
-    font-family: 'Inter', sans-serif; min-width: 0;
+    flex: 1; 
+    border: none; 
+    background: transparent;
+    padding: 4px 0; 
+    font-size: 14px;
+    color: var(--text-primary); 
+    outline: none;
+    font-family: 'Inter', sans-serif; 
+    min-width: 0;
 }
-.provider-dropdown-search input::placeholder { color: var(--text-light); font-size: 12px; }
+.provider-dropdown-search input::placeholder { color: var(--text-light); font-size: 13px; }
 
 /* PROVIDER CARDS - 3 PER ROW */
 .provider-dropdown-list {
-    max-height: 400px;
+    max-height: 420px;
     overflow-y: auto;
-    padding: 12px;
+    padding: 14px;
 }
 .provider-dropdown-list::-webkit-scrollbar { width: 6px; }
 .provider-dropdown-list::-webkit-scrollbar-track { background: transparent; }
@@ -1342,7 +1564,7 @@ html.dark-mode .selected-provider-float { color: #34D399; }
 .provider-cards-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+    gap: 12px;
 }
 
 .provider-card-item {
@@ -1350,26 +1572,27 @@ html.dark-mode .selected-provider-float { color: #34D399; }
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    padding: 14px 10px 12px 10px;
+    gap: 8px;
+    padding: 18px 14px 16px 14px;
     background: var(--bg-input);
     border: 2px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 14px;
     cursor: pointer;
     transition: all 0.25s ease;
     text-align: center;
     min-width: 0;
+    min-height: 200px;
 }
 .provider-card-item:hover {
     border-color: #7C3AED;
     background: var(--bg-card);
     transform: translateY(-3px);
-    box-shadow: 0 6px 20px rgba(124, 58, 237, 0.15);
+    box-shadow: 0 8px 24px rgba(124, 58, 237, 0.15);
 }
 .provider-card-item.selected {
     border-color: #7C3AED;
     background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%);
-    box-shadow: 0 6px 20px rgba(124, 58, 237, 0.25);
+    box-shadow: 0 8px 24px rgba(124, 58, 237, 0.25);
 }
 html.dark-mode .provider-card-item.selected {
     background: linear-gradient(135deg, #4C1D95 0%, #6D28D9 100%);
@@ -1378,13 +1601,17 @@ html.dark-mode .provider-card-item.selected {
 
 .provider-card-check {
     position: absolute;
-    top: 6px; right: 6px;
-    width: 22px; height: 22px;
+    top: 8px; 
+    right: 8px;
+    width: 24px; 
+    height: 24px;
     background: #7C3AED;
     color: #FFFFFF;
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 12px;
     opacity: 0;
     transform: scale(0.5);
     transition: all 0.2s ease;
@@ -1396,28 +1623,38 @@ html.dark-mode .provider-card-item.selected {
 }
 
 .provider-card-icon {
-    width: 48px; height: 48px;
+    width: 58px; 
+    height: 58px;
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 20px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    color: #FFFFFF; 
+    font-size: 24px;
     flex-shrink: 0;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
     transition: all 0.25s ease;
 }
 .provider-card-item:hover .provider-card-icon { transform: scale(1.08); }
 
 .provider-card-name {
-    font-size: 12px; font-weight: 800;
+    font-size: 14px; 
+    font-weight: 800;
     color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; width: 100%;
-    line-height: 1.2;
+    white-space: nowrap; 
+    overflow: hidden;
+    text-overflow: ellipsis; 
+    width: 100%;
+    line-height: 1.3;
 }
 
 .provider-card-code {
-    font-size: 9px; font-weight: 700;
-    color: #7C3AED; background: #EDE9FE;
-    padding: 2px 8px; border-radius: 6px;
+    font-size: 11px; 
+    font-weight: 700;
+    color: #7C3AED; 
+    background: #EDE9FE;
+    padding: 3px 10px; 
+    border-radius: 8px;
     font-family: 'Courier New', monospace;
     letter-spacing: 0.3px;
     white-space: nowrap;
@@ -1428,36 +1665,38 @@ html.dark-mode .provider-card-code { background: #4C1D95; color: #DDD6FE; }
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
     width: 100%;
-    padding: 6px 8px;
+    padding: 8px 10px;
     background: #ECFDF5;
-    border: 1px solid #A7F3D0;
-    border-radius: 8px;
-    margin-top: 2px;
+    border: 1.5px solid #A7F3D0;
+    border-radius: 10px;
+    margin-top: 4px;
 }
 html.dark-mode .provider-card-float {
     background: #065F46;
     border-color: #10B981;
 }
 .provider-float-label {
-    font-size: 8px; font-weight: 700;
+    font-size: 10px; 
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.6px;
     color: #059669;
-    display: flex; align-items: center; gap: 3px;
+    display: flex; 
+    align-items: center; 
+    gap: 4px;
     white-space: nowrap;
 }
-.provider-float-label i { font-size: 8px; }
+.provider-float-label i { font-size: 10px; }
 html.dark-mode .provider-float-label { color: #34D399; }
 .provider-float-value {
-    font-size: 12px; font-weight: 900;
+    font-size: 15px;
+    font-weight: 900;
     color: #047857;
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: -0.2px;
     white-space: nowrap;
-    word-break: break-all;
-    overflow-wrap: anywhere;
     line-height: 1.2;
     max-width: 100%;
     overflow: hidden;
@@ -1466,17 +1705,20 @@ html.dark-mode .provider-float-label { color: #34D399; }
 html.dark-mode .provider-float-value { color: #6EE7B7; }
 
 .provider-card-type {
-    font-size: 8px; font-weight: 600;
+    font-size: 10px; 
+    font-weight: 600;
     color: var(--text-muted);
-    display: flex; align-items: center; gap: 3px;
+    display: flex; 
+    align-items: center; 
+    gap: 4px;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
 }
-.provider-card-type i { font-size: 8px; }
+.provider-card-type i { font-size: 10px; }
 
 .provider-dropdown-empty {
     padding: 30px 20px;
@@ -1491,23 +1733,30 @@ html.dark-mode .provider-float-value { color: #6EE7B7; }
 
 /* Form Rows */
 .transfer-form-row {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 16px; margin-bottom: 16px;
+    display: grid; 
+    grid-template-columns: 1fr 1fr;
+    gap: 16px; 
+    margin-bottom: 16px;
 }
 .transfer-form-group {
-    display: flex; flex-direction: column; gap: 6px; min-width: 0;
+    display: flex; 
+    flex-direction: column; 
+    gap: 6px; 
+    min-width: 0;
 }
 .transfer-form-group label {
-    font-size: 12px; font-weight: 700;
+    font-size: 12px; 
+    font-weight: 700;
     color: var(--text-secondary);
-    text-transform: uppercase; letter-spacing: 0.5px;
+    text-transform: uppercase; 
+    letter-spacing: 0.5px;
 }
 .transfer-form-group label .required { color: #DC2626; }
 .transfer-form-control {
-    padding: 11px 14px;
+    padding: 13px 16px;
     border: 1.5px solid var(--border-color);
     border-radius: 10px;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-primary);
     background: var(--bg-input);
     font-family: 'Inter', sans-serif;
@@ -1515,12 +1764,13 @@ html.dark-mode .provider-float-value { color: #6EE7B7; }
     width: 100%;
 }
 .transfer-form-control:focus {
-    outline: none; border-color: #7C3AED;
+    outline: none; 
+    border-color: #7C3AED;
     box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
     background: var(--bg-card);
 }
 .transfer-amount-input {
-    font-size: 20px !important;
+    font-size: 22px !important;
     font-weight: 800;
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: 1px;
@@ -1530,9 +1780,9 @@ html.dark-mode .provider-float-value { color: #6EE7B7; }
 .transfer-preview {
     background: linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%);
     border: 2px solid #C4B5FD;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 16px;
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin-bottom: 18px;
     animation: slideDown 0.3s ease forwards;
 }
 html.dark-mode .transfer-preview {
@@ -1540,25 +1790,31 @@ html.dark-mode .transfer-preview {
     border-color: #8B5CF6;
 }
 .preview-header {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 12px; font-weight: 800;
+    display: flex; 
+    align-items: center; 
+    gap: 8px;
+    font-size: 13px; 
+    font-weight: 800;
     color: #7C3AED;
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
 }
 html.dark-mode .preview-header { color: #DDD6FE; }
 .preview-header i { color: #7C3AED; }
 html.dark-mode .preview-header i { color: #A78BFA; }
 .preview-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
+    display: grid; 
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
 }
 .preview-item {
-    display: flex; flex-direction: column; gap: 4px;
-    padding: 10px 12px;
+    display: flex; 
+    flex-direction: column; 
+    gap: 5px;
+    padding: 12px 14px;
     background: rgba(255,255,255,0.7);
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid rgba(196, 181, 253, 0.4);
     min-width: 0;
 }
@@ -1567,13 +1823,15 @@ html.dark-mode .preview-item {
     border-color: rgba(139, 92, 246, 0.3);
 }
 .preview-label {
-    font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.8px;
+    font-size: 10px; 
+    font-weight: 700;
+    text-transform: uppercase; 
+    letter-spacing: 0.8px;
     color: #6D28D9;
 }
 html.dark-mode .preview-label { color: #C4B5FD; }
 .preview-value {
-    font-size: clamp(12px, 1.1vw, 15px);
+    font-size: clamp(13px, 1.2vw, 16px);
     font-weight: 900;
     color: #1E293B;
     font-family: 'Inter', 'Courier New', monospace;
@@ -1590,14 +1848,21 @@ html.dark-mode .preview-cash { color: #34D399; }
 html.dark-mode .preview-after { color: #A78BFA; }
 
 .transfer-form-actions {
-    display: flex; gap: 12px; padding-top: 8px; flex-wrap: wrap;
+    display: flex; 
+    gap: 12px; 
+    padding-top: 8px; 
+    flex-wrap: wrap;
 }
 .btn {
-    padding: 11px 22px;
-    border: none; border-radius: 10px;
-    font-weight: 700; font-size: 13px;
+    padding: 12px 24px;
+    border: none; 
+    border-radius: 10px;
+    font-weight: 700; 
+    font-size: 13px;
     cursor: pointer;
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; 
+    align-items: center; 
+    gap: 6px;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
     white-space: nowrap;
@@ -1630,30 +1895,41 @@ html.dark-mode .preview-after { color: #A78BFA; }
 }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
 
-/* Summary Cards */
+/* ============================================================
+   SUMMARY CARDS - BIGGER
+   ============================================================ */
 .transfer-summary-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 14px; margin-bottom: 16px;
+    gap: 16px; 
+    margin-bottom: 20px;
 }
 .transfer-summary-card {
-    display: flex; align-items: center; gap: 14px;
-    padding: 16px 20px;
+    display: flex; 
+    align-items: center; 
+    gap: 18px;
+    padding: 22px 24px;
     background: var(--bg-card);
-    border-radius: 12px;
+    border-radius: 16px;
     border: 1.5px solid var(--border-color);
-    box-shadow: 0 2px 8px var(--shadow-color);
-    transition: all 0.3s ease; min-width: 0;
+    box-shadow: 0 4px 14px var(--shadow-color);
+    transition: all 0.3s ease; 
+    min-width: 0;
+    min-height: 110px;
 }
 .transfer-summary-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px var(--shadow-hover);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 22px var(--shadow-hover);
 }
 .ts-icon {
-    width: 48px; height: 48px;
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; flex-shrink: 0;
+    width: 60px; 
+    height: 60px;
+    border-radius: 16px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 26px; 
+    flex-shrink: 0;
 }
 .ts-icon-purple { background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); color: #7C3AED; border: 1.5px solid #C4B5FD; }
 .ts-icon-green { background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); color: #059669; border: 1.5px solid #6EE7B7; }
@@ -1663,14 +1939,17 @@ html.dark-mode .ts-icon-purple { background: #4C1D95; color: #DDD6FE; border-col
 html.dark-mode .ts-icon-green { background: #065F46; color: #34D399; border-color: #10B981; }
 html.dark-mode .ts-icon-blue { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
 html.dark-mode .ts-icon-orange { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
-.ts-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.ts-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .ts-label {
-    font-size: 11px; text-transform: uppercase;
-    letter-spacing: 0.7px; font-weight: 700;
+    font-size: 12px; 
+    text-transform: uppercase;
+    letter-spacing: 0.8px; 
+    font-weight: 700;
     color: var(--text-muted);
 }
 .ts-value {
-    font-size: 18px; font-weight: 900;
+    font-size: 24px;
+    font-weight: 900;
     color: var(--text-primary);
     font-family: 'Inter', 'Courier New', monospace;
     word-break: break-all;
@@ -1680,64 +1959,88 @@ html.dark-mode .ts-icon-orange { background: #5F3A1E; color: #FBBF24; border-col
 
 /* Filters */
 .filters-bar {
-    background: var(--bg-card); padding: 14px 18px;
-    border-radius: 10px; border: 1px solid var(--border-color);
-    margin-bottom: 16px; max-width: 100%;
+    background: var(--bg-card); 
+    padding: 16px 20px;
+    border-radius: 12px; 
+    border: 1px solid var(--border-color);
+    margin-bottom: 18px;
 }
 .filters-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
-.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group { display: flex; flex-direction: column; gap: 5px; }
 .filter-group label {
-    font-size: 11px; font-weight: 600; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 11px; 
+    font-weight: 600; 
+    color: var(--text-muted);
+    text-transform: uppercase; 
+    letter-spacing: 0.5px;
 }
 .form-control {
-    padding: 8px 12px; border: 1px solid var(--border-color);
-    border-radius: 6px; font-size: 12px; color: var(--text-primary);
-    background: var(--bg-input); transition: all 0.3s ease;
-    min-width: 140px; font-family: 'Inter', sans-serif;
+    padding: 9px 14px; 
+    border: 1px solid var(--border-color);
+    border-radius: 8px; 
+    font-size: 13px; 
+    color: var(--text-primary);
+    background: var(--bg-input); 
+    transition: all 0.3s ease;
+    min-width: 150px; 
+    font-family: 'Inter', sans-serif;
 }
 .form-control:focus {
-    outline: none; border-color: #7C3AED;
+    outline: none; 
+    border-color: #7C3AED;
     box-shadow: 0 0 0 3px rgba(124,58,237,0.1);
 }
 
-/* TABLE CONTAINER */
+/* ============================================================
+   TABLE CONTAINER
+   ============================================================ */
 .table-container {
     background: var(--bg-card);
     border-radius: 14px;
     border: 1.5px solid var(--border-color);
     overflow: hidden;
-    box-shadow: 0 2px 8px var(--shadow-color);
+    box-shadow: 0 4px 14px var(--shadow-color);
     width: 100%;
+    max-width: 100%;
 }
 
-/* RED HEADER */
 .table-red-header {
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
-    padding: 16px 22px;
-    display: flex; justify-content: space-between; align-items: center;
-    flex-wrap: wrap; gap: 10px; color: #FFFFFF;
+    padding: 18px 24px;
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    flex-wrap: wrap; 
+    gap: 10px; 
+    color: #FFFFFF;
 }
-.table-red-header-left { display: flex; align-items: center; gap: 12px; }
+.table-red-header-left { display: flex; align-items: center; gap: 14px; }
 .table-red-header-left i {
-    font-size: 20px; color: #FFFFFF;
+    font-size: 22px; 
+    color: #FFFFFF;
     background: rgba(255,255,255,0.15);
-    width: 40px; height: 40px;
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
+    width: 46px; 
+    height: 46px;
+    border-radius: 12px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
     border: 1px solid rgba(255,255,255,0.2);
 }
 .table-red-header h3 {
-    font-size: 16px; font-weight: 800;
-    margin: 0; color: #FFFFFF;
+    font-size: 18px; 
+    font-weight: 800;
+    margin: 0; 
+    color: #FFFFFF;
     letter-spacing: 0.3px;
 }
 .count-badge {
     background: rgba(255,255,255,0.2);
     color: #FFFFFF;
-    padding: 4px 14px;
-    border-radius: 12px;
-    font-size: 12px; font-weight: 800;
+    padding: 5px 16px;
+    border-radius: 14px;
+    font-size: 13px; 
+    font-weight: 800;
     border: 1px solid rgba(255,255,255,0.25);
 }
 
@@ -1760,7 +2063,6 @@ html.dark-mode .ts-icon-orange { background: #5F3A1E; color: #FBBF24; border-col
     min-width: 1300px;
 }
 
-/* SEARCH + SCROLL ROW */
 .table-search-row { background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important; }
 .table-search-cell {
     padding: 12px 14px !important;
@@ -1791,27 +2093,42 @@ html.dark-mode .ts-icon-orange { background: #5F3A1E; color: #FBBF24; border-col
 html.dark-mode .table-search-wrapper { background: rgba(30, 41, 59, 0.95); }
 .table-search-icon { color: #bb0404; font-size: 12px; flex-shrink: 0; }
 .table-search-input {
-    flex: 1; border: none; background: transparent;
-    padding: 4px 2px; font-size: 12px;
-    font-family: 'Inter', sans-serif; color: #1F2937;
-    outline: none; min-width: 0;
+    flex: 1; 
+    border: none; 
+    background: transparent;
+    padding: 4px 2px; 
+    font-size: 12px;
+    font-family: 'Inter', sans-serif; 
+    color: #1F2937;
+    outline: none; 
+    min-width: 0;
 }
 html.dark-mode .table-search-input { color: #F9FAFB; }
 .table-search-input::placeholder { color: #9CA3AF; font-size: 11px; }
 .table-search-clear {
-    width: 18px; height: 18px; border-radius: 50%;
-    background: #FEE2E2; color: #DC2626;
-    border: none; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 8px; transition: all 0.2s ease;
+    width: 18px; 
+    height: 18px; 
+    border-radius: 50%;
+    background: #FEE2E2; 
+    color: #DC2626;
+    border: none; 
+    cursor: pointer;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 8px; 
+    transition: all 0.2s ease;
     flex-shrink: 0;
 }
 .table-search-clear:hover { background: #DC2626; color: #FFFFFF; }
 .table-search-count {
-    font-size: 10px; font-weight: 700;
+    font-size: 10px; 
+    font-weight: 700;
     padding: 2px 8px;
-    background: #F59E0B; color: #FFFFFF;
-    border-radius: 8px; white-space: nowrap;
+    background: #F59E0B; 
+    color: #FFFFFF;
+    border-radius: 8px; 
+    white-space: nowrap;
     flex-shrink: 0;
 }
 
@@ -1829,25 +2146,32 @@ html.dark-mode .table-search-input { color: #F9FAFB; }
     flex-shrink: 0;
 }
 .scroll-label {
-    font-size: 11px; font-weight: 800;
+    font-size: 11px; 
+    font-weight: 800;
     color: #FCD34D;
     text-transform: uppercase;
     letter-spacing: 1px;
-    display: flex; align-items: center; gap: 5px;
+    display: flex; 
+    align-items: center; 
+    gap: 5px;
     white-space: nowrap;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     padding: 0 4px;
 }
 .scroll-label i { font-size: 11px; color: #FCD34D; }
 .scroll-btn {
-    width: 38px; height: 38px;
+    width: 38px; 
+    height: 38px;
     border-radius: 8px;
     border: 2px solid #FFFFFF;
     background: #FFFFFF;
     color: #bb0404;
     cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 800;
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 15px; 
+    font-weight: 800;
     transition: all 0.2s ease;
     box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
     flex-shrink: 0;
@@ -1855,19 +2179,22 @@ html.dark-mode .table-search-input { color: #F9FAFB; }
     line-height: 1;
 }
 .scroll-btn:hover {
-    background: #FCD34D; color: #78350F;
+    background: #FCD34D; 
+    color: #78350F;
     border-color: #FCD34D;
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
 }
 .scroll-btn i { font-size: 14px; display: block; line-height: 1; }
 
-/* Column Headers */
 .data-table thead tr:not(.table-search-row) { background: var(--bg-table-even); }
 .data-table thead th:not(.table-search-cell) {
-    padding: 12px 14px; text-align: left;
-    font-weight: 700; color: var(--text-muted);
-    text-transform: uppercase; font-size: 10px;
+    padding: 14px 16px; 
+    text-align: left;
+    font-weight: 700; 
+    color: var(--text-muted);
+    text-transform: uppercase; 
+    font-size: 11px;
     letter-spacing: 0.5px;
     border-bottom: 2px solid var(--border-color);
     white-space: nowrap;
@@ -1882,39 +2209,56 @@ html.dark-mode .table-search-input { color: #F9FAFB; }
 .data-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
 .data-table tbody tr.hidden-by-search { display: none !important; }
 .data-table tbody td {
-    padding: 12px 14px; color: var(--text-primary);
+    padding: 14px 16px; 
+    color: var(--text-primary);
     vertical-align: middle;
 }
 .data-table tbody td.text-right { text-align: right; }
 
 .row-number {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 26px; height: 26px; border-radius: 50%;
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center;
+    width: 28px; 
+    height: 28px; 
+    border-radius: 50%;
     background: var(--bg-table-hover);
-    font-size: 11px; font-weight: 700;
+    font-size: 12px; 
+    font-weight: 700;
     color: var(--text-secondary);
     border: 1px solid var(--border-color);
 }
 .transfer-number {
     font-family: 'Courier New', monospace;
-    font-size: 11px; font-weight: 700;
-    color: #7C3AED; background: #EDE9FE;
-    padding: 4px 10px; border-radius: 8px;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #7C3AED; 
+    background: #EDE9FE;
+    padding: 5px 12px; 
+    border-radius: 8px;
     white-space: nowrap;
 }
 html.dark-mode .transfer-number { background: #4C1D95; color: #DDD6FE; }
 
 .type-badge-txn {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 12px; border-radius: 8px;
-    font-size: 11px; font-weight: 700;
+    display: inline-flex; 
+    align-items: center; 
+    gap: 5px;
+    padding: 5px 14px; 
+    border-radius: 8px;
+    font-size: 11px; 
+    font-weight: 700;
     white-space: nowrap;
 }
 .type-badge-txn.type-cash-to-float {
-    background: #D1FAE5; color: #059669; border: 1px solid #A7F3D0;
+    background: #D1FAE5; 
+    color: #059669; 
+    border: 1px solid #A7F3D0;
 }
 .type-badge-txn.type-float-to-cash {
-    background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A;
+    background: #FEF3C7; 
+    color: #D97706; 
+    border: 1px solid #FDE68A;
 }
 html.dark-mode .type-badge-txn.type-cash-to-float {
     background: #065F46; color: #34D399; border-color: #10B981;
@@ -1924,35 +2268,54 @@ html.dark-mode .type-badge-txn.type-float-to-cash {
 }
 
 .date-cell {
-    font-size: 11px; font-weight: 600;
+    font-size: 12px; 
+    font-weight: 600;
     color: var(--text-secondary);
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; 
+    align-items: center; 
+    gap: 5px;
     white-space: nowrap;
 }
 .time-cell {
-    font-size: 10px; color: var(--text-light);
-    margin-left: 4px; font-weight: 600;
+    font-size: 11px; 
+    color: var(--text-light);
+    margin-left: 4px; 
+    font-weight: 600;
 }
 
 .provider-cell { display: flex; align-items: center; gap: 10px; }
 .provider-icon {
-    width: 32px; height: 32px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 12px; flex-shrink: 0;
+    width: 36px; 
+    height: 36px; 
+    border-radius: 50%;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    color: #FFFFFF; 
+    font-size: 14px; 
+    flex-shrink: 0;
 }
 .code-badge {
-    display: inline-block; padding: 3px 10px;
-    background: #DBEAFE; color: #1D4ED8;
-    border-radius: 8px; font-size: 10px;
-    font-weight: 700; font-family: 'Courier New', monospace;
-    letter-spacing: 0.5px; white-space: nowrap;
+    display: inline-block; 
+    padding: 4px 12px;
+    background: #DBEAFE; 
+    color: #1D4ED8;
+    border-radius: 8px; 
+    font-size: 11px;
+    font-weight: 700; 
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px; 
+    white-space: nowrap;
 }
 html.dark-mode .code-badge { background: #1E3A5F; color: #60A5FA; }
 
 .amount-transfer {
-    display: inline-block; padding: 5px 14px;
-    border-radius: 8px; font-weight: 800;
-    font-size: 13px; font-family: 'Courier New', monospace;
+    display: inline-block; 
+    padding: 6px 16px;
+    border-radius: 8px; 
+    font-weight: 800;
+    font-size: 14px; 
+    font-family: 'Courier New', monospace;
     white-space: nowrap;
 }
 .amount-transfer.type-cash-to-float {
@@ -1969,8 +2332,11 @@ html.dark-mode .amount-transfer.type-float-to-cash {
 }
 
 .float-change {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 11px; font-family: 'Courier New', monospace;
+    display: inline-flex; 
+    align-items: center; 
+    gap: 6px;
+    font-size: 11px; 
+    font-family: 'Courier New', monospace;
     white-space: nowrap;
 }
 .float-before { color: #6B7280; font-weight: 600; }
@@ -1980,48 +2346,66 @@ html.dark-mode .float-after { color: #A78BFA; }
 .float-change i { color: #7C3AED; font-size: 9px; }
 
 .employee-cell-full {
-    display: flex; align-items: center; gap: 10px;
+    display: flex; 
+    align-items: center; 
+    gap: 10px;
     min-width: 0;
 }
 .employee-avatar-img {
-    width: 36px; height: 36px;
-    border-radius: 50%; object-fit: cover;
+    width: 38px; 
+    height: 38px;
+    border-radius: 50%; 
+    object-fit: cover;
     border: 2px solid #7C3AED;
-    flex-shrink: 0; background: #F3F4F6;
+    flex-shrink: 0; 
+    background: #F3F4F6;
 }
 .employee-avatar {
-    width: 36px; height: 36px;
+    width: 38px; 
+    height: 38px;
     border-radius: 50%;
     background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
     color: #FFFFFF;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 14px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-weight: 800; 
+    font-size: 15px;
     flex-shrink: 0;
     border: 2px solid #C4B5FD;
     box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
 }
 .employee-name-details {
-    display: flex; flex-direction: column; gap: 2px;
+    display: flex; 
+    flex-direction: column; 
+    gap: 2px;
     min-width: 0;
 }
 .employee-name-full {
-    font-size: 12px; font-weight: 700;
+    font-size: 12px; 
+    font-weight: 700;
     color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 160px;
+    white-space: nowrap; 
+    overflow: hidden;
+    text-overflow: ellipsis; 
+    max-width: 160px;
 }
 .employee-code {
-    font-size: 10px; font-weight: 600;
-    color: #7C3AED; font-family: 'Courier New', monospace;
+    font-size: 10px; 
+    font-weight: 600;
+    color: #7C3AED; 
+    font-family: 'Courier New', monospace;
     background: #EDE9FE;
-    padding: 1px 8px; border-radius: 6px;
+    padding: 1px 8px; 
+    border-radius: 6px;
     align-self: flex-start;
 }
 html.dark-mode .employee-code { background: #4C1D95; color: #DDD6FE; }
 
 .reference-cell {
     font-family: 'Courier New', monospace;
-    font-size: 11px; color: var(--text-secondary);
+    font-size: 11px; 
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 
@@ -2074,7 +2458,6 @@ html.dark-mode .btn-view-txn:hover {
     color: #FFFFFF;
 }
 
-/* Empty State */
 .empty-state {
     text-align: center; padding: 60px 20px;
 }
@@ -2104,8 +2487,11 @@ html.dark-mode .btn-view-txn:hover {
     margin: 0 0 12px 0;
 }
 
-/* Responsive */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1400px) {
+    .transfer-summary-cards { grid-template-columns: repeat(2, 1fr); }
     .table-search-wrapper { width: 260px; }
     .table-search-spacer { width: 260px; }
 }
@@ -2115,9 +2501,18 @@ html.dark-mode .btn-view-txn:hover {
     .table-search-input { font-size: 11px; }
 }
 @media (max-width: 1024px) {
-    .transfer-summary-cards { grid-template-columns: repeat(2, 1fr); }
+    .main-wrapper { 
+        margin-left: 220px !important; 
+        width: calc(100% - 220px) !important; 
+        padding-top: 70px !important; 
+    }
+    .content-with-margin { padding: 0 14px 14px 14px; }
+    .capital-summary-compact { gap: 12px; }
+    .transfer-summary-cards { grid-template-columns: repeat(2, 1fr); gap: 12px; }
     .preview-grid { grid-template-columns: repeat(2, 1fr); }
     .transfer-type-selector { grid-template-columns: 1fr; }
+    .provider-cards-grid { grid-template-columns: repeat(2, 1fr); }
+    .branch-indicator { margin: 0 14px 16px -1px; width: calc(100% - 13px); max-width: calc(100% - 13px); }
 }
 @media (max-width: 900px) {
     .table-search-row-content {
@@ -2137,8 +2532,25 @@ html.dark-mode .btn-view-txn:hover {
     }
 }
 @media (max-width: 768px) {
-    .main-content { padding: 12px !important; }
-    .branch-indicator { flex-direction: column; align-items: flex-start; }
+    .main-wrapper { 
+        margin-left: 0 !important; 
+        width: 100% !important; 
+        padding-top: 62px !important; 
+    }
+    .content-with-margin { padding: 0 12px 12px 12px; }
+    .page-header-top { padding: 14px 12px 10px 0; margin-left: -1px; }
+    .page-header-top-inner { padding-left: 14px; }
+    .page-header-top h2 { font-size: 18px; }
+    
+    .branch-indicator { 
+        flex-direction: column; 
+        align-items: flex-start; 
+        padding: 14px 18px;
+        border-radius: 0 12px 12px 0;
+        margin: 0 12px 14px -1px;
+        width: calc(100% - 11px);
+        max-width: calc(100% - 11px);
+    }
     .branch-indicator-right { width: 100%; }
     
     .capital-summary-compact { grid-template-columns: 1fr; gap: 10px; }
@@ -2150,7 +2562,7 @@ html.dark-mode .btn-view-txn:hover {
     .filters-form { flex-direction: column; }
     .filter-group { width: 100%; }
     .filter-group .form-control { width: 100%; }
-    .transfer-form { padding: 16px; }
+    .transfer-form { padding: 18px; }
     
     .table-search-row-content {
         flex-direction: column;
@@ -2168,68 +2580,42 @@ html.dark-mode .btn-view-txn:hover {
     .provider-cards-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 480px) {
-    .capital-item-compact { padding: 12px 14px; gap: 10px; }
-    .capital-icon-compact { width: 38px; height: 38px; font-size: 15px; }
-    .capital-value-compact { font-size: 14px; }
+    .content-with-margin { padding: 0 8px 8px 8px; }
+    .page-header-top { padding: 12px 8px 8px 0; margin-left: -1px; }
+    .page-header-top-inner { padding-left: 12px; }
+    .page-header-top h2 { font-size: 16px; }
+    .page-header-top .text-muted { font-size: 11px; }
+    
+    .branch-indicator { 
+        padding: 12px 14px; 
+        margin: 0 8px 12px -1px;
+        width: calc(100% - 7px);
+        max-width: calc(100% - 7px);
+    }
+    .branch-indicator-name { font-size: 14px; }
+    
+    .capital-item-compact { padding: 16px 18px; gap: 14px; min-height: 90px; }
+    .capital-icon-compact { width: 48px; height: 48px; font-size: 20px; }
+    .capital-value-compact { font-size: 18px; }
+    
+    .transfer-summary-card { padding: 16px 18px; gap: 14px; min-height: 90px; }
+    .ts-icon { width: 48px; height: 48px; font-size: 20px; }
+    .ts-value { font-size: 18px; }
+    
+    .transfer-form { padding: 14px; }
+    
     .transfer-type-card { padding: 12px 14px; gap: 10px; }
-    .type-icon { width: 38px; height: 38px; font-size: 16px; }
-    .type-title { font-size: 12px; }
+    .type-icon { width: 40px; height: 40px; font-size: 17px; }
+    .type-title { font-size: 13px; }
     .type-desc { font-size: 10px; }
+    
     .scroll-btn { width: 34px; height: 34px; font-size: 13px; }
     .scroll-label { font-size: 9px; }
     .employee-name-full { max-width: 100px; }
     
     .provider-cards-grid { grid-template-columns: 1fr; }
+    .provider-card-item { min-height: 180px; }
 }
-</style>
-
-<!-- ============================================================
-     EXTRA: HIDE BRANCH SELECTOR FROM TOPBAR (Backup CSS)
-     ============================================================ -->
-<style id="employee-hide-branch-selector">
-    .topbar .branch-selector,
-    .topbar .topbar-branch,
-    .topbar .branch-dropdown,
-    .topbar .topbar-branch-selector,
-    .topbar .branch-switcher,
-    .topbar .branch-select-wrapper,
-    .topbar .header-branch-selector,
-    .topbar .branch-filter,
-    .topbar .branch-filter-wrapper,
-    .topbar .branch-picker,
-    .topbar .navbar-branch,
-    .topbar .branch-select,
-    .topbar .branch-choice,
-    .topbar .topbar-branch-wrapper,
-    .topbar select[name="branch_id"],
-    .topbar select[name="branch"],
-    .topbar #branchSelector,
-    .topbar #branchSwitcher,
-    .topbar .topbar-right .branch-selector,
-    .topbar .topbar-right .branch-dropdown,
-    .topbar .topbar-right select[name="branch_id"],
-    header.topbar .branch-selector,
-    header.topbar .branch-dropdown,
-    header.topbar select[name="branch_id"],
-    .admin-topbar .branch-selector,
-    .admin-topbar .topbar-branch,
-    .admin-topbar .branch-dropdown,
-    .admin-topbar .branch-switcher,
-    .admin-topbar select[name="branch_id"],
-    nav.topbar .branch-selector,
-    nav.topbar .branch-dropdown,
-    .main-header .branch-selector,
-    .main-header .branch-dropdown,
-    .dashboard-header .branch-selector,
-    .header .branch-selector {
-        display: none !important;
-        visibility: hidden !important;
-        width: 0 !important;
-        height: 0 !important;
-        overflow: hidden !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-    }
 </style>
 
 <script>

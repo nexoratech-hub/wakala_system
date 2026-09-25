@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 13, 2026 at 01:42 AM
+-- Generation Time: Sep 25, 2026 at 11:45 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -131,7 +131,31 @@ INSERT INTO `activity_logs` (`id`, `employee_id`, `action`, `module`, `record_id
 (85, 2, 'Update Profile', 'Profile', 2, '', 'Updated own profile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-13 01:52:35'),
 (86, 2, 'Delete Capital', 'Commissions', 9, '', 'Deleted capital entry: CAP-20260913-2905 - TSh 500,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-13 02:13:01'),
 (87, 3, 'Add Commission', 'Commissions', 10, '', 'Employee added commission: COM-20260913-1109 - TSh 70,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-13 02:19:14'),
-(88, 2, 'Edit Provider', 'Providers', 7, 'YAS', 'Updated provider: YAS Mobile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-13 02:42:00');
+(88, 2, 'Edit Provider', 'Providers', 7, 'YAS', 'Updated provider: YAS Mobile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', NULL, '2026-09-13 02:42:00'),
+(89, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 12:05:42'),
+(90, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 12:07:00'),
+(91, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 23:09:18'),
+(92, 2, 'Delete Transfer', 'Transfers', 6, 'CTF-20260913-0906', 'Deleted transfer CTF-20260913-0906 (Cash to float of TSh 500,000 on Airtel Money)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 23:13:18'),
+(93, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 23:16:26'),
+(94, 3, 'Update Profile', 'Profile', 3, '', 'Updated own profile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-23 23:16:59'),
+(95, 2, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 20:03:11'),
+(96, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 20:23:15'),
+(97, 3, 'Add Deposit', 'Transactions', 12, '', 'Deposit of TSh 1,000,000 from NBC Bank', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 20:28:56'),
+(98, 2, 'Add Morning Report', 'Morning Report', 16, '', 'Created MR-20260925-KND-1742 (capital_management) for Kinondoni B - Float: 7,350,000, Cash: 0', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 20:30:38'),
+(99, 3, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 21:49:08'),
+(100, 5, 'Login', 'Authentication', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 21:49:34'),
+(101, 5, 'Update Profile', 'Profile', 5, '', 'Updated own profile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 21:50:05'),
+(102, 2, 'Update Profile', 'Profile', 2, '', 'Updated own profile', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 22:00:57'),
+(103, 2, 'Export Morning Reports', 'Morning Report', NULL, '', 'Exported 0 morning report(s) (2026-09-01 to 2026-09-25)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 22:39:43'),
+(104, 2, 'Add Capital Transaction', 'Capital Management', 0, '', 'Added opening: Total TSh 37,000,000 at Kariakoo (10 records)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 23:20:15'),
+(105, 2, 'Add Capital Transaction', 'Capital Management', 0, '', 'Added opening: Total TSh 37,000,000 at Kinondoni B (10 records)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 23:21:55'),
+(106, 2, 'Add Capital Transaction', 'Capital Management', 0, '', 'Added opening: Total TSh 37,000,000 at Mbezi Beach (10 records)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 23:22:35'),
+(107, 2, 'Add Capital Transaction', 'Capital Management', 0, '', 'Added cash_out: Total TSh 5,000,000 at Kariakoo (1 records)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 23:43:22'),
+(108, 2, 'Add Capital Transaction', 'Capital Management', 0, '', 'Added additional: Total TSh 5,000,000 at Kariakoo (1 records)', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-25 23:44:16'),
+(109, 2, 'Add Morning Report', 'Morning Report', 18, '', 'Created MR-20260925-KND-8258 (capital_management) for Kinondoni B - Float: 27,000,000, Cash: 10,000,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-26 00:01:43'),
+(110, 2, 'Add Morning Report', 'Morning Report', 19, '', 'Created MR-20260926-KRK-6133 (capital_management) for Kariakoo - Float: 27,000,000, Cash: 10,000,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-26 00:14:14'),
+(111, 2, 'Add Morning Report', 'Morning Report', 20, '', 'Created MR-20260926-MBZ-4363 (capital_management) for Mbezi Beach - Float: 27,000,000, Cash: 10,000,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-26 00:14:35'),
+(112, 5, 'Add Morning Report', 'Morning Report', 21, '', 'Employee ADELA MYULA added MR-20260926-KND-2967 for Kinondoni B - Float: 27,000,000, Cash: 10,000,000', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', NULL, '2026-09-26 00:21:52');
 
 -- --------------------------------------------------------
 
@@ -276,26 +300,38 @@ CREATE TABLE `capital_management` (
 --
 
 INSERT INTO `capital_management` (`id`, `capital_number`, `employee_id`, `branch`, `branch_id`, `transaction_date`, `transaction_type`, `amount`, `description`, `reference_id`, `reference_module`, `created_at`, `updated_at`, `notes`) VALUES
-(1, 'CAP-20260911-6676', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [NMB Bank - NMB002]', 1, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(2, 'CAP-20260911-8370', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [CRDB Bank - CRDB002]', 2, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(3, 'CAP-20260911-8447', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [NBC Bank - NBC002]', 3, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(4, 'CAP-20260911-4518', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [TPB Bank - TPB002]', 4, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(5, 'CAP-20260911-7996', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [Selcom - SELCOM002]', 5, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(6, 'CAP-20260911-6327', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [M-PESA - MPESA002]', 6, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(7, 'CAP-20260911-4524', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [YAS Mobile - YAS002]', 7, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(8, 'CAP-20260911-7418', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [Airtel Money - 1076726]', 8, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(9, 'CAP-20260911-0352', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 500000.00, 'NO [HaloPesa - HALOPESA002]', 9, 'provider', '2026-09-11 22:34:02', '2026-09-11 22:34:02', ''),
-(10, 'CAP-20260911-4836', 2, 'Kariakoo', 2, '2026-09-11', 'opening', 10000000.00, 'NO [Cash - Manual]', NULL, 'cash_manual', '2026-09-11 22:34:02', '2026-09-11 22:37:00', ''),
-(11, 'CAP-20260911-6805', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 3000000.00, 'Capital transaction [NMB Bank - NMB001]', 1, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(12, 'CAP-20260911-5472', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 1600000.00, 'Capital transaction [CRDB Bank - CRDB001]', 2, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(13, 'CAP-20260911-8789', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 500000.00, 'Capital transaction [NBC Bank - NBC001]', 3, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(14, 'CAP-20260911-2260', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 300000.00, 'Capital transaction [TPB Bank - TPB001]', 4, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(15, 'CAP-20260911-1088', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 400000.00, 'Capital transaction [Selcom - SELCOM001]', 5, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(16, 'CAP-20260911-9603', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 400000.00, 'Capital transaction [M-PESA - MPESA001]', 6, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(17, 'CAP-20260911-0332', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 400000.00, 'Capital transaction [YAS Mobile - YAS001]', 7, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(18, 'CAP-20260911-9777', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 400000.00, 'Capital transaction [Airtel Money - AIRTEL001]', 8, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(19, 'CAP-20260911-7274', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 350000.00, 'Capital transaction [HaloPesa - HALOPESA001]', 9, 'provider', '2026-09-11 23:09:41', '2026-09-11 23:09:41', ''),
-(20, 'CAP-20260911-2233', 2, 'Kinondoni B', 1, '2026-09-11', 'additional', 3000000.00, 'Capital transaction [Cash - Manual]', NULL, 'cash_manual', '2026-09-11 23:09:41', '2026-09-11 23:09:41', '');
+(21, 'CAP-20260925-0869', 2, 'Main', 2, '2026-09-25', 'opening', 10000000.00, 'Cash transaction', NULL, 'cash', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(22, 'CAP-20260925-0327', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 1, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(23, 'CAP-20260925-3407', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 2, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(24, 'CAP-20260925-5561', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 3, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(25, 'CAP-20260925-8491', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 4, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(26, 'CAP-20260925-9605', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 5, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(27, 'CAP-20260925-5871', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 6, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(28, 'CAP-20260925-4327', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 7, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(29, 'CAP-20260925-0872', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 8, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(30, 'CAP-20260925-7166', 2, 'Main', 2, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 9, 'provider', '2026-09-25 23:20:15', '2026-09-25 23:20:15', ''),
+(31, 'CAP-20260925-2136', 2, 'Main', 1, '2026-09-25', 'opening', 10000000.00, 'Cash transaction', NULL, 'cash', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(32, 'CAP-20260925-4363', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 1, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(33, 'CAP-20260925-0117', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 2, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(34, 'CAP-20260925-0018', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 3, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(35, 'CAP-20260925-1368', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 4, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(36, 'CAP-20260925-8767', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 5, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(37, 'CAP-20260925-5956', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 6, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(38, 'CAP-20260925-7354', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 7, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(39, 'CAP-20260925-6922', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 8, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(40, 'CAP-20260925-5906', 2, 'Main', 1, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 9, 'provider', '2026-09-25 23:21:55', '2026-09-25 23:21:55', ''),
+(41, 'CAP-20260925-6395', 2, 'Main', 3, '2026-09-25', 'opening', 10000000.00, 'Cash transaction', NULL, 'cash', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(42, 'CAP-20260925-5575', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 1, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(43, 'CAP-20260925-5216', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 2, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(44, 'CAP-20260925-6518', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 3, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(45, 'CAP-20260925-3325', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 4, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(46, 'CAP-20260925-3331', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 5, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(47, 'CAP-20260925-5580', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 6, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(48, 'CAP-20260925-8069', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 7, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(49, 'CAP-20260925-6453', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 8, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(50, 'CAP-20260925-3002', 2, 'Main', 3, '2026-09-25', 'opening', 3000000.00, 'Provider float transaction', 9, 'provider', '2026-09-25 23:22:35', '2026-09-25 23:22:35', ''),
+(51, 'CAP-20260925-7300', 2, 'Main', 2, '2026-09-25', 'cash_out', 5000000.00, 'Cash transaction', NULL, 'cash', '2026-09-25 23:43:22', '2026-09-25 23:43:22', ''),
+(52, 'CAP-20260925-2291', 2, 'Main', 2, '2026-09-25', 'additional', 5000000.00, 'Cash transaction', NULL, 'cash', '2026-09-25 23:44:16', '2026-09-25 23:44:16', '');
 
 -- --------------------------------------------------------
 
@@ -320,19 +356,6 @@ CREATE TABLE `commissions` (
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `commissions`
---
-
-INSERT INTO `commissions` (`id`, `commission_number`, `employee_id`, `branch`, `branch_id`, `commission_date`, `provider_data`, `total_commission`, `other_income`, `total_business_income`, `allocate_to_capital`, `allocated_amount`, `created_at`, `updated_at`, `notes`) VALUES
-(1, 'OI-20260911-8835', 2, 'Kinondoni B', 1, '2026-09-11', '[]', 0.00, 70000.00, 70000.00, 'yes', 70000.00, '2026-09-11 23:32:26', '2026-09-11 23:32:26', 'Service Fee'),
-(4, 'OI-20260911-0982', 2, 'Kinondoni B', 1, '2026-09-11', '[]', 0.00, 10000000.00, 10000000.00, 'yes', 10000000.00, '2026-09-11 23:50:29', '2026-09-11 23:50:29', 'Other Income'),
-(5, 'COM-20260911-2511', 2, 'Kinondoni B', 1, '2026-09-11', '{\"1\":100000,\"2\":500000,\"3\":100000,\"6\":100000}', 800000.00, 0.00, 800000.00, 'yes', 800000.00, '2026-09-11 23:56:20', '2026-09-11 23:56:20', ''),
-(6, 'CAP-20260913-5288', 2, 'Kinondoni B', 1, '2026-09-13', '{\"capital_target\":\"cash\",\"entries\":[\"Branch Cash: TSh 100,000\"]}', 0.00, 0.00, 0.00, 'yes', 100000.00, '2026-09-13 00:46:59', '2026-09-13 00:46:59', '[CAPITAL ADDITION] To Branch Cash'),
-(7, 'CAP-20260913-7984', 2, 'Kinondoni B', 1, '2026-09-13', '{\"capital_target\":\"float\",\"entries\":[\"CRDB Bank: TSh 100,000\"]}', 0.00, 0.00, 0.00, 'yes', 100000.00, '2026-09-13 00:48:16', '2026-09-13 00:48:16', '[CAPITAL ADDITION] To Provider Float'),
-(8, 'CAP-20260913-3294', 2, 'Kinondoni B', 1, '2026-09-13', '{\"capital_target\":\"float\",\"entries\":[\"NBC Bank: TSh 20,000\"]}', 0.00, 0.00, 0.00, 'yes', 20000.00, '2026-09-13 00:50:40', '2026-09-13 00:50:40', '[CAPITAL ADDITION] To Provider Float'),
-(10, 'COM-20260913-1109', 3, 'Kinondoni B', 1, '2026-09-13', '{\"1\":70000}', 70000.00, 0.00, 70000.00, 'no', 0.00, '2026-09-13 02:19:14', '2026-09-13 02:19:14', '');
 
 -- --------------------------------------------------------
 
@@ -385,7 +408,11 @@ CREATE TABLE `daily_reports` (
 --
 
 INSERT INTO `daily_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `provider_id`, `provider_code`, `provider_float`, `provider_cash`, `provider_deposits`, `provider_withdrawals`, `report_date`, `morning_report_id`, `evening_stock_id`, `commission_id`, `morning_total`, `evening_total`, `float_difference`, `total_commission`, `total_deposits`, `total_withdrawals`, `current_float`, `current_cash`, `other_income`, `total_business_income`, `total_expenses`, `total_cash_out`, `total_salaries`, `net_profit`, `net_profit_after_salaries`, `opening_capital`, `additional_capital`, `profit_allocated`, `current_capital`, `created_at`, `updated_at`, `notes`) VALUES
-(5, 'DR-20260912-6898', 2, 'Kinondoni B', 1, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-11', 14, NULL, NULL, 7350000.00, 0.00, 0.00, 0.00, 2000000.00, 710000.00, 7350000.00, 4510000.00, 0.00, 7350000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 11000000.00, '2026-09-12 00:27:47', '2026-09-13 02:13:01', NULL);
+(8, 'DR-20260925-8684', 2, 'Kariakoo', 2, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-25', NULL, NULL, NULL, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 5000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 5000000.00, '2026-09-25 23:43:22', '2026-09-25 23:44:16', NULL),
+(10, 'DR-20260925-5059', 2, 'Kinondoni B', 1, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-25', 18, NULL, NULL, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 27000000.00, 10000000.00, 0.00, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 37000000.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43', 'Auto-filled from Opening Capital'),
+(11, 'DR-20260926-8709', 2, 'Kariakoo', 2, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-26', 19, NULL, NULL, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 27000000.00, 10000000.00, 0.00, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 37000000.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14', 'Auto-filled from Opening Capital'),
+(12, 'DR-20260926-5642', 2, 'Mbezi Beach', 3, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-26', 20, NULL, NULL, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 27000000.00, 10000000.00, 0.00, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 37000000.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35', 'Auto-filled from Opening Capital'),
+(13, 'DR-20260926-8314', 5, 'Kinondoni B', 1, NULL, NULL, 0.00, 0.00, 0.00, 0.00, '2026-09-26', NULL, NULL, NULL, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 27000000.00, 10000000.00, 0.00, 37000000.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 37000000.00, '2026-09-26 00:21:52', '2026-09-26 00:21:52', 'Auto-filled from Opening Capital');
 
 -- --------------------------------------------------------
 
@@ -405,6 +432,7 @@ CREATE TABLE `daily_report_providers` (
   `current_cash` decimal(15,2) DEFAULT 0.00,
   `total_deposits` decimal(15,2) DEFAULT 0.00,
   `total_withdrawals` decimal(15,2) DEFAULT 0.00,
+  `notes` text DEFAULT NULL,
   `created_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -413,16 +441,43 @@ CREATE TABLE `daily_report_providers` (
 -- Dumping data for table `daily_report_providers`
 --
 
-INSERT INTO `daily_report_providers` (`id`, `daily_report_id`, `provider_id`, `provider_code`, `provider_name`, `morning_float`, `morning_cash`, `current_float`, `current_cash`, `total_deposits`, `total_withdrawals`, `created_at`, `updated_at`) VALUES
-(1, 5, 8, 'AIRTEL', 'Airtel Money', 400000.00, 0.00, 840000.00, 0.00, 1000000.00, 60000.00, '2026-09-12 00:27:47', '2026-09-13 00:25:52'),
-(2, 5, 2, 'CRDB', 'CRDB Bank', 1600000.00, 0.00, 1650000.00, 0.00, 0.00, 50000.00, '2026-09-12 00:27:47', '2026-09-13 01:21:15'),
-(3, 5, 9, 'HALOPESA', 'HaloPesa', 350000.00, 0.00, 450000.00, 0.00, 0.00, 0.00, '2026-09-12 00:27:47', '2026-09-12 23:00:43'),
-(4, 5, 6, 'MPESA', 'M-PESA', 400000.00, 0.00, 430000.00, 0.00, 30000.00, 0.00, '2026-09-12 00:27:47', '2026-09-12 02:57:16'),
-(5, 5, 3, 'NBC', 'NBC Bank', 500000.00, 0.00, 520000.00, 0.00, 0.00, 0.00, '2026-09-12 00:27:47', '2026-09-13 00:50:40'),
-(6, 5, 1, 'NMB', 'NMB Bank', 3000000.00, 0.00, 1400000.00, 0.00, 1000000.00, 600000.00, '2026-09-12 00:27:47', '2026-09-12 22:46:57'),
-(7, 5, 5, 'SELCOM', 'Selcom', 400000.00, 0.00, 400000.00, 0.00, 0.00, 0.00, '2026-09-12 00:27:47', '2026-09-12 00:27:47'),
-(8, 5, 4, 'TPB', 'TPB Bank', 300000.00, 0.00, 400000.00, 0.00, 0.00, 0.00, '2026-09-12 00:27:47', '2026-09-13 00:13:28'),
-(9, 5, 7, 'YAS', 'YAS Mobile', 400000.00, 0.00, 400000.00, 0.00, 0.00, 0.00, '2026-09-12 00:27:47', '2026-09-12 00:27:47');
+INSERT INTO `daily_report_providers` (`id`, `daily_report_id`, `provider_id`, `provider_code`, `provider_name`, `morning_float`, `morning_cash`, `current_float`, `current_cash`, `total_deposits`, `total_withdrawals`, `notes`, `created_at`, `updated_at`) VALUES
+(19, 10, 1, 'NMB001', 'NMB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(20, 10, 2, 'CRDB001', 'CRDB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(21, 10, 3, 'NBC001', 'NBC Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(22, 10, 4, 'TPB001', 'TPB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(23, 10, 5, 'SELCOM001', 'Selcom', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(24, 10, 6, 'MPESA001', 'M-PESA', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(25, 10, 7, 'YAS001', 'YAS Mobile', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(26, 10, 8, 'AIRTEL001', 'Airtel Money', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(27, 10, 9, 'HALOPESA001', 'HaloPesa', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(28, 11, 1, 'NMB002', 'NMB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(29, 11, 2, 'CRDB002', 'CRDB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(30, 11, 3, 'NBC002', 'NBC Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(31, 11, 4, 'TPB002', 'TPB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(32, 11, 5, 'SELCOM002', 'Selcom', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(33, 11, 6, 'MPESA002', 'M-PESA', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(34, 11, 7, 'YAS002', 'YAS Mobile', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(35, 11, 8, '1076726', 'Airtel Money', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(36, 11, 9, 'HALOPESA002', 'HaloPesa', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(37, 12, 1, 'NMB003', 'NMB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(38, 12, 2, 'CRDB003', 'CRDB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(39, 12, 3, 'NBC003', 'NBC Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(40, 12, 4, 'TPB003', 'TPB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(41, 12, 5, 'SELCOM003', 'Selcom', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(42, 12, 6, 'MPESA003', 'M-PESA', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(43, 12, 7, 'YAS003', 'YAS Mobile', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(44, 12, 8, 'AIRTEL003', 'Airtel Money', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(45, 12, 9, 'HALOPESA003', 'HaloPesa', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(46, 13, 1, 'NMB001', 'NMB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(47, 13, 2, 'CRDB001', 'CRDB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(48, 13, 3, 'NBC001', 'NBC Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(49, 13, 4, 'TPB001', 'TPB Bank', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(50, 13, 5, 'SELCOM001', 'Selcom', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(51, 13, 6, 'MPESA001', 'M-PESA', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(52, 13, 7, 'YAS001', 'YAS Mobile', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(53, 13, 8, 'AIRTEL001', 'Airtel Money', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52'),
+(54, 13, 9, 'HALOPESA001', 'HaloPesa', 3000000.00, 0.00, 3000000.00, 0.00, 0.00, 0.00, NULL, '2026-09-26 00:21:52', '2026-09-26 00:21:52');
 
 -- --------------------------------------------------------
 
@@ -485,9 +540,9 @@ CREATE TABLE `employees` (
 --
 
 INSERT INTO `employees` (`id`, `employee_id`, `full_name`, `email`, `phone`, `gender`, `date_of_birth`, `username`, `password_hash`, `role`, `position`, `branch`, `branch_id`, `profile_pic`, `base_salary`, `salary_currency`, `hire_date`, `employment_status`, `emergency_contact`, `emergency_phone`, `address`, `is_active`, `last_login`, `created_at`, `updated_at`, `cash_allocation`) VALUES
-(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', NULL, NULL, 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', NULL, 'Main', NULL, 'uploads/employees/user_2_1789253555.png', 0.00, 'TSh', NULL, 'active', NULL, NULL, 'TANZANIA', 1, '2026-09-12 22:48:40', '2026-08-20 14:49:00', '2026-09-13 01:52:35', 0.00),
-(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', NULL, NULL, 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'CASHIER', 'Kinondoni B', 1, 'uploads/profiles/profile_3_1788903196.png', 300000.00, 'TSh', '2026-09-13', 'active', 'JACKSON MYULA', '+255623693303', NULL, 1, '2026-09-12 22:37:27', '2026-08-23 02:43:37', '2026-09-13 01:47:04', 570000.00),
-(5, 'KND-EMP-0002', 'ADELA MYULA', 'adelamyula@gmail.com', '+255623693303', 'female', '2007-01-15', 'adela', '$2y$10$sRuPkxenG/uWzVXiBWsOne6a3B1UQ6LDAyA096kBRHKtbM.f.GDtq', 'employee', 'CASHIER', 'Kinondoni B', 1, NULL, 300000.00, 'TSh', '2026-09-13', 'active', NULL, NULL, 'SUMBAWANGA', 1, NULL, '2026-09-13 01:37:22', '2026-09-13 01:37:22', 0.00);
+(2, 'EMP-001', 'Mbembati Kelvin', 'admin@wakala.com', '+255 700 000 001', NULL, NULL, 'admin', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'super_admin', NULL, 'Main', NULL, 'uploads/employees/user_2_1790362857.png', 0.00, 'TSh', NULL, 'active', NULL, NULL, 'TANZANIA', 1, '2026-09-25 20:03:11', '2026-08-20 14:49:00', '2026-09-25 22:00:57', 0.00),
+(3, 'EMP-002', 'Salma Issa', 'salma@wakala.com', '+255 700 000 002', NULL, NULL, 'salma', '$2y$10$alE5AAExHQDt//VgaYLbPeI2wgpo05KZ0B2XAufAp5/s0LhSgJlP6', 'employee', 'CASHIER', 'Kinondoni B', 1, 'uploads/employees/user_3_1790194619.png', 300000.00, 'TSh', '2026-09-13', 'active', 'JACKSON MYULA', '+255623693303', NULL, 1, '2026-09-25 21:49:08', '2026-08-23 02:43:37', '2026-09-25 21:49:08', 570000.00),
+(5, 'KND-EMP-0002', 'ADELA MYULA', 'adelamyula@gmail.com', '+255623693303', 'female', '2007-01-15', 'adela', '$2y$10$sRuPkxenG/uWzVXiBWsOne6a3B1UQ6LDAyA096kBRHKtbM.f.GDtq', 'employee', 'CASHIER', 'Kinondoni B', 1, 'uploads/employees/user_5_1790362205.png', 300000.00, 'TSh', '2026-09-13', 'active', NULL, NULL, 'SUMBAWANGA', 1, '2026-09-25 21:49:34', '2026-09-13 01:37:22', '2026-09-25 21:50:05', 0.00);
 
 -- --------------------------------------------------------
 
@@ -614,15 +669,26 @@ CREATE TABLE `evening_stocks` (
   `employee_id` int(11) NOT NULL,
   `branch` varchar(50) DEFAULT 'Main',
   `branch_id` int(11) DEFAULT NULL,
+  `daily_report_id` int(11) DEFAULT NULL,
   `stock_date` date NOT NULL,
   `provider_data` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`provider_data`)),
   `cash_balance` decimal(15,2) DEFAULT 0.00,
+  `opening_float` decimal(15,2) DEFAULT 0.00,
+  `opening_cash` decimal(15,2) DEFAULT 0.00,
   `cumm_total` decimal(15,2) DEFAULT 0.00,
   `status` enum('waiting','approved','adjusted','rejected') NOT NULL DEFAULT 'waiting',
   `submitted_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `created_at` datetime DEFAULT current_timestamp(),
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `evening_stocks`
+--
+
+INSERT INTO `evening_stocks` (`id`, `stock_number`, `employee_id`, `branch`, `branch_id`, `daily_report_id`, `stock_date`, `provider_data`, `cash_balance`, `opening_float`, `opening_cash`, `cumm_total`, `status`, `submitted_at`, `updated_at`, `created_at`, `notes`) VALUES
+(6, 'TEST-DUPLICATE-001', 2, 'Test', 1, NULL, '2026-09-26', NULL, 1000.00, 0.00, 0.00, 1000.00, 'waiting', '2026-09-26 00:41:06', '2026-09-26 00:41:06', '2026-09-26 00:41:06', NULL);
 
 -- --------------------------------------------------------
 
@@ -733,8 +799,9 @@ CREATE TABLE `morning_reports` (
 --
 
 INSERT INTO `morning_reports` (`id`, `report_number`, `employee_id`, `branch`, `branch_id`, `report_date`, `provider_data`, `cash_balance`, `cumm_total`, `submitted_at`, `updated_at`, `notes`, `source_type`, `source_evening_stock_id`, `is_locked`) VALUES
-(14, 'MR-20260911-KND-9836', 2, 'Kinondoni B', 1, '2026-09-11', '{}', 3000000.00, 7350000.00, '2026-09-12 00:07:13', '2026-09-12 00:08:23', 'Synced from capital management', 'manual', NULL, 0),
-(15, 'MR-20260911-KRK-8323', 2, 'Kariakoo', 2, '2026-09-11', '{}', 10000000.00, 4500000.00, '2026-09-12 00:07:13', '2026-09-12 00:07:13', 'Synced from capital management', 'manual', NULL, 0);
+(18, 'MR-20260925-KND-8258', 2, 'Kinondoni B', 1, '2026-09-25', '{\"1\":\"3,000,000\",\"2\":\"3,000,000\",\"3\":\"3,000,000\",\"4\":\"3,000,000\",\"5\":\"3,000,000\",\"6\":\"3,000,000\",\"7\":\"3,000,000\",\"8\":\"3,000,000\",\"9\":\"3,000,000\"}', 10000000.00, 37000000.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43', 'Auto-filled from Opening Capital', 'manual', NULL, 0),
+(19, 'MR-20260926-KRK-6133', 2, 'Kariakoo', 2, '2026-09-26', '{\"1\":\"3,000,000\",\"2\":\"3,000,000\",\"3\":\"3,000,000\",\"4\":\"3,000,000\",\"5\":\"3,000,000\",\"6\":\"3,000,000\",\"7\":\"3,000,000\",\"8\":\"3,000,000\",\"9\":\"3,000,000\"}', 10000000.00, 37000000.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14', 'Auto-filled from Opening Capital', 'manual', NULL, 0),
+(20, 'MR-20260926-MBZ-4363', 2, 'Mbezi Beach', 3, '2026-09-26', '{\"1\":\"3,000,000\",\"2\":\"3,000,000\",\"3\":\"3,000,000\",\"4\":\"3,000,000\",\"5\":\"3,000,000\",\"6\":\"3,000,000\",\"7\":\"3,000,000\",\"8\":\"3,000,000\",\"9\":\"3,000,000\"}', 10000000.00, 37000000.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35', 'Auto-filled from Opening Capital', 'manual', NULL, 0);
 
 -- --------------------------------------------------------
 
@@ -759,24 +826,33 @@ CREATE TABLE `morning_report_providers` (
 --
 
 INSERT INTO `morning_report_providers` (`id`, `report_id`, `provider_id`, `provider_code`, `provider_name`, `float_balance`, `cash_balance`, `created_at`, `updated_at`) VALUES
-(1, 14, 1, 'NMB', 'NMB Bank', 3000000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(2, 14, 2, 'CRDB', 'CRDB Bank', 1600000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(3, 14, 3, 'NBC', 'NBC Bank', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(4, 14, 4, 'TPB', 'TPB Bank', 300000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(5, 14, 5, 'SELCOM', 'Selcom', 400000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(6, 14, 6, 'MPESA', 'M-PESA', 400000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(7, 14, 7, 'YAS', 'YAS Mobile', 400000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(8, 14, 8, 'AIRTEL', 'Airtel Money', 400000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(9, 14, 9, 'HALOPESA', 'HaloPesa', 350000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(16, 15, 1, 'NMB', 'NMB Bank', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(17, 15, 2, 'CRDB', 'CRDB Bank', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(18, 15, 3, 'NBC', 'NBC Bank', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(19, 15, 4, 'TPB', 'TPB Bank', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(20, 15, 5, 'SELCOM', 'Selcom', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(21, 15, 6, 'MPESA', 'M-PESA', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(22, 15, 7, 'YAS', 'YAS Mobile', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(23, 15, 8, 'AIRTEL', 'Airtel Money', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00'),
-(24, 15, 9, 'HALOPESA', 'HaloPesa', 500000.00, 0.00, '2026-09-12 00:08:00', '2026-09-12 00:08:00');
+(43, 18, 1, 'NMB001', 'NMB Bank', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(44, 18, 2, 'CRDB001', 'CRDB Bank', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(45, 18, 3, 'NBC001', 'NBC Bank', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(46, 18, 4, 'TPB001', 'TPB Bank', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(47, 18, 5, 'SELCOM001', 'Selcom', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(48, 18, 6, 'MPESA001', 'M-PESA', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(49, 18, 7, 'YAS001', 'YAS Mobile', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(50, 18, 8, 'AIRTEL001', 'Airtel Money', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(51, 18, 9, 'HALOPESA001', 'HaloPesa', 3000000.00, 0.00, '2026-09-26 00:01:43', '2026-09-26 00:01:43'),
+(52, 19, 1, 'NMB002', 'NMB Bank', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(53, 19, 2, 'CRDB002', 'CRDB Bank', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(54, 19, 3, 'NBC002', 'NBC Bank', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(55, 19, 4, 'TPB002', 'TPB Bank', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(56, 19, 5, 'SELCOM002', 'Selcom', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(57, 19, 6, 'MPESA002', 'M-PESA', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(58, 19, 7, 'YAS002', 'YAS Mobile', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(59, 19, 8, '1076726', 'Airtel Money', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(60, 19, 9, 'HALOPESA002', 'HaloPesa', 3000000.00, 0.00, '2026-09-26 00:14:14', '2026-09-26 00:14:14'),
+(61, 20, 1, 'NMB003', 'NMB Bank', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(62, 20, 2, 'CRDB003', 'CRDB Bank', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(63, 20, 3, 'NBC003', 'NBC Bank', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(64, 20, 4, 'TPB003', 'TPB Bank', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(65, 20, 5, 'SELCOM003', 'Selcom', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(66, 20, 6, 'MPESA003', 'M-PESA', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(67, 20, 7, 'YAS003', 'YAS Mobile', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(68, 20, 8, 'AIRTEL003', 'Airtel Money', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35'),
+(69, 20, 9, 'HALOPESA003', 'HaloPesa', 3000000.00, 0.00, '2026-09-26 00:14:35', '2026-09-26 00:14:35');
 
 -- --------------------------------------------------------
 
@@ -904,18 +980,6 @@ CREATE TABLE `transactions` (
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `transactions`
---
-
-INSERT INTO `transactions` (`id`, `transaction_number`, `transaction_type`, `employee_id`, `branch_id`, `branch`, `provider_id`, `provider_code`, `amount`, `reference_number`, `transaction_date`, `transaction_time`, `description`, `status`, `approved_by`, `approved_date`, `created_at`, `updated_at`, `notes`) VALUES
-(6, 'WTH-20260912-9593', 'withdrawal', 2, 1, 'Kinondoni B', 8, 'AIRTEL001', 60000.00, '', '2026-09-12', '01:48:05', '', 'approved', NULL, NULL, '2026-09-12 01:48:05', '2026-09-12 01:48:05', 'Float: 400,000 → 340,000 | Cash: 3,000,000 → 3,060,000'),
-(7, 'DEP-20260912-5341', 'deposit', 2, 1, 'Kinondoni B', 8, 'AIRTEL001', 1000000.00, '', '2026-09-12', '02:21:30', '', 'approved', NULL, NULL, '2026-09-12 02:21:30', '2026-09-12 02:21:30', 'Float: 340,000 → 1,340,000'),
-(8, 'DEP-20260912-2065', 'deposit', 3, 1, 'Kinondoni B', 1, 'NMB001', 1000000.00, '', '2026-09-12', '02:50:56', '', 'approved', NULL, NULL, '2026-09-12 02:50:56', '2026-09-12 02:50:56', 'Float: 3,000,000 → 4,000,000'),
-(9, 'WTH-20260912-9513', 'withdrawal', 3, 1, 'Kinondoni B', 1, 'NMB001', 600000.00, '', '2026-09-12', '02:51:34', '', 'approved', NULL, NULL, '2026-09-12 02:51:34', '2026-09-12 02:51:34', 'Float: 4,000,000 → 3,400,000'),
-(10, 'DEP-20260912-9806', 'deposit', 3, 1, 'Kinondoni B', 6, 'MPESA001', 30000.00, '', '2026-09-12', '02:57:16', '', 'approved', NULL, NULL, '2026-09-12 02:57:16', '2026-09-12 02:57:16', 'Float: 400,000 → 430,000'),
-(11, 'WTH-20260912-3087', 'withdrawal', 3, 1, 'Kinondoni B', 2, 'CRDB001', 50000.00, '', '2026-09-12', '23:30:28', '', 'approved', NULL, NULL, '2026-09-12 23:30:28', '2026-09-12 23:30:28', 'Float: 1,600,000 → 1,550,000');
-
 -- --------------------------------------------------------
 
 --
@@ -946,17 +1010,6 @@ CREATE TABLE `transfers` (
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `transfers`
---
-
-INSERT INTO `transfers` (`id`, `transfer_number`, `transfer_type`, `employee_id`, `branch_id`, `branch`, `provider_id`, `provider_code`, `provider_name`, `amount`, `before_float`, `after_float`, `before_cash`, `after_cash`, `reference_number`, `description`, `transfer_date`, `transfer_time`, `status`, `created_at`, `updated_at`, `notes`) VALUES
-(1, 'FTC-20260912-2408', 'float_to_cash', 3, 1, 'Kinondoni B', 1, 'NMB001', 'NMB Bank', 2000000.00, 3400000.00, 1400000.00, 2060000.00, 4060000.00, '', '', '2026-09-12', '22:46:57', 'completed', '2026-09-12 22:46:57', '2026-09-12 22:46:57', NULL),
-(2, 'CTF-20260912-4812', 'cash_to_float', 2, 1, 'Kinondoni B', 9, 'HALOPESA001', 'HaloPesa', 100000.00, 350000.00, 450000.00, 4060000.00, 3960000.00, '', '', '2026-09-12', '23:00:43', 'completed', '2026-09-12 23:00:43', '2026-09-12 23:00:43', NULL),
-(3, 'CTF-20260912-2195', 'cash_to_float', 3, 1, 'Kinondoni B', 4, 'TPB001', 'TPB Bank', 100000.00, 300000.00, 400000.00, 4010000.00, 3910000.00, '', '', '2026-09-12', '23:12:08', 'completed', '2026-09-12 23:12:08', '2026-09-13 00:13:28', NULL),
-(5, 'FTC-20260913-4258', 'float_to_cash', 2, 1, 'Kinondoni B', 8, 'AIRTEL001', 'Airtel Money', 1000000.00, 1340000.00, 340000.00, 4910000.00, 5910000.00, '', '', '2026-09-13', '00:25:09', 'completed', '2026-09-13 00:25:09', '2026-09-13 00:25:09', NULL),
-(6, 'CTF-20260913-0906', 'cash_to_float', 3, 1, 'Kinondoni B', 8, 'AIRTEL001', 'Airtel Money', 500000.00, 340000.00, 840000.00, 5910000.00, 5410000.00, '', '', '2026-09-13', '00:25:52', 'completed', '2026-09-13 00:25:52', '2026-09-13 00:25:52', NULL);
 
 -- --------------------------------------------------------
 
@@ -1155,7 +1208,7 @@ ALTER TABLE `commissions`
 ALTER TABLE `daily_reports`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `report_number` (`report_number`),
-  ADD UNIQUE KEY `unique_daily_report` (`employee_id`,`report_date`),
+  ADD UNIQUE KEY `unique_daily_branch_date` (`branch_id`,`report_date`),
   ADD KEY `idx_employee` (`employee_id`),
   ADD KEY `idx_date` (`report_date`),
   ADD KEY `idx_morning_report` (`morning_report_id`),
@@ -1226,12 +1279,13 @@ ALTER TABLE `employee_salaries`
 ALTER TABLE `evening_stocks`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `stock_number` (`stock_number`),
-  ADD UNIQUE KEY `unique_stock_date_branch` (`employee_id`,`stock_date`,`branch_id`),
+  ADD UNIQUE KEY `unique_evening_branch_date` (`branch_id`,`stock_date`),
   ADD KEY `idx_employee` (`employee_id`),
   ADD KEY `idx_date` (`stock_date`),
   ADD KEY `idx_evening_date_employee` (`stock_date`,`employee_id`),
   ADD KEY `fk_evening_stocks_branch` (`branch_id`),
-  ADD KEY `idx_status` (`status`);
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_daily_report` (`daily_report_id`);
 
 --
 -- Indexes for table `evening_stock_providers`
@@ -1269,7 +1323,7 @@ ALTER TABLE `expense_categories`
 ALTER TABLE `morning_reports`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `report_number` (`report_number`),
-  ADD UNIQUE KEY `unique_report_date_branch` (`employee_id`,`report_date`,`branch_id`),
+  ADD UNIQUE KEY `unique_branch_date` (`branch_id`,`report_date`),
   ADD KEY `idx_employee` (`employee_id`),
   ADD KEY `idx_date` (`report_date`),
   ADD KEY `idx_morning_date_employee` (`report_date`,`employee_id`),
@@ -1370,7 +1424,7 @@ ALTER TABLE `user_providers`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=113;
 
 --
 -- AUTO_INCREMENT for table `branches`
@@ -1400,7 +1454,7 @@ ALTER TABLE `capital_additions`
 -- AUTO_INCREMENT for table `capital_management`
 --
 ALTER TABLE `capital_management`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=53;
 
 --
 -- AUTO_INCREMENT for table `commissions`
@@ -1412,13 +1466,13 @@ ALTER TABLE `commissions`
 -- AUTO_INCREMENT for table `daily_reports`
 --
 ALTER TABLE `daily_reports`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- AUTO_INCREMENT for table `daily_report_providers`
 --
 ALTER TABLE `daily_report_providers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=55;
 
 --
 -- AUTO_INCREMENT for table `daily_report_transactions`
@@ -1448,7 +1502,7 @@ ALTER TABLE `employee_salaries`
 -- AUTO_INCREMENT for table `evening_stocks`
 --
 ALTER TABLE `evening_stocks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `evening_stock_providers`
@@ -1472,13 +1526,13 @@ ALTER TABLE `expense_categories`
 -- AUTO_INCREMENT for table `morning_reports`
 --
 ALTER TABLE `morning_reports`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
 -- AUTO_INCREMENT for table `morning_report_providers`
 --
 ALTER TABLE `morning_report_providers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=88;
 
 --
 -- AUTO_INCREMENT for table `providers`
@@ -1502,7 +1556,7 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `transactions`
 --
 ALTER TABLE `transactions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `transfers`
@@ -1612,7 +1666,8 @@ ALTER TABLE `employee_salaries`
 --
 ALTER TABLE `evening_stocks`
   ADD CONSTRAINT `evening_stocks_ibfk_1` FOREIGN KEY (`employee_id`) REFERENCES `employees` (`id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `fk_evening_stocks_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+  ADD CONSTRAINT `fk_evening_stocks_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_evening_stocks_daily_report` FOREIGN KEY (`daily_report_id`) REFERENCES `daily_reports` (`id`) ON DELETE SET NULL;
 
 --
 -- Constraints for table `evening_stock_providers`

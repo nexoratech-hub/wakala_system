@@ -1,11 +1,13 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/view.php
-// EVENING STOCK - VIEW DETAILS (ADMIN)
+// EVENING STOCK - VIEW DETAILS (ADMIN) - BLUE THEME
 // ✅ Shows full evening stock details
 // ✅ Provider breakdown table
 // ✅ Edit / Delete / Approve buttons
 // ✅ Print / Export
+// ✅ BLUE THEME (consistent with index.php, add.php, edit.php)
+// ✅ ALL INSTRUCTIONS IN ENGLISH
 // ================================================================
 
 error_reporting(E_ALL);
@@ -127,11 +129,14 @@ try {
 
 // ============================================================
 // CALCULATE TOTALS
+// ✅ Float from providers
+// ✅ Cash from evening_stocks.cash_balance (BRANCH CASH)
+// ✅ Grand Total = float + cash
 // ============================================================
 $total_opening_float = 0;
 $total_opening_cash = 0;
 $total_closing_float = 0;
-$total_closing_cash = 0;
+$total_provider_cash = 0;  // Provider cash (kwa display kwenye table)
 $total_deposits = 0;
 $total_withdrawals = 0;
 
@@ -139,11 +144,15 @@ foreach ($providers as $p) {
     $total_opening_float += floatval($p['opening_float']);
     $total_opening_cash += floatval($p['opening_cash']);
     $total_closing_float += floatval($p['closing_float']);
-    $total_closing_cash += floatval($p['closing_cash']);
+    $total_provider_cash += floatval($p['closing_cash']);
     $total_deposits += floatval($p['total_deposits']);
     $total_withdrawals += floatval($p['total_withdrawals']);
 }
 
+// ✅ Cash ya branch inatoka evening_stocks.cash_balance (SIO providers)
+$total_closing_cash = floatval($stock['cash_balance'] ?? 0);
+
+// ✅ Grand Total = float + branch cash
 $grand_total = $total_closing_float + $total_closing_cash;
 
 // Status labels
@@ -180,7 +189,7 @@ include_once '../../includes/admin_topbar.php';
     <div class="main-content">
         
         <!-- ============================================================
-        BRANCH CARD
+        BRANCH CARD — BLUE
         ============================================================ -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
@@ -208,7 +217,7 @@ include_once '../../includes/admin_topbar.php';
         ============================================================ -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-file-invoice" style="color:#7C3AED;"></i> Evening Stock Details</h2>
+                <h2><i class="fas fa-file-invoice" style="color:#2563EB;"></i> Evening Stock Details</h2>
                 <p class="text-muted">
                     Reference: <strong><?php echo htmlspecialchars($stock['stock_number']); ?></strong>
                 </p>
@@ -245,7 +254,7 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-        HERO CARD
+        HERO CARD — Grand Total
         ============================================================ -->
         <div class="hero-card hero-<?php echo $status_info['color']; ?>">
             <div class="hero-icon">
@@ -263,14 +272,14 @@ include_once '../../includes/admin_topbar.php';
             </div>
             <div class="hero-meta">
                 <div class="hero-meta-item">
-                    <span class="hmi-label">Float</span>
+                    <span class="hmi-label">Total Float</span>
                     <span class="hmi-value">
                         <i class="fas fa-university"></i>
                         <?php echo formatCurrency($total_closing_float); ?>
                     </span>
                 </div>
                 <div class="hero-meta-item">
-                    <span class="hmi-label">Cash</span>
+                    <span class="hmi-label">Branch Cash</span>
                     <span class="hmi-value">
                         <i class="fas fa-money-bill-wave"></i>
                         <?php echo formatCurrency($total_closing_cash); ?>
@@ -320,46 +329,50 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        SUMMARY CARDS
+        SUMMARY GRID — SEMI-TRANSPARENT COLORS
         ============================================================ -->
         <div class="summary-grid">
-            <div class="summary-card">
+            <div class="summary-card sc-total-float">
                 <div class="sc-icon sc-icon-blue">
                     <i class="fas fa-university"></i>
                 </div>
                 <div class="sc-content">
                     <span class="sc-label">Total Float</span>
                     <span class="sc-value"><?php echo formatCurrency($total_closing_float); ?></span>
+                    <span class="sc-sub">Provider float</span>
                 </div>
             </div>
             
-            <div class="summary-card">
-                <div class="sc-icon sc-icon-green">
+            <div class="summary-card sc-cash">
+                <div class="sc-icon sc-icon-teal">
                     <i class="fas fa-money-bill-wave"></i>
                 </div>
                 <div class="sc-content">
-                    <span class="sc-label">Total Cash</span>
+                    <span class="sc-label">Branch Cash</span>
                     <span class="sc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+                    <span class="sc-sub">From Daily Report</span>
                 </div>
             </div>
             
-            <div class="summary-card">
-                <div class="sc-icon sc-icon-teal">
+            <div class="summary-card sc-deposits">
+                <div class="sc-icon sc-icon-green">
                     <i class="fas fa-arrow-down"></i>
                 </div>
                 <div class="sc-content">
                     <span class="sc-label">Total Deposits</span>
                     <span class="sc-value text-success">+<?php echo formatCurrency($total_deposits); ?></span>
+                    <span class="sc-sub">Provider deposits</span>
                 </div>
             </div>
             
-            <div class="summary-card">
+            <div class="summary-card sc-withdrawals">
                 <div class="sc-icon sc-icon-red">
                     <i class="fas fa-arrow-up"></i>
                 </div>
                 <div class="sc-content">
                     <span class="sc-label">Total Withdrawals</span>
                     <span class="sc-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span>
+                    <span class="sc-sub">Provider withdrawals</span>
                 </div>
             </div>
         </div>
@@ -454,7 +467,7 @@ include_once '../../includes/admin_topbar.php';
                                 <td><?php echo $i++; ?></td>
                                 <td>
                                     <div class="provider-cell">
-                                        <div class="provider-icon-sm" style="background: <?php echo htmlspecialchars($p['provider_color'] ?? '#7C3AED'); ?>;">
+                                        <div class="provider-icon-sm" style="background: <?php echo htmlspecialchars($p['provider_color'] ?? '#2563EB'); ?>;">
                                             <i class="<?php echo htmlspecialchars($p['provider_icon'] ?? 'fas fa-university'); ?>"></i>
                                         </div>
                                         <div class="provider-info-cell">
@@ -495,11 +508,31 @@ include_once '../../includes/admin_topbar.php';
                             <td class="text-right"><span class="total-value text-success">+<?php echo formatCurrency($total_deposits); ?></span></td>
                             <td class="text-right"><span class="total-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span></td>
                             <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_cash); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($grand_total); ?></span></td>
+                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_provider_cash); ?></span></td>
+                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float + $total_provider_cash); ?></span></td>
                         </tr>
                     </tfoot>
                 </table>
+            </div>
+        </div>
+
+        <!-- ============================================================
+        BRANCH CASH SUMMARY (LOCKED FROM DAILY REPORT)
+        ============================================================ -->
+        <div class="cash-summary-card">
+            <div class="csc-header">
+                <i class="fas fa-lock"></i>
+                <span>Branch Cash (Locked from Daily Report)</span>
+            </div>
+            <div class="csc-body">
+                <div class="csc-item">
+                    <span class="csc-label">Branch Cash Balance</span>
+                    <span class="csc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+                </div>
+                <div class="csc-note">
+                    <i class="fas fa-info-circle"></i>
+                    Branch cash is locked from the Daily Report and cannot be edited here.
+                </div>
             </div>
         </div>
 
@@ -582,7 +615,7 @@ include_once '../../includes/admin_topbar.php';
 
 <style>
 /* ============================================================
-   CSS VARIABLES
+   CSS VARIABLES — BLUE THEME
    ============================================================ */
 :root {
     --ev-bg: #F3F4F6;
@@ -617,17 +650,17 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 .main-content { background: var(--ev-bg) !important; padding: 16px 20px !important; }
 
 /* ============================================================
-   BRANCH STATUS CARD
+   BRANCH STATUS CARD — BLUE
    ============================================================ */
 .branch-status-card {
     display: flex;
     align-items: center;
     gap: 18px;
     padding: 16px 22px;
-    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
     border-radius: 12px;
     margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35);
+    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.35);
     flex-wrap: wrap;
     color: #FFFFFF;
     position: relative;
@@ -746,7 +779,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     margin: 4px 0 0 0;
 }
 .header-left .text-muted strong {
-    color: #7C3AED;
+    color: #2563EB;
     font-family: 'Courier New', monospace;
     font-weight: 800;
 }
@@ -770,11 +803,11 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     white-space: nowrap;
 }
 .btn-edit { background: #F59E0B; color: white; }
-.btn-edit:hover { background: #D97706; transform: translateY(-2px); color: white; }
+.btn-edit:hover { background: #D97706; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(245,158,11,0.4); }
 .btn-delete { background: #DC2626; color: white; }
-.btn-delete:hover { background: #B91C1C; transform: translateY(-2px); color: white; }
+.btn-delete:hover { background: #B91C1C; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(220,38,38,0.4); }
 .btn-print { background: #3B82F6; color: white; }
-.btn-print:hover { background: #2563EB; transform: translateY(-2px); color: white; }
+.btn-print:hover { background: #2563EB; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
 .btn-secondary {
     background: var(--ev-card-bg);
     color: var(--ev-text-secondary);
@@ -797,6 +830,8 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 .alert i { font-size: 20px; flex-shrink: 0; }
 .alert span { flex: 1; }
 .alert-close {
@@ -808,6 +843,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     padding: 0 4px;
     opacity: 0.6;
 }
+.alert-close:hover { opacity: 1; }
 
 /* ============================================================
    HERO CARD
@@ -955,7 +991,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     width: 40px;
     height: 40px;
     border-radius: 10px;
-    background: linear-gradient(135deg, #7C3AED, #6D28D9);
+    background: linear-gradient(135deg, #2563EB, #1D4ED8);
     color: #FFFFFF;
     display: flex;
     align-items: center;
@@ -988,6 +1024,10 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 .status-green { background: #D1FAE5; color: #065F46; }
 .status-blue { background: #DBEAFE; color: #1D4ED8; }
 .status-red { background: #FEE2E2; color: #991B1B; }
+html.dark-mode .status-orange { background: #5F3A1E; color: #FBBF24; }
+html.dark-mode .status-green { background: #065F46; color: #34D399; }
+html.dark-mode .status-blue { background: #1E3A5F; color: #60A5FA; }
+html.dark-mode .status-red { background: #7F1D1D; color: #FCA5A5; }
 
 .sub-form { flex: 0 0 auto; }
 .sub-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1020,7 +1060,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 }
 
 /* ============================================================
-   SUMMARY GRID
+   SUMMARY GRID — SEMI-TRANSPARENT COLORS
    ============================================================ */
 .summary-grid {
     display: grid;
@@ -1044,6 +1084,13 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     transform: translateY(-4px);
     box-shadow: 0 12px 28px var(--ev-shadow-md);
 }
+
+/* ✅ Semi-transparent color accents */
+.sc-total-float  { background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(37, 99, 235, 0.08)); }
+.sc-cash         { background: linear-gradient(135deg, rgba(20, 184, 166, 0.15), rgba(13, 148, 136, 0.08)); }
+.sc-deposits     { background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.08)); }
+.sc-withdrawals  { background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.08)); }
+
 .sc-icon {
     width: 48px;
     height: 48px;
@@ -1073,6 +1120,13 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     color: var(--ev-text);
     font-family: 'Inter', 'Courier New', monospace;
     word-break: break-word;
+}
+.sc-sub {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ev-text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 .text-success { color: #10B981; }
 .text-danger { color: #DC2626; }
@@ -1110,7 +1164,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     text-transform: uppercase;
     letter-spacing: 0.8px;
 }
-.section-header h3 i { color: #7C3AED; font-size: 15px; }
+.section-header h3 i { color: #2563EB; font-size: 15px; }
 .section-badge {
     font-size: 10px;
     font-weight: 700;
@@ -1150,7 +1204,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     align-items: center;
     gap: 6px;
 }
-.detail-label i { color: #7C3AED; font-size: 12px; }
+.detail-label i { color: #2563EB; font-size: 12px; }
 .detail-value {
     font-size: 15px;
     font-weight: 700;
@@ -1162,7 +1216,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 }
 .detail-code {
     font-family: 'Courier New', monospace;
-    color: #7C3AED;
+    color: #2563EB;
     font-size: 14px;
 }
 .code-pill {
@@ -1174,6 +1228,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     border-radius: 8px;
     font-family: 'Courier New', monospace;
 }
+html.dark-mode .code-pill { background: #1E3A5F; color: #60A5FA; }
 .capital-link {
     font-weight: 700;
     color: #3B82F6;
@@ -1184,7 +1239,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 .capital-link:hover { text-decoration: underline; }
 
 /* ============================================================
-   PROVIDERS TABLE
+   PROVIDERS TABLE — BLUE HEADER
    ============================================================ */
 .providers-table-wrapper {
     overflow-x: auto;
@@ -1196,7 +1251,7 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     min-width: 1100px;
 }
 .providers-table thead {
-    background: linear-gradient(135deg, #7C3AED, #6D28D9);
+    background: linear-gradient(135deg, #2563EB, #1D4ED8);
 }
 .providers-table thead th {
     padding: 12px 14px;
@@ -1274,10 +1329,10 @@ html.dark-mode .provider-code { background: #1E3A5F; color: #60A5FA; }
 .amount-highlight {
     font-size: 13px;
     font-weight: 800;
-    color: #7C3AED;
+    color: #2563EB;
     font-family: 'Courier New', monospace;
 }
-html.dark-mode .amount-highlight { color: #A78BFA; }
+html.dark-mode .amount-highlight { color: #60A5FA; }
 .amount-total {
     font-size: 14px;
     font-weight: 900;
@@ -1296,17 +1351,89 @@ html.dark-mode .amount-total { color: #34D399; }
 .totals-row strong {
     font-size: 12px;
     letter-spacing: 1px;
-    color: #7C3AED;
+    color: #2563EB;
     text-transform: uppercase;
 }
+html.dark-mode .totals-row strong { color: #60A5FA; }
 .total-value {
     font-size: 14px;
     font-weight: 900;
     font-family: 'Courier New', monospace;
-    color: #7C3AED;
+    color: #2563EB;
 }
+html.dark-mode .total-value { color: #60A5FA; }
 .total-value.text-success { color: #10B981; }
 .total-value.text-danger { color: #DC2626; }
+
+/* ============================================================
+   BRANCH CASH SUMMARY CARD
+   ============================================================ */
+.cash-summary-card {
+    background: var(--ev-card-bg);
+    border-radius: 12px;
+    border: 2px solid #FCD34D;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px var(--ev-shadow);
+}
+.csc-header {
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #92400E;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #FCD34D;
+}
+html.dark-mode .csc-header {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    color: #FCD34D;
+    border-bottom-color: #F59E0B;
+}
+.csc-header i { font-size: 16px; }
+.csc-body {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.csc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.csc-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ev-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.csc-value {
+    font-size: 20px;
+    font-weight: 900;
+    color: #D97706;
+    font-family: 'Inter', 'Courier New', monospace;
+}
+html.dark-mode .csc-value { color: #FCD34D; }
+.csc-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--ev-text-secondary);
+    background: var(--ev-hover);
+    padding: 10px 14px;
+    border-radius: 8px;
+    border-left: 3px solid #FCD34D;
+}
+.csc-note i { color: #F59E0B; }
 
 /* ============================================================
    NOTES
@@ -1315,7 +1442,7 @@ html.dark-mode .amount-total { color: #34D399; }
 .note-block {
     background: var(--ev-hover);
     border-radius: 10px;
-    border-left: 4px solid #7C3AED;
+    border-left: 4px solid #2563EB;
     padding: 14px 18px;
 }
 .note-content {
@@ -1345,19 +1472,19 @@ html.dark-mode .amount-total { color: #34D399; }
     width: 42px;
     height: 42px;
     border-radius: 12px;
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #6D28D9;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1D4ED8;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 16px;
     flex-shrink: 0;
-    border: 1.5px solid #C4B5FD;
+    border: 1.5px solid #93C5FD;
 }
 html.dark-mode .audit-icon {
-    background: linear-gradient(135deg, #2D1B5F, #3B1D6E);
-    color: #A78BFA;
-    border-color: #7C3AED;
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+    color: #60A5FA;
+    border-color: #3B82F6;
 }
 .audit-content {
     display: flex;
@@ -1441,6 +1568,7 @@ html.dark-mode .audit-icon {
     .hero-icon { width: 56px; height: 56px; font-size: 24px; }
     .hero-amount { font-size: clamp(22px, 7vw, 32px); }
     .sc-value { font-size: 14px; }
+    .csc-value { font-size: 16px; }
 }
 </style>
 

@@ -2,11 +2,10 @@
 // ================================================================
 // FILE: modules/capital_management/index.php
 // CAPITAL MANAGEMENT - MAIN INDEX
-// ✅ FIXED: Shows CORRECT current values from daily_reports
+// ✅ FINAL FIX: Current Capital inasoma kutoka daily_reports AU capital_management
+// ✅ Export dropdown INATOKEA JUU ya card zote
 // ✅ Single continuous table with continuous numbering
 // ✅ Red line separator between branches
-// ✅ Beautiful card CSS for capital summary
-// ✅ Scroll buttons <> in header center
 // ================================================================
 
 require_once '../../config/config.php';
@@ -82,71 +81,100 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// ✅ GET CURRENT CAPITAL (FROM daily_reports - CORRECT VALUES)
+// ✅ GET CURRENT CAPITAL - FIXED
+// Inasoma kutoka daily_reports KWANZA, kama haina data inasoma kutoka capital_management
 // ============================================================
 $current_cash = 0;
 $current_float = 0;
 $current_capital = 0;
 
-if ($selected_branch > 0) {
-    // SINGLE BRANCH - get from that branch's latest daily_report
+/**
+ * Function ya kupata current capital kwa branch moja
+ * Inasoma kutoka daily_reports kwanza, kama haina data inasoma kutoka capital_management
+ */
+function getCurrentCapitalForBranch($db, $branch_id) {
+    $result = ['cash' => 0, 'float' => 0, 'capital' => 0];
+    
+    // STEP 1: Jaribu daily_reports kwanza
     $stmt = $db->prepare("
-        SELECT current_cash, current_capital 
+        SELECT current_cash, current_capital, current_float
         FROM daily_reports 
         WHERE branch_id = ? 
         ORDER BY report_date DESC, id DESC 
         LIMIT 1
     ");
-    $stmt->execute([$selected_branch]);
+    $stmt->execute([$branch_id]);
     $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    
     if ($dr) {
-        $current_cash = floatval($dr['current_cash'] ?? 0);
-        $current_capital = floatval($dr['current_capital'] ?? 0);
+        $result['cash'] = floatval($dr['current_cash'] ?? 0);
+        $result['capital'] = floatval($dr['current_capital'] ?? 0);
+        $result['float'] = floatval($dr['current_float'] ?? 0);
+        
+        // Kama daily_reports ina data nzuri, tumia hii
+        if ($result['cash'] > 0 || $result['float'] > 0 || $result['capital'] > 0) {
+            return $result;
+        }
     }
     
-    // Get float from latest daily_report_providers
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-        FROM daily_report_providers drp
-        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-        WHERE dr.branch_id = ?
-        AND dr.id = (SELECT MAX(id) FROM daily_reports WHERE branch_id = ?)
-    ");
-    $stmt->execute([$selected_branch, $selected_branch]);
-    $current_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
-    
-} else {
-    // ALL BRANCHES - sum across all branches (from their latest daily reports)
-    // For cash & capital - sum latest per branch
+    // STEP 2: Fallback - soma kutoka capital_management
+    // Pata latest transaction kwa kila reference_id (provider) na cash
     $stmt = $db->prepare("
         SELECT 
-            COALESCE(SUM(current_cash), 0) as total_cash,
-            COALESCE(SUM(current_capital), 0) as total_capital
-        FROM daily_reports dr1
-        WHERE dr1.id = (
-            SELECT MAX(dr2.id) 
-            FROM daily_reports dr2 
-            WHERE dr2.branch_id = dr1.branch_id
-        )
+            cm.reference_module,
+            cm.reference_id,
+            cm.amount,
+            cm.transaction_type
+        FROM capital_management cm
+        WHERE cm.branch_id = ?
+          AND cm.id IN (
+              SELECT MAX(id) FROM capital_management 
+              WHERE branch_id = ? 
+                AND reference_module = cm.reference_module
+                AND (reference_id = cm.reference_id OR (reference_id IS NULL AND cm.reference_id IS NULL))
+              GROUP BY reference_module, reference_id
+          )
     ");
-    $stmt->execute();
-    $dr_sum = $stmt->fetch(PDO::FETCH_ASSOC);
-    $current_cash = floatval($dr_sum['total_cash'] ?? 0);
-    $current_capital = floatval($dr_sum['total_capital'] ?? 0);
+    $stmt->execute([$branch_id, $branch_id]);
+    $latest_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get float from all branches latest daily reports
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-        FROM daily_report_providers drp
-        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-        WHERE dr.id IN (
-            SELECT MAX(dr2.id) 
-            FROM daily_reports dr2 
-            GROUP BY dr2.branch_id
-        )
-    ");
-    $stmt->execute();
-    $current_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+    $total_cash = 0;
+    $total_float = 0;
+    
+    foreach ($latest_records as $rec) {
+        $amount = floatval($rec['amount']);
+        $is_outgoing = in_array($rec['transaction_type'], ['cash_out', 'adjustment']);
+        
+        if ($rec['reference_module'] === 'provider') {
+            // Provider float
+            $total_float += $is_outgoing ? -$amount : $amount;
+        } else {
+            // Cash
+            $total_cash += $is_outgoing ? -$amount : $amount;
+        }
+    }
+    
+    $result['cash'] = $total_cash;
+    $result['float'] = $total_float;
+    $result['capital'] = $total_cash + $total_float;
+    
+    return $result;
+}
+
+if ($selected_branch > 0) {
+    // Branch moja
+    $data = getCurrentCapitalForBranch($db, $selected_branch);
+    $current_cash = $data['cash'];
+    $current_float = $data['float'];
+    $current_capital = $data['capital'];
+} else {
+    // All branches - jumlisha
+    foreach ($branches as $b) {
+        $data = getCurrentCapitalForBranch($db, $b['id']);
+        $current_cash += $data['cash'];
+        $current_float += $data['float'];
+        $current_capital += $data['capital'];
+    }
 }
 
 // ============================================================
@@ -221,7 +249,6 @@ foreach ($all_transactions as $t) {
     $b_id = $t['branch_id'] ?? 0;
     $is_new_branch = ($previous_branch_id !== null && $previous_branch_id != $b_id);
     
-    // Update branch summary
     if (isset($branch_summary[$b_id])) {
         $branch_summary[$b_id]['count']++;
         if (!in_array($b_id, $branch_ids_seen)) {
@@ -229,7 +256,6 @@ foreach ($all_transactions as $t) {
         }
     }
     
-    // Update grand totals
     $is_outgoing = in_array($t['transaction_type'], ['cash_out', 'adjustment']);
     $amount = floatval($t['amount']);
     $is_float = ($t['reference_module'] === 'provider' && !empty($t['provider_name']));
@@ -257,7 +283,6 @@ foreach ($all_transactions as $t) {
 $grand_totals['branches_count'] = count($branch_ids_seen);
 $grand_totals['net_capital'] = $grand_totals['total_in'] - $grand_totals['total_out'];
 
-// Type labels
 $type_labels = [
     'opening' => ['label' => 'Opening', 'icon' => 'fa-play', 'color' => 'blue'],
     'additional' => ['label' => 'Additional', 'icon' => 'fa-plus-circle', 'color' => 'green'],
@@ -298,16 +323,16 @@ include_once '../../includes/admin_topbar.php';
                 <a href="history.php?branch=<?php echo $selected_branch; ?>" class="btn btn-info">
                     <i class="fas fa-history"></i> Full History
                 </a>
-                <div class="dropdown export-dropdown">
-                    <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
+                <div class="dropdown export-dropdown" id="exportDropdown">
+                    <button type="button" class="btn btn-export dropdown-toggle" id="exportToggleBtn" onclick="toggleExportDropdown(event)">
                         <i class="fas fa-file-export"></i> Export
                         <i class="fas fa-chevron-down"></i>
                     </button>
                     <div class="dropdown-menu" id="exportMenu">
-                        <a href="#" onclick="exportData('csv')"><i class="fas fa-file-csv"></i> CSV</a>
-                        <a href="#" onclick="exportData('excel')"><i class="fas fa-file-excel"></i> Excel</a>
-                        <a href="#" onclick="exportData('pdf')"><i class="fas fa-file-pdf"></i> PDF</a>
-                        <a href="#" onclick="window.print()"><i class="fas fa-print"></i> Print</a>
+                        <a href="#" onclick="exportData('csv'); return false;"><i class="fas fa-file-csv"></i> CSV</a>
+                        <a href="#" onclick="exportData('excel'); return false;"><i class="fas fa-file-excel"></i> Excel</a>
+                        <a href="#" onclick="exportData('pdf'); return false;"><i class="fas fa-file-pdf"></i> PDF</a>
+                        <a href="#" onclick="window.print(); return false;"><i class="fas fa-print"></i> Print</a>
                     </div>
                 </div>
             </div>
@@ -330,7 +355,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        ✅ CURRENT CAPITAL SUMMARY (FROM daily_reports - CORRECT VALUES)
+        CURRENT CAPITAL SUMMARY
         ============================================================ -->
         <div class="current-capital-wrapper">
             <div class="current-capital-header">
@@ -342,7 +367,7 @@ include_once '../../includes/admin_topbar.php';
                         <span class="cch-title">Current Branch Capital</span>
                         <span class="cch-subtitle">
                             <?php echo $selected_branch > 0 ? htmlspecialchars($filter_branch_name) : 'All Branches (Latest)'; ?>
-                            • From Reports
+                            • Live Values
                         </span>
                     </div>
                 </div>
@@ -352,7 +377,6 @@ include_once '../../includes/admin_topbar.php';
             </div>
             
             <div class="current-capital-grid">
-                <!-- TOTAL FLOAT -->
                 <div class="current-card card-float">
                     <div class="cc-icon cc-icon-blue">
                         <i class="fas fa-university"></i>
@@ -364,7 +388,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- CASH BALANCE -->
                 <div class="current-card card-cash">
                     <div class="cc-icon cc-icon-green">
                         <i class="fas fa-money-bill-wave"></i>
@@ -376,7 +399,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- TOTAL CAPITAL -->
                 <div class="current-card card-capital">
                     <div class="cc-icon cc-icon-purple">
                         <i class="fas fa-building"></i>
@@ -391,7 +413,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        PERIOD SUMMARY CARDS (Record-based)
+        PERIOD SUMMARY CARDS
         ============================================================ -->
         <div class="period-summary-wrapper">
             <div class="period-header">
@@ -413,7 +435,6 @@ include_once '../../includes/admin_topbar.php';
             </div>
             
             <div class="period-cards-grid">
-                <!-- TOTAL IN -->
                 <div class="period-card card-total-in">
                     <div class="pc-icon pc-icon-green">
                         <i class="fas fa-arrow-down"></i>
@@ -427,7 +448,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- TOTAL OUT -->
                 <div class="period-card card-total-out">
                     <div class="pc-icon pc-icon-red">
                         <i class="fas fa-arrow-up"></i>
@@ -441,7 +461,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- NET PERIOD -->
                 <div class="period-card card-net">
                     <div class="pc-icon pc-icon-blue">
                         <i class="fas fa-chart-line"></i>
@@ -455,7 +474,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- FLOAT IN -->
                 <div class="period-card card-float-in">
                     <div class="pc-icon pc-icon-purple">
                         <i class="fas fa-university"></i>
@@ -469,7 +487,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- CASH IN -->
                 <div class="period-card card-cash-in">
                     <div class="pc-icon pc-icon-teal">
                         <i class="fas fa-money-bill-wave"></i>
@@ -483,7 +500,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- BRANCHES -->
                 <div class="period-card card-branches">
                     <div class="pc-icon pc-icon-orange">
                         <i class="fas fa-store-alt"></i>
@@ -542,23 +558,20 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        SINGLE CONTINUOUS TABLE WITH SCROLL BUTTONS <>
+        SINGLE CONTINUOUS TABLE
         ============================================================ -->
         <?php if (count($flat_transactions) > 0): ?>
             
             <div class="table-container-main">
                 
-                <!-- RED HEADER: Left + Center(<> + Search + <>) + Right -->
                 <div class="table-header-red">
                     
-                    <!-- LEFT: Title -->
                     <div class="thr-left">
                         <i class="fas fa-list"></i>
                         <h3>Capital Transactions</h3>
                         <span class="thr-count"><?php echo $grand_totals['count']; ?> records</span>
                     </div>
                     
-                    <!-- CENTER: Scroll Left + Search + Scroll Right -->
                     <div class="thr-center">
                         <button type="button" class="scroll-btn-header" onclick="scrollTableMain('left')" title="Scroll Left">
                             <i class="fas fa-chevron-left"></i>
@@ -581,7 +594,6 @@ include_once '../../includes/admin_topbar.php';
                         </button>
                     </div>
                     
-                    <!-- RIGHT: Branches count -->
                     <div class="thr-right">
                         <span class="thr-branches-badge">
                             <i class="fas fa-store-alt"></i>
@@ -590,7 +602,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- TABLE -->
                 <div class="table-responsive-main" id="tableWrapperMain">
                     <table class="data-table-main" id="capitalTable">
                         <thead>
@@ -802,7 +813,8 @@ body {
     box-shadow: 0 4px 16px rgba(0,0,0,0.15);
     color: #FFFFFF;
     position: relative;
-    overflow: hidden;
+    z-index: 5000;
+    overflow: visible;
 }
 .branch-filter-card::before {
     content: '';
@@ -812,6 +824,8 @@ body {
     background: rgba(255,255,255,0.06);
     border-radius: 50%;
     pointer-events: none;
+    z-index: 0;
+    clip-path: inset(0);
 }
 .branch-filter-card.filter-all {
     background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
@@ -826,7 +840,7 @@ body {
     font-size: 14px;
     flex-wrap: wrap;
     position: relative;
-    z-index: 1;
+    z-index: 2;
 }
 .filter-left > i { font-size: 20px; opacity: 0.9; color: #FCD34D; }
 .filter-label { font-weight: 500; opacity: 0.8; }
@@ -855,7 +869,13 @@ body {
     font-weight: 600;
 }
 .filter-clear:hover { background: rgba(255,255,255,0.25); color: #FFFFFF; transform: translateY(-1px); }
-.filter-right { display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 1; }
+.filter-right { 
+    display: flex; 
+    gap: 8px; 
+    flex-wrap: wrap; 
+    position: relative; 
+    z-index: 3; 
+}
 
 /* ============================================================
    PAGE HEADER
@@ -881,7 +901,7 @@ body {
 }
 
 /* ============================================================
-   ✅ CURRENT CAPITAL WRAPPER (FROM daily_reports - CORRECT)
+   CURRENT CAPITAL WRAPPER
    ============================================================ */
 .current-capital-wrapper {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
@@ -891,6 +911,7 @@ body {
     overflow: hidden;
     box-shadow: 0 8px 32px rgba(30, 64, 175, 0.35);
     position: relative;
+    z-index: 1;
 }
 .current-capital-wrapper::before {
     content: '';
@@ -1051,6 +1072,7 @@ body {
     overflow: hidden;
     box-shadow: 0 8px 32px rgba(124, 58, 237, 0.35);
     position: relative;
+    z-index: 1;
 }
 .period-summary-wrapper::before {
     content: '';
@@ -1230,6 +1252,8 @@ body {
     border: 1px solid var(--cm-border);
     margin-bottom: 20px;
     box-shadow: 0 1px 3px var(--cm-shadow);
+    position: relative;
+    z-index: 1;
 }
 .filters-form {
     display: flex;
@@ -1304,37 +1328,70 @@ body {
 .btn-secondary:hover { background: var(--cm-border); color: var(--cm-text); }
 
 /* ============================================================
-   DROPDOWN
+   EXPORT DROPDOWN - FIXED POSITION
    ============================================================ */
-.dropdown { position: relative; display: inline-block; }
+.dropdown { 
+    position: relative; 
+    display: inline-block;
+    z-index: 10;
+}
+
+.export-dropdown {
+    position: relative;
+    z-index: 100;
+}
+
 .dropdown-menu {
     display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 4px;
+    position: fixed;
     background: var(--cm-card-bg);
-    min-width: 180px;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px var(--cm-shadow-md);
+    min-width: 200px;
+    border-radius: 10px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
     border: 1px solid var(--cm-border);
-    z-index: 1000;
+    z-index: 2147483647;
     overflow: hidden;
-    padding: 4px 0;
+    padding: 6px 0;
+    animation: dropdownFadeIn 0.18s ease;
 }
-.dropdown-menu.show { display: block; }
+
+.dropdown-menu.show { 
+    display: block; 
+}
+
+@keyframes dropdownFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .dropdown-menu a {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 14px;
+    padding: 10px 16px;
     text-decoration: none;
     color: var(--cm-text);
     font-size: 13px;
-    transition: background 0.2s ease;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    position: relative;
+    z-index: 1;
 }
-.dropdown-menu a:hover { background: var(--cm-hover); }
-.dropdown-menu a i { width: 18px; font-size: 15px; }
+.dropdown-menu a:hover { 
+    background: var(--cm-hover); 
+    padding-left: 20px;
+}
+.dropdown-menu a i { 
+    width: 18px; 
+    font-size: 15px; 
+    color: #DC2626;
+}
 
 /* ============================================================
    SINGLE CONTINUOUS TABLE
@@ -1347,6 +1404,8 @@ body {
     box-shadow: 0 4px 16px var(--cm-shadow);
     width: 100%;
     max-width: 100%;
+    position: relative;
+    z-index: 1;
 }
 
 .table-header-red {
@@ -1598,7 +1657,7 @@ body {
 .data-table-main tbody td.text-right { text-align: right; }
 
 /* ============================================================
-   BRANCH SEPARATOR (RED LINE)
+   BRANCH SEPARATOR
    ============================================================ */
 .branch-separator-row {
     background: transparent !important;
@@ -1942,7 +2001,88 @@ html.dark-mode .btn-edit { background: linear-gradient(135deg, #065F46, #047857)
 
 <script>
 // ============================================================
-// SCROLL TABLE MAIN (Horizontal)
+// EXPORT DROPDOWN - FIXED POSITION WITH DYNAMIC POSITIONING
+// ============================================================
+function toggleExportDropdown(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    
+    const menu = document.getElementById('exportMenu');
+    const btn = document.getElementById('exportToggleBtn');
+    if (!menu || !btn) return;
+    
+    document.querySelectorAll('.dropdown-menu.show').forEach(function(m) {
+        if (m !== menu) m.classList.remove('show');
+    });
+    
+    const isOpen = menu.classList.contains('show');
+    
+    if (isOpen) {
+        menu.classList.remove('show');
+        return;
+    }
+    
+    const rect = btn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = (rect.bottom + 6) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.style.left = 'auto';
+    menu.style.bottom = 'auto';
+    menu.style.zIndex = '2147483647';
+    
+    menu.classList.add('show');
+}
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.export-dropdown')) {
+        var menu = document.getElementById('exportMenu');
+        if (menu) menu.classList.remove('show');
+    }
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    const menu = document.getElementById('exportMenu');
+    if (menu) {
+        menu.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+    }
+});
+
+window.addEventListener('scroll', function() {
+    var menu = document.getElementById('exportMenu');
+    if (menu && menu.classList.contains('show')) {
+        menu.classList.remove('show');
+    }
+}, true);
+
+window.addEventListener('resize', function() {
+    var menu = document.getElementById('exportMenu');
+    if (menu && menu.classList.contains('show')) {
+        menu.classList.remove('show');
+    }
+});
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        var menu = document.getElementById('exportMenu');
+        if (menu && menu.classList.contains('show')) {
+            menu.classList.remove('show');
+        }
+    }
+});
+
+function exportData(format) {
+    const menu = document.getElementById('exportMenu');
+    if (menu) menu.classList.remove('show');
+    const params = new URLSearchParams(window.location.search);
+    window.location.href = 'export.php?format=' + format + '&' + params.toString();
+}
+
+// ============================================================
+// SCROLL TABLE MAIN
 // ============================================================
 function scrollTableMain(direction) {
     const wrapper = document.getElementById('tableWrapperMain');
@@ -2030,13 +2170,6 @@ document.addEventListener('keydown', function(e) {
         const input = document.getElementById('globalSearchInput');
         if (input) { input.focus(); input.select(); }
     }
-    if (e.key === 'Escape') {
-        const input = document.getElementById('globalSearchInput');
-        if (input && input.value.length > 0 && document.activeElement === input) {
-            clearGlobalSearch();
-        }
-    }
-    // Arrow left/right kwa scroll
     if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowLeft') {
         e.preventDefault();
         scrollTableMain('left');
@@ -2046,24 +2179,6 @@ document.addEventListener('keydown', function(e) {
         scrollTableMain('right');
     }
 });
-
-// ============================================================
-// EXPORT DROPDOWN
-// ============================================================
-function toggleDropdown() {
-    document.getElementById('exportMenu').classList.toggle('show');
-}
-document.addEventListener('click', function(e) {
-    if (!e.target.closest('.export-dropdown')) {
-        var menu = document.getElementById('exportMenu');
-        if (menu) menu.classList.remove('show');
-    }
-});
-function exportData(format) {
-    document.getElementById('exportMenu').classList.remove('show');
-    const params = new URLSearchParams(window.location.search);
-    window.location.href = 'export.php?format=' + format + '&' + params.toString();
-}
 
 // ============================================================
 // DARK MODE SYNC

@@ -2,8 +2,10 @@
 // ================================================================
 // FILE: modules/daily_report/view_provider_transactions.php
 // WAKALA FINANCIAL SYSTEM - VIEW PROVIDER TRANSACTIONS
-// ✅ Shows ALL transactions for a provider
-// ✅ Shows WHO made each transaction (employee name)
+// ✅ FIXED: Stats cards zenye soft background (kama files nyingine)
+// ✅ FIXED: Dark mode inatumia html.dark-mode
+// ✅ FIXED: Query optimization na indexes
+// ✅ NEW: Modern design na consistent styling
 // ================================================================
 
 require_once '../../config/config.php';
@@ -44,128 +46,128 @@ if ($provider_id <= 0 || $branch_id <= 0) {
 // ============================================================
 // GET PROVIDER INFO
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM providers WHERE id = ?");
-$stmt->execute([$provider_id]);
-$provider = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT * FROM providers WHERE id = ?");
+    $stmt->execute([$provider_id]);
+    $provider = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$provider) {
-    $_SESSION['error_message'] = 'Provider not found.';
+    if (!$provider) {
+        $_SESSION['error_message'] = 'Provider not found.';
+        header('Location: index.php?branch_id=' . $branch_id);
+        exit();
+    }
+
+    // ============================================================
+    // GET BRANCH INFO
+    // ============================================================
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+    $stmt->execute([$branch_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $branch_name = $branch['branch_name'] ?? 'Unknown';
+    $branch_code = $branch['branch_code'] ?? '';
+
+    // ============================================================
+    // GET BRANCH PROVIDER CODE
+    // ============================================================
+    $stmt = $db->prepare("
+        SELECT provider_code 
+        FROM branch_providers 
+        WHERE branch_id = ? AND provider_id = ? 
+        LIMIT 1
+    ");
+    $stmt->execute([$branch_id, $provider_id]);
+    $bp = $stmt->fetch(PDO::FETCH_ASSOC);
+    $provider_branch_code = $bp['provider_code'] ?? $provider['provider_code'];
+
+    // ============================================================
+    // GET ALL TRANSACTIONS FOR THIS PROVIDER
+    // ============================================================
+    $stmt = $db->prepare("
+        SELECT 
+            t.*,
+            e.full_name as employee_name,
+            e.profile_pic as employee_pic,
+            b.branch_name as txn_branch_name,
+            b.branch_code as txn_branch_code
+        FROM transactions t
+        LEFT JOIN employees e ON t.employee_id = e.id
+        LEFT JOIN branches b ON t.branch_id = b.id
+        WHERE t.provider_id = ?
+        AND t.branch_id = ?
+        ORDER BY t.created_at DESC, t.id DESC
+    ");
+    $stmt->execute([$provider_id, $branch_id]);
+    $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // ============================================================
+    // CALCULATE SUMMARY
+    // ============================================================
+    $total_deposits = 0;
+    $total_withdrawals = 0;
+    $total_deposit_count = 0;
+    $total_withdrawal_count = 0;
+    $employee_summary = [];
+
+    foreach ($transactions as $t) {
+        $amount = floatval($t['amount'] ?? 0);
+        $emp_name = $t['employee_name'] ?? 'N/A';
+        
+        if ($t['transaction_type'] === 'deposit') {
+            $total_deposits += $amount;
+            $total_deposit_count++;
+        } else {
+            $total_withdrawals += $amount;
+            $total_withdrawal_count++;
+        }
+        
+        // Build employee summary
+        if (!isset($employee_summary[$emp_name])) {
+            $employee_summary[$emp_name] = [
+                'name' => $emp_name,
+                'deposits' => 0,
+                'withdrawals' => 0,
+                'count' => 0
+            ];
+        }
+        if ($t['transaction_type'] === 'deposit') {
+            $employee_summary[$emp_name]['deposits'] += $amount;
+        } else {
+            $employee_summary[$emp_name]['withdrawals'] += $amount;
+        }
+        $employee_summary[$emp_name]['count']++;
+    }
+
+    // ============================================================
+    // GET CURRENT FLOAT FOR THIS PROVIDER
+    // ============================================================
+    $stmt = $db->prepare("
+        SELECT 
+            drp.current_float,
+            drp.current_cash,
+            drp.morning_float,
+            drp.total_deposits,
+            drp.total_withdrawals,
+            dr.report_date
+        FROM daily_report_providers drp
+        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+        WHERE drp.provider_id = ? AND dr.branch_id = ?
+        ORDER BY dr.report_date DESC, dr.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$provider_id, $branch_id]);
+    $current = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $current_float = floatval($current['current_float'] ?? 0);
+    $current_cash = floatval($current['current_cash'] ?? 0);
+    $morning_float = floatval($current['morning_float'] ?? 0);
+
+} catch (PDOException $e) {
+    error_log("Error: " . $e->getMessage());
+    $_SESSION['error_message'] = 'Database error.';
     header('Location: index.php?branch_id=' . $branch_id);
     exit();
 }
-
-// ============================================================
-// GET BRANCH INFO
-// ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-$stmt->execute([$branch_id]);
-$branch = $stmt->fetch(PDO::FETCH_ASSOC);
-
-$branch_name = $branch['branch_name'] ?? 'Unknown';
-$branch_code = $branch['branch_code'] ?? '';
-
-// ============================================================
-// GET BRANCH PROVIDER CODE
-// ============================================================
-$stmt = $db->prepare("
-    SELECT provider_code 
-    FROM branch_providers 
-    WHERE branch_id = ? AND provider_id = ? 
-    LIMIT 1
-");
-$stmt->execute([$branch_id, $provider_id]);
-$bp = $stmt->fetch(PDO::FETCH_ASSOC);
-$provider_branch_code = $bp['provider_code'] ?? $provider['provider_code'];
-
-// ============================================================
-// GET ALL TRANSACTIONS FOR THIS PROVIDER
-// ============================================================
-$sql = "
-    SELECT 
-        t.*,
-        e.full_name as employee_name,
-        e.profile_pic as employee_pic,
-        b.branch_name,
-        b.branch_code
-    FROM transactions t
-    LEFT JOIN employees e ON t.employee_id = e.id
-    LEFT JOIN branches b ON t.branch_id = b.id
-    WHERE t.provider_id = ?
-";
-$params = [$provider_id];
-
-if ($branch_id > 0) {
-    $sql .= " AND t.branch_id = ?";
-    $params[] = $branch_id;
-}
-
-$sql .= " ORDER BY t.created_at DESC, t.id DESC";
-
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ============================================================
-// CALCULATE SUMMARY
-// ============================================================
-$total_deposits = 0;
-$total_withdrawals = 0;
-$total_deposit_count = 0;
-$total_withdrawal_count = 0;
-$employee_summary = [];
-
-foreach ($transactions as $t) {
-    $amount = floatval($t['amount'] ?? 0);
-    $emp_name = $t['employee_name'] ?? 'N/A';
-    
-    if ($t['transaction_type'] === 'deposit') {
-        $total_deposits += $amount;
-        $total_deposit_count++;
-    } else {
-        $total_withdrawals += $amount;
-        $total_withdrawal_count++;
-    }
-    
-    // Build employee summary
-    if (!isset($employee_summary[$emp_name])) {
-        $employee_summary[$emp_name] = [
-            'name' => $emp_name,
-            'deposits' => 0,
-            'withdrawals' => 0,
-            'count' => 0
-        ];
-    }
-    if ($t['transaction_type'] === 'deposit') {
-        $employee_summary[$emp_name]['deposits'] += $amount;
-    } else {
-        $employee_summary[$emp_name]['withdrawals'] += $amount;
-    }
-    $employee_summary[$emp_name]['count']++;
-}
-
-// ============================================================
-// GET CURRENT FLOAT FOR THIS PROVIDER (from latest daily_report_providers)
-// ============================================================
-$stmt = $db->prepare("
-    SELECT 
-        drp.current_float,
-        drp.current_cash,
-        drp.morning_float,
-        drp.total_deposits,
-        drp.total_withdrawals,
-        dr.report_date
-    FROM daily_report_providers drp
-    INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-    WHERE drp.provider_id = ? AND dr.branch_id = ?
-    ORDER BY dr.report_date DESC, dr.id DESC
-    LIMIT 1
-");
-$stmt->execute([$provider_id, $branch_id]);
-$current = $stmt->fetch(PDO::FETCH_ASSOC);
-
-$current_float = floatval($current['current_float'] ?? 0);
-$current_cash = floatval($current['current_cash'] ?? 0);
-$morning_float = floatval($current['morning_float'] ?? 0);
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
@@ -211,67 +213,71 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
-        STATS CARDS
+        STATS CARDS - SOFT BACKGROUND (kama files nyingine)
         ============================================================ -->
-        <div class="stats-grid">
+        <div class="stats-grid-soft">
             <!-- Current Float -->
-            <div class="stat-card stat-card-float">
-                <div class="stat-card-icon">
+            <div class="stat-card-soft stat-card-soft-float">
+                <div class="stat-icon-soft">
                     <i class="fas fa-coins"></i>
                 </div>
-                <div class="stat-card-content">
-                    <span class="stat-card-label">Current Float</span>
-                    <span class="stat-card-value"><?php echo formatCurrency($current_float); ?></span>
-                    <span class="stat-card-sub">
-                        <i class="fas fa-arrow-right"></i>
+                <div class="stat-info-soft">
+                    <span class="stat-label-soft">Current Float</span>
+                    <span class="stat-value-soft"><?php echo formatCurrency($current_float); ?></span>
+                    <span class="stat-sub-soft">
+                        <i class="fas fa-sun"></i>
                         Morning: <?php echo formatCurrency($morning_float); ?>
                     </span>
                 </div>
+                <div class="stat-decoration-soft"></div>
             </div>
             
             <!-- Total Deposits -->
-            <div class="stat-card stat-card-deposit">
-                <div class="stat-card-icon">
+            <div class="stat-card-soft stat-card-soft-deposit">
+                <div class="stat-icon-soft">
                     <i class="fas fa-arrow-down"></i>
                 </div>
-                <div class="stat-card-content">
-                    <span class="stat-card-label">Total Deposits</span>
-                    <span class="stat-card-value"><?php echo formatCurrency($total_deposits); ?></span>
-                    <span class="stat-card-sub">
+                <div class="stat-info-soft">
+                    <span class="stat-label-soft">Total Deposits</span>
+                    <span class="stat-value-soft"><?php echo formatCurrency($total_deposits); ?></span>
+                    <span class="stat-sub-soft">
                         <i class="fas fa-list"></i>
                         <?php echo number_format($total_deposit_count); ?> transactions
                     </span>
                 </div>
+                <div class="stat-decoration-soft"></div>
             </div>
             
             <!-- Total Withdrawals -->
-            <div class="stat-card stat-card-withdraw">
-                <div class="stat-card-icon">
+            <div class="stat-card-soft stat-card-soft-withdraw">
+                <div class="stat-icon-soft">
                     <i class="fas fa-arrow-up"></i>
                 </div>
-                <div class="stat-card-content">
-                    <span class="stat-card-label">Total Withdrawals</span>
-                    <span class="stat-card-value"><?php echo formatCurrency($total_withdrawals); ?></span>
-                    <span class="stat-card-sub">
+                <div class="stat-info-soft">
+                    <span class="stat-label-soft">Total Withdrawals</span>
+                    <span class="stat-value-soft"><?php echo formatCurrency($total_withdrawals); ?></span>
+                    <span class="stat-sub-soft">
                         <i class="fas fa-list"></i>
                         <?php echo number_format($total_withdrawal_count); ?> transactions
                     </span>
                 </div>
+                <div class="stat-decoration-soft"></div>
             </div>
             
             <!-- Total Transactions -->
-            <div class="stat-card stat-card-count">
-                <div class="stat-card-icon">
+            <div class="stat-card-soft stat-card-soft-count">
+                <div class="stat-icon-soft">
                     <i class="fas fa-receipt"></i>
                 </div>
-                <div class="stat-card-content">
-                    <span class="stat-card-label">Total Transactions</span>
-                    <span class="stat-card-value"><?php echo number_format(count($transactions)); ?></span>
-                    <span class="stat-card-sub">
+                <div class="stat-info-soft">
+                    <span class="stat-label-soft">Total Transactions</span>
+                    <span class="stat-value-soft"><?php echo number_format(count($transactions)); ?></span>
+                    <span class="stat-sub-soft">
                         <i class="fas fa-users"></i>
                         By <?php echo count($employee_summary); ?> employee(s)
                     </span>
                 </div>
+                <div class="stat-decoration-soft"></div>
             </div>
         </div>
 
@@ -660,99 +666,119 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 
 /* ============================================================
-   STATS GRID
+   STATS GRID - SOFT BACKGROUND
    ============================================================ */
-.stats-grid {
+.stats-grid-soft {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
+    gap: 14px;
     margin-bottom: 20px;
 }
 
-.stat-card {
-    background: var(--bg-card);
+.stat-card-soft {
+    position: relative;
     border-radius: 14px;
     padding: 18px 20px;
-    border: 1.5px solid var(--border-color);
     display: flex;
     align-items: center;
     gap: 14px;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 8px var(--shadow-color);
-    position: relative;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0;
     overflow: hidden;
+    border: 1.5px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
-.stat-card:hover {
+.stat-card-soft:hover {
     transform: translateY(-4px);
-    box-shadow: 0 12px 28px var(--shadow-hover);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
 }
 
-.stat-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 4px;
-    height: 100%;
+/* SOFT BLUE - Current Float */
+.stat-card-soft-float {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.2);
 }
+.stat-card-soft-float .stat-icon-soft {
+    background: rgba(37, 99, 235, 0.15);
+    color: #2563EB;
+    border: 1.5px solid rgba(37, 99, 235, 0.3);
+}
+.stat-card-soft-float .stat-value-soft { color: #1D4ED8; }
 
-.stat-card-float::before { background: #1D4ED8; }
-.stat-card-deposit::before { background: #059669; }
-.stat-card-withdraw::before { background: #DC2626; }
-.stat-card-count::before { background: #7C3AED; }
+/* SOFT GREEN - Deposits */
+.stat-card-soft-deposit {
+    background: rgba(5, 150, 105, 0.08);
+    border-color: rgba(5, 150, 105, 0.2);
+}
+.stat-card-soft-deposit .stat-icon-soft {
+    background: rgba(5, 150, 105, 0.15);
+    color: #059669;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+.stat-card-soft-deposit .stat-value-soft { color: #047857; }
 
-.stat-card-icon {
+/* SOFT RED - Withdrawals */
+.stat-card-soft-withdraw {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.2);
+}
+.stat-card-soft-withdraw .stat-icon-soft {
+    background: rgba(220, 38, 38, 0.15);
+    color: #DC2626;
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+}
+.stat-card-soft-withdraw .stat-value-soft { color: #B91C1C; }
+
+/* SOFT PURPLE - Total Transactions */
+.stat-card-soft-count {
+    background: rgba(124, 58, 237, 0.08);
+    border-color: rgba(124, 58, 237, 0.2);
+}
+.stat-card-soft-count .stat-icon-soft {
+    background: rgba(124, 58, 237, 0.15);
+    color: #7C3AED;
+    border: 1.5px solid rgba(124, 58, 237, 0.3);
+}
+.stat-card-soft-count .stat-value-soft { color: #6D28D9; }
+
+/* Dark mode */
+html.dark-mode .stat-card-soft-float { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
+html.dark-mode .stat-card-soft-deposit { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html.dark-mode .stat-card-soft-withdraw { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html.dark-mode .stat-card-soft-count { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html.dark-mode .stat-card-soft-float .stat-value-soft { color: #60A5FA; }
+html.dark-mode .stat-card-soft-deposit .stat-value-soft { color: #34D399; }
+html.dark-mode .stat-card-soft-withdraw .stat-value-soft { color: #FCA5A5; }
+html.dark-mode .stat-card-soft-count .stat-value-soft { color: #C4B5FD; }
+
+.stat-icon-soft {
     width: 50px;
     height: 50px;
-    border-radius: 12px;
+    border-radius: 13px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
+    font-size: 22px;
     flex-shrink: 0;
+    transition: all 0.3s ease;
 }
 
-.stat-card-float .stat-card-icon {
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    border: 1.5px solid #93C5FD;
+.stat-card-soft:hover .stat-icon-soft {
+    transform: scale(1.08) rotate(-4deg);
 }
 
-.stat-card-deposit .stat-card-icon {
-    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-    color: #059669;
-    border: 1.5px solid #6EE7B7;
-}
-
-.stat-card-withdraw .stat-card-icon {
-    background: linear-gradient(135deg, #FEE2E2, #FECACA);
-    color: #DC2626;
-    border: 1.5px solid #FCA5A5;
-}
-
-.stat-card-count .stat-card-icon {
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #7C3AED;
-    border: 1.5px solid #C4B5FD;
-}
-
-html.dark-mode .stat-card-float .stat-card-icon { background: linear-gradient(135deg, #1E3A5F, #1E40AF); color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .stat-card-deposit .stat-card-icon { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; border-color: #10B981; }
-html.dark-mode .stat-card-withdraw .stat-card-icon { background: linear-gradient(135deg, #7F1D1D, #991B1B); color: #FCA5A5; border-color: #DC2626; }
-html.dark-mode .stat-card-count .stat-card-icon { background: linear-gradient(135deg, #2D1B5F, #4C1D95); color: #C4B5FD; border-color: #A78BFA; }
-
-.stat-card-content {
-    flex: 1;
-    min-width: 0;
+.stat-info-soft {
     display: flex;
     flex-direction: column;
+    min-width: 0;
+    flex: 1;
     gap: 2px;
 }
 
-.stat-card-label {
-    font-size: 11px;
-    font-weight: 700;
+.stat-label-soft {
+    font-size: 10px;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.8px;
     color: var(--text-muted);
@@ -761,31 +787,43 @@ html.dark-mode .stat-card-count .stat-card-icon { background: linear-gradient(13
     text-overflow: ellipsis;
 }
 
-.stat-card-value {
-    font-size: 20px;
+.stat-value-soft {
+    font-size: 18px;
     font-weight: 900;
-    color: var(--text-primary);
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: -0.3px;
-    line-height: 1.15;
+    line-height: 1.2;
     word-break: break-word;
 }
 
-.stat-card-sub {
-    font-size: 11px;
+.stat-sub-soft {
+    font-size: 10px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    margin-top: 2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.stat-card-sub i {
-    font-size: 10px;
+.stat-sub-soft i {
+    font-size: 9px;
     color: var(--text-light);
+    flex-shrink: 0;
+}
+
+.stat-decoration-soft {
+    position: absolute;
+    top: -30px;
+    right: -30px;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    pointer-events: none;
 }
 
 /* ============================================================
@@ -1418,7 +1456,7 @@ html.dark-mode .status-badge.status-cancelled { background: #7F1D1D; color: #FEE
    RESPONSIVE
    ============================================================ */
 @media (max-width: 1200px) {
-    .stats-grid {
+    .stats-grid-soft {
         grid-template-columns: repeat(2, 1fr);
     }
 }
@@ -1430,38 +1468,16 @@ html.dark-mode .status-badge.status-cancelled { background: #7F1D1D; color: #FEE
         padding: 20px;
     }
     
-    .provider-header-name {
-        font-size: 20px;
-    }
+    .provider-header-name { font-size: 20px; }
+    .provider-header-icon { width: 56px; height: 56px; font-size: 22px; }
+    .btn-back-header { width: 100%; justify-content: center; }
     
-    .provider-header-icon {
-        width: 56px;
-        height: 56px;
-        font-size: 22px;
-    }
+    .stats-grid-soft { grid-template-columns: 1fr; }
     
-    .btn-back-header {
-        width: 100%;
-        justify-content: center;
-    }
+    .section-header { flex-direction: column; align-items: flex-start; }
     
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .section-header {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-    
-    .transactions-filters {
-        width: 100%;
-    }
-    
-    .filter-btn {
-        flex: 1;
-        justify-content: center;
-    }
+    .transactions-filters { width: 100%; }
+    .filter-btn { flex: 1; justify-content: center; }
     
     .txn-item {
         flex-direction: column;
@@ -1469,70 +1485,24 @@ html.dark-mode .status-badge.status-cancelled { background: #7F1D1D; color: #FEE
         padding: 14px;
     }
     
-    .txn-item-top {
-        flex-direction: column;
-        align-items: flex-start;
-    }
+    .txn-item-top { flex-direction: column; align-items: flex-start; }
+    .txn-item-amount { font-size: 17px; }
+    .txn-meta { gap: 8px; }
     
-    .txn-item-amount {
-        font-size: 17px;
-    }
-    
-    .txn-meta {
-        gap: 8px;
-    }
-    
-    .transactions-search-bar {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .search-input-group {
-        max-width: 100%;
-    }
-    
-    .txn-count {
-        text-align: center;
-    }
+    .transactions-search-bar { flex-direction: column; align-items: stretch; }
+    .search-input-group { max-width: 100%; }
+    .txn-count { text-align: center; }
 }
 
 @media (max-width: 480px) {
-    .provider-header-name {
-        font-size: 17px;
-    }
-    
-    .provider-meta-item {
-        font-size: 10px;
-        padding: 3px 9px;
-    }
-    
-    .stat-card-value {
-        font-size: 17px;
-    }
-    
-    .stat-card-icon {
-        width: 42px;
-        height: 42px;
-        font-size: 17px;
-    }
-    
-    .employee-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .txn-number {
-        font-size: 10px;
-        padding: 3px 8px;
-    }
-    
-    .txn-badge {
-        font-size: 9px;
-        padding: 3px 9px;
-    }
-    
-    .txn-item-amount {
-        font-size: 15px;
-    }
+    .provider-header-name { font-size: 17px; }
+    .provider-meta-item { font-size: 10px; padding: 3px 9px; }
+    .stat-value-soft { font-size: 16px; }
+    .stat-icon-soft { width: 44px; height: 44px; font-size: 18px; }
+    .employee-grid { grid-template-columns: 1fr; }
+    .txn-number { font-size: 10px; padding: 3px 8px; }
+    .txn-badge { font-size: 9px; padding: 3px 9px; }
+    .txn-item-amount { font-size: 15px; }
 }
 </style>
 
@@ -1541,7 +1511,6 @@ html.dark-mode .status-badge.status-cancelled { background: #7F1D1D; color: #FEE
 // FILTER TRANSACTIONS (All / Deposit / Withdrawal)
 // ============================================================
 function filterTransactions(type, btn) {
-    // Update active button
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     
@@ -1558,19 +1527,12 @@ function filterTransactions(type, btn) {
         }
     });
     
-    // Update count
     const countEl = document.getElementById('txnCount');
-    if (countEl) {
-        countEl.textContent = visibleCount + ' transactions';
-    }
+    if (countEl) countEl.textContent = visibleCount + ' transactions';
     
-    // Show/hide no results
     const noResults = document.getElementById('noResults');
-    if (noResults) {
-        noResults.style.display = visibleCount === 0 ? 'block' : 'none';
-    }
+    if (noResults) noResults.style.display = visibleCount === 0 ? 'block' : 'none';
     
-    // Clear search when filtering
     const searchInput = document.getElementById('txnSearchInput');
     if (searchInput) {
         searchInput.value = '';
@@ -1589,11 +1551,8 @@ function searchTransactions(input) {
     const countEl = document.getElementById('txnCount');
     const noResults = document.getElementById('noResults');
     
-    if (clearBtn) {
-        clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
-    }
+    if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
     
-    // Check active filter
     const activeFilter = document.querySelector('.filter-btn.active');
     const activeType = activeFilter ? activeFilter.textContent.trim().toLowerCase() : 'all';
     
@@ -1603,16 +1562,12 @@ function searchTransactions(input) {
         const itemType = item.getAttribute('data-type');
         const searchData = item.getAttribute('data-search') || '';
         
-        // Check filter
         let matchesFilter = true;
         if (activeType.includes('deposit')) matchesFilter = itemType === 'deposit';
         else if (activeType.includes('withdrawal')) matchesFilter = itemType === 'withdrawal';
         
-        // Check search
         let matchesSearch = true;
-        if (searchTerm.length > 0) {
-            matchesSearch = searchData.includes(searchTerm);
-        }
+        if (searchTerm.length > 0) matchesSearch = searchData.includes(searchTerm);
         
         if (matchesFilter && matchesSearch) {
             item.classList.remove('hidden-by-filter');
@@ -1622,12 +1577,8 @@ function searchTransactions(input) {
         }
     });
     
-    if (countEl) {
-        countEl.textContent = visibleCount + ' transactions';
-    }
-    if (noResults) {
-        noResults.style.display = visibleCount === 0 ? 'block' : 'none';
-    }
+    if (countEl) countEl.textContent = visibleCount + ' transactions';
+    if (noResults) noResults.style.display = visibleCount === 0 ? 'block' : 'none';
 }
 
 function clearTxnSearch() {
@@ -1643,22 +1594,15 @@ function clearTxnSearch() {
 // KEYBOARD SHORTCUTS
 // ============================================================
 document.addEventListener('keydown', function(e) {
-    // Ctrl/Cmd + K - Focus search
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         const input = document.getElementById('txnSearchInput');
-        if (input) {
-            input.focus();
-            input.select();
-        }
+        if (input) { input.focus(); input.select(); }
     }
     
-    // Escape - Clear search
     if (e.key === 'Escape') {
         const input = document.getElementById('txnSearchInput');
-        if (input && input.value.length > 0) {
-            clearTxnSearch();
-        }
+        if (input && input.value.length > 0) clearTxnSearch();
     }
 });
 
@@ -1674,11 +1618,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
-    
-    console.log('%c📊 View Provider Transactions', 'font-size:16px; font-weight:bold; color:#2563EB;');
-    console.log('%cProvider: <?php echo htmlspecialchars($provider["provider_name"]); ?>', 'font-size:13px; color:#2563EB;');
-    console.log('%cTotal Transactions: <?php echo count($transactions); ?>', 'font-size:13px; color:#059669;');
-    console.log('%cEmployees: <?php echo count($employee_summary); ?>', 'font-size:13px; color:#7C3AED;');
 });
 </script>
 

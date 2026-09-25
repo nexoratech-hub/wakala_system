@@ -4,12 +4,15 @@
 // WAKALA FINANCIAL SYSTEM - SHARED ADMIN TOP BAR
 // WITH COMPLETE DARK MODE SUPPORT
 // FIXED: Uses 'branch_id' consistently + no variable collision
+// 
+// ✅ Search button (no ⌘K shortcut)
+// ✅ Avatar-only profile (clickable → profile page)
 // ================================================================
 
 // ============================================================
 // GET COMPANY NAME FROM DATABASE
 // ============================================================
-$site_name = 'Wakala System'; // Default name
+$site_name = 'Wakala System';
 
 try {
     global $db;
@@ -41,9 +44,8 @@ try {
 }
 
 // ============================================================
-// GET CURRENT BRANCH - FROM URL ONLY (USES branch_id)
+// GET CURRENT BRANCH
 // ============================================================
-// Read from 'branch_id' first, then fallback to 'branch' for compatibility
 $current_branch = 0;
 
 if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['branch_id']) > 0) {
@@ -53,7 +55,6 @@ elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== 
     $current_branch = intval($_GET['branch']);
 }
 
-// Always clear old session memory
 unset($_SESSION['selected_branch']);
 
 // ============================================================
@@ -63,8 +64,7 @@ $full_name = $_SESSION['full_name'] ?? 'Admin';
 $role = $_SESSION['role'] ?? 'admin';
 $user_id = $_SESSION['user_id'] ?? 0;
 
-// Get profile picture from database
-$profile_image = '../../assets/images/logo.PNG'; // Default
+$profile_image = '../../assets/images/logo.PNG';
 
 if ($user_id > 0) {
     try {
@@ -133,7 +133,7 @@ $page_icons = [
 $page_icon = $page_icons[$current_dir] ?? 'fa-chart-pie';
 
 // ============================================================
-// GET BRANCH NAME FOR DISPLAY (using $br - NOT $branch)
+// GET BRANCH NAME FOR DISPLAY
 // ============================================================
 $topbar_branch_name = 'All Branches';
 if ($current_branch > 0) {
@@ -164,7 +164,7 @@ ADMIN TOP BAR
     </div>
     
     <div class="topbar-right">
-        <!-- Branch Selector - USES branch_id, uses $br (NOT $branch) -->
+        <!-- Branch Selector -->
         <div class="branch-selector">
             <i class="fas fa-store branch-icon"></i>
             <select id="branchFilter" onchange="switchBranch(this.value)">
@@ -185,10 +185,12 @@ ADMIN TOP BAR
             <?php endif; ?>
         </div>
         
+        <!-- SEARCH: Now with Search Button (no ⌘K shortcut) -->
         <div class="global-search">
-            <i class="fas fa-search search-icon"></i>
             <input type="text" id="globalSearch" placeholder="Search..." autocomplete="off">
-            <span class="search-shortcut">⌘K</span>
+            <button type="button" class="search-btn" id="searchBtn" aria-label="Search">
+                <i class="fas fa-search"></i>
+            </button>
             <div class="search-results" id="searchResults"></div>
         </div>
         
@@ -222,18 +224,23 @@ ADMIN TOP BAR
             <span id="liveDate">--/--/----</span>
         </div>
         
+        <!-- PROFILE: Avatar-only, clickable → profile page -->
         <div class="user-profile">
-            <img src="<?php echo $profile_image; ?>" alt="Profile" 
-                 onerror="this.src='../../assets/images/default-avatar.png'">
-            <div class="user-info">
-                <div class="user-name"><?php echo htmlspecialchars($full_name); ?></div>
-                <span class="user-role"><?php echo strtoupper($role); ?></span>
-            </div>
-            <button class="user-dropdown-btn" id="userDropdownBtn">
+            <a href="../profile/index.php" class="user-avatar-link" title="<?php echo htmlspecialchars($full_name); ?> (<?php echo strtoupper($role); ?>)">
+                <img src="<?php echo $profile_image; ?>" alt="Profile" 
+                     onerror="this.src='../../assets/images/default-avatar.png'">
+            </a>
+            
+            <button class="user-dropdown-btn" id="userDropdownBtn" aria-label="User Menu">
                 <i class="fas fa-chevron-down"></i>
             </button>
             
             <div class="user-dropdown" id="userDropdown">
+                <div class="user-dropdown-header">
+                    <div class="user-dropdown-name"><?php echo htmlspecialchars($full_name); ?></div>
+                    <div class="user-dropdown-role"><?php echo strtoupper($role); ?></div>
+                </div>
+                <hr>
                 <a href="../profile/index.php">
                     <i class="fas fa-user"></i> My Profile
                 </a>
@@ -367,6 +374,9 @@ html.dark-mode {
     overflow: hidden;
 }
 
+/* ============================================================
+   BRANCH SELECTOR
+   ============================================================ */
 .branch-selector {
     display: flex;
     align-items: center;
@@ -425,25 +435,21 @@ html.dark-mode {
     display: inline-block;
 }
 
+/* ============================================================
+   GLOBAL SEARCH - With Search Button (no ⌘K)
+   ============================================================ */
 .global-search {
     position: relative;
     display: flex;
     align-items: center;
     flex-shrink: 1;
-    min-width: 100px;
-    max-width: 180px;
-}
-
-.global-search .search-icon {
-    position: absolute;
-    left: 10px;
-    color: var(--topbar-text-light);
-    font-size: 12px;
+    min-width: 140px;
+    max-width: 220px;
 }
 
 .global-search input {
     width: 100%;
-    padding: 6px 10px 6px 32px;
+    padding: 6px 40px 6px 12px;
     border: 1.5px solid var(--topbar-border);
     border-radius: 8px;
     font-size: 12px;
@@ -465,15 +471,35 @@ html.dark-mode {
     background: var(--topbar-card-bg);
 }
 
-.global-search .search-shortcut {
+/* SEARCH BUTTON - right side of input */
+.global-search .search-btn {
     position: absolute;
-    right: 8px;
-    font-size: 9px;
-    color: var(--topbar-text-light);
-    background: var(--topbar-border);
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-weight: 600;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    border: none;
+    color: #FFFFFF;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+}
+
+.global-search .search-btn:hover {
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+    transform: translateY(-50%) scale(1.05);
+    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.4);
+}
+
+.global-search .search-btn:active {
+    transform: translateY(-50%) scale(0.95);
 }
 
 .search-results {
@@ -522,6 +548,9 @@ html.dark-mode {
     font-size: 12px;
 }
 
+/* ============================================================
+   DARK MODE TOGGLE
+   ============================================================ */
 .dark-mode-toggle {
     background: none;
     border: none;
@@ -539,6 +568,9 @@ html.dark-mode {
     color: var(--topbar-text);
 }
 
+/* ============================================================
+   LIVE DATE/TIME
+   ============================================================ */
 .live-datetime {
     display: flex;
     align-items: center;
@@ -564,6 +596,9 @@ html.dark-mode {
     margin: 0 1px;
 }
 
+/* ============================================================
+   NOTIFICATIONS
+   ============================================================ */
 .notification-wrapper {
     position: relative;
     flex-shrink: 0;
@@ -652,48 +687,53 @@ html.dark-mode {
     overflow-y: auto;
 }
 
+/* ============================================================
+   PROFILE - Avatar-only + Dropdown
+   ============================================================ */
 .user-profile {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 8px 2px 2px;
+    gap: 4px;
+    padding: 2px 4px;
     border-radius: 8px;
-    cursor: pointer;
-    transition: background 0.3s ease;
     position: relative;
     flex-shrink: 0;
+    transition: background 0.3s ease;
 }
 
 .user-profile:hover {
     background: var(--topbar-hover);
 }
 
-.user-profile img {
-    width: 32px;
-    height: 32px;
+/* AVATAR LINK - Clickable to profile */
+.user-avatar-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: transform 0.3s ease;
+    border-radius: 50%;
+}
+
+.user-avatar-link:hover {
+    transform: scale(1.05);
+}
+
+.user-avatar-link img {
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     object-fit: cover;
     border: 2px solid #DC2626;
     background: white;
     padding: 2px;
+    cursor: pointer;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-.user-profile .user-info {
-    line-height: 1.2;
-}
-
-.user-profile .user-name {
-    font-weight: 600;
-    font-size: 11px;
-    color: var(--topbar-text);
-}
-
-.user-profile .user-role {
-    font-size: 7px;
-    font-weight: 600;
-    color: #DC2626;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+.user-avatar-link:hover img {
+    border-color: #B91C1C;
+    box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.15);
 }
 
 .user-dropdown-btn {
@@ -701,9 +741,15 @@ html.dark-mode {
     border: none;
     color: var(--topbar-text-light);
     cursor: pointer;
-    padding: 1px;
-    font-size: 9px;
-    transition: transform 0.3s ease, color 0.3s ease;
+    padding: 2px 4px;
+    font-size: 10px;
+    border-radius: 4px;
+    transition: transform 0.3s ease, color 0.3s ease, background 0.2s ease;
+}
+
+.user-dropdown-btn:hover {
+    background: var(--topbar-hover);
+    color: var(--topbar-text);
 }
 
 .user-dropdown-btn.rotate {
@@ -713,13 +759,13 @@ html.dark-mode {
 .user-dropdown {
     display: none;
     position: absolute;
-    top: calc(100% + 6px);
+    top: calc(100% + 8px);
     right: 0;
     background: var(--topbar-dropdown-bg);
     border-radius: 10px;
     box-shadow: 0 10px 40px var(--topbar-shadow-lg);
     border: 1px solid var(--topbar-dropdown-border);
-    min-width: 160px;
+    min-width: 200px;
     padding: 4px 0;
     z-index: 1001;
 }
@@ -728,11 +774,34 @@ html.dark-mode {
     display: block;
 }
 
+.user-dropdown-header {
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--topbar-border);
+}
+
+.user-dropdown-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--topbar-text);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-dropdown-role {
+    font-size: 9px;
+    font-weight: 700;
+    color: #DC2626;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 .user-dropdown a {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     color: var(--topbar-text);
     text-decoration: none;
     font-size: 12px;
@@ -752,7 +821,7 @@ html.dark-mode {
 .user-dropdown hr {
     border: none;
     border-top: 1px solid var(--topbar-border);
-    margin: 2px 8px;
+    margin: 4px 8px;
 }
 
 .user-dropdown .logout-dropdown {
@@ -763,6 +832,9 @@ html.dark-mode {
     color: #DC2626;
 }
 
+/* ============================================================
+   MAIN WRAPPER
+   ============================================================ */
 .main-wrapper {
     margin-left: 260px;
     padding-top: 72px;
@@ -771,13 +843,16 @@ html.dark-mode {
     flex-direction: column;
 }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1200px) {
-    .global-search { min-width: 80px; max-width: 140px; }
+    .global-search { min-width: 120px; max-width: 180px; }
     .branch-selector select { min-width: 50px; max-width: 80px; font-size: 11px; }
 }
 
 @media (max-width: 1024px) {
-    .global-search { min-width: 70px; max-width: 120px; }
+    .global-search { min-width: 100px; max-width: 150px; }
     .branch-selector select { min-width: 50px; max-width: 70px; font-size: 11px; }
     .topbar-brand .brand-page { font-size: 14px; }
     .topbar-brand .brand-page i { font-size: 12px; }
@@ -804,10 +879,9 @@ html.dark-mode {
         flex: 1 1 100%;
         justify-content: flex-start;
     }
-    .global-search { min-width: 60px; max-width: 100px; }
-    .global-search input { font-size: 10px; padding: 4px 6px 4px 28px; }
-    .global-search .search-shortcut { display: none; }
-    .global-search .search-icon { font-size: 10px; left: 6px; }
+    .global-search { min-width: 100px; max-width: 130px; }
+    .global-search input { font-size: 10px; padding: 4px 36px 4px 8px; }
+    .global-search .search-btn { width: 24px; height: 24px; font-size: 10px; right: 3px; }
     .branch-selector { padding: 2px 4px 2px 2px; max-width: 120px; }
     .branch-selector select { font-size: 10px; min-width: 40px; max-width: 60px; }
     .branch-selector .branch-badge { display: none !important; }
@@ -815,9 +889,8 @@ html.dark-mode {
     .live-datetime { font-size: 9px; padding: 2px 6px; }
     .live-datetime .date-separator { margin: 0 1px; }
     .live-datetime i { display: none; }
-    .user-profile .user-info { display: none; }
-    .user-profile img { width: 28px; height: 28px; }
-    .user-profile { padding: 2px 4px 2px 2px; }
+    .user-avatar-link img { width: 30px; height: 30px; }
+    .user-dropdown-btn { font-size: 9px; padding: 1px 3px; }
     .dark-mode-toggle { font-size: 14px; padding: 3px 4px; }
     .notification-btn { font-size: 14px; padding: 3px 4px; }
     .notification-dropdown { width: 260px; right: -20px; }
@@ -831,15 +904,16 @@ html.dark-mode {
     .topbar-brand .brand-icon { font-size: 14px; }
     .topbar-toggle { font-size: 14px; padding: 3px 5px; }
     .topbar-right { gap: 3px; }
-    .global-search { min-width: 50px; max-width: 80px; }
-    .global-search input { font-size: 9px; padding: 3px 4px 3px 22px; }
-    .global-search .search-icon { font-size: 9px; left: 5px; }
+    .global-search { min-width: 80px; max-width: 110px; }
+    .global-search input { font-size: 9px; padding: 3px 32px 3px 6px; }
+    .global-search .search-btn { width: 22px; height: 22px; font-size: 9px; right: 2px; }
     .branch-selector select { font-size: 9px; min-width: 35px; max-width: 50px; }
     .branch-selector .branch-icon { font-size: 9px; padding: 2px 2px; }
     .branch-selector { padding: 2px 3px 2px 2px; max-width: 80px; }
     .live-datetime { font-size: 8px; padding: 1px 4px; }
     .live-datetime i { display: none; }
-    .user-profile img { width: 24px; height: 24px; }
+    .user-avatar-link img { width: 26px; height: 26px; }
+    .user-dropdown-btn { font-size: 8px; padding: 1px 2px; }
     .dark-mode-toggle { font-size: 12px; padding: 2px 3px; }
     .notification-btn { font-size: 12px; padding: 2px 3px; }
     .notification-dropdown { width: 240px; right: -40px; }
@@ -851,22 +925,19 @@ html.dark-mode {
 document.addEventListener('DOMContentLoaded', function() {
     
     // ============================================================
-    // BRANCH SWITCH FUNCTION - USES branch_id CONSISTENTLY
+    // BRANCH SWITCH FUNCTION
     // ============================================================
     window.switchBranch = function(branchId) {
         var currentUrl = window.location.href;
         var url = new URL(currentUrl);
         
-        // Always remove both params first - clean slate
         url.searchParams.delete('branch');
         url.searchParams.delete('branch_id');
         
-        // Add branch_id only if not 0 (All Branches)
         if (branchId != 0) {
             url.searchParams.set('branch_id', branchId);
         }
         
-        // Navigate
         window.location.href = url.toString();
     };
     
@@ -922,7 +993,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // USER DROPDOWN
+    // USER DROPDOWN (click arrow button only)
     // ============================================================
     const userDropdownBtn = document.getElementById('userDropdownBtn');
     const userDropdown = document.getElementById('userDropdown');
@@ -960,10 +1031,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // GLOBAL SEARCH
+    // GLOBAL SEARCH - With Search Button
     // ============================================================
     const searchInput = document.getElementById('globalSearch');
     const searchResults = document.getElementById('searchResults');
+    const searchBtn = document.getElementById('searchBtn');
     
     if (searchInput && searchResults) {
         const searchData = [
@@ -985,15 +1057,19 @@ document.addEventListener('DOMContentLoaded', function() {
             { title: 'My Profile', icon: 'fa-user', url: '../profile/index.php' },
         ];
         
-        searchInput.addEventListener('input', function() {
-            const query = this.value.toLowerCase().trim();
+        // Perform search
+        function performSearch() {
+            const query = searchInput.value.toLowerCase().trim();
+            
             if (query.length === 0) {
                 searchResults.classList.remove('active');
                 return;
             }
+            
             const results = searchData.filter(item => 
                 item.title.toLowerCase().includes(query)
             );
+            
             if (results.length === 0) {
                 searchResults.innerHTML = `<div class="result-empty">No results found for "<strong>${query}</strong>"</div>`;
             } else {
@@ -1007,19 +1083,33 @@ document.addEventListener('DOMContentLoaded', function() {
                 searchResults.innerHTML = html;
             }
             searchResults.classList.add('active');
-        });
+        }
         
-        document.addEventListener('click', function(e) {
-            if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
-                searchResults.classList.remove('active');
+        // Live search on typing
+        searchInput.addEventListener('input', performSearch);
+        
+        // Search on button click
+        if (searchBtn) {
+            searchBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                performSearch();
+                searchInput.focus();
+            });
+        }
+        
+        // Search on Enter key
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                performSearch();
             }
         });
         
-        document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-                e.preventDefault();
-                searchInput.focus();
-                searchInput.select();
+        // Close results on click outside
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !searchResults.contains(e.target) && !searchBtn.contains(e.target)) {
+                searchResults.classList.remove('active');
             }
         });
     }

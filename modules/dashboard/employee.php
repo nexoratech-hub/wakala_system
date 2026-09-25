@@ -2,9 +2,10 @@
 // ================================================================
 // FILE: modules/dashboard/employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD
-// ✅ Capital Section (Float | Cash | Total Capital)
-// ✅ 9 Cards: 3 Capital + 3 Income + 3 Activity
-// ✅ All cards have navigation to related sections
+// ✅ FIXED: Profile picture inaonekana kwenye welcome card
+// ✅ FIXED: Welcome card imepanda juu kidogo
+// ✅ FIXED: Profile picture path: uploads/employees/
+// ✅ NEW: Fallback kwa initials kama profile pic haipo
 // ================================================================
 
 require_once '../../config/config.php';
@@ -42,6 +43,36 @@ if (!$employee) {
 
 $employee_branch_id = intval($employee['branch_id'] ?? 0);
 
+// ============================================================
+// PROFILE PICTURE HANDLING
+// ============================================================
+$profile_pic_url = '';
+$profile_pic_exists = false;
+$profile_initials = '';
+
+// Chukua initials (fallback)
+$name_parts = explode(' ', trim($employee['full_name']));
+if (count($name_parts) >= 2) {
+    $profile_initials = strtoupper(substr($name_parts[0], 0, 1) . substr(end($name_parts), 0, 1));
+} else {
+    $profile_initials = strtoupper(substr($employee['full_name'] ?? 'U', 0, 2));
+}
+
+// Check kama profile_pic ipo kwenye database
+if (!empty($employee['profile_pic'])) {
+    $pic_path = $employee['profile_pic'];
+    
+    // ✅ Full path kwenye filesystem (kwa checking)
+    $full_path = __DIR__ . '/../../' . $pic_path;
+    
+    // ✅ URL path (kwa browser)
+    $profile_pic_url = '../../' . $pic_path;
+    
+    if (file_exists($full_path)) {
+        $profile_pic_exists = true;
+    }
+}
+
 // Branch info
 $branch_name = 'My Branch';
 $branch_code = '';
@@ -58,7 +89,7 @@ if ($employee_branch_id > 0) {
 }
 
 // ============================================================
-// CAPITAL DATA (Float + Cash + Total Capital for MY BRANCH)
+// CAPITAL DATA
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
@@ -86,14 +117,6 @@ $today = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
 
-// ✅ My Commissions - Today
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE DATE(commission_date) = ? AND branch_id = ? AND employee_id = ?");
-$stmt->execute([$today, $employee_branch_id, $user_id]);
-$my_commission_today = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-
-// ✅ My Commissions - This Month
 $stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
                       FROM commissions 
                       WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
@@ -101,21 +124,12 @@ $stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total
 $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
 $my_commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// ✅ My Commissions - All Time
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE branch_id = ? AND employee_id = ?");
-$stmt->execute([$employee_branch_id, $user_id]);
-$my_commission_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-
-// ✅ My Other Income - All Time
 $stmt = $db->prepare("SELECT COALESCE(SUM(other_income), 0) as total 
                       FROM commissions 
                       WHERE branch_id = ? AND employee_id = ?");
 $stmt->execute([$employee_branch_id, $user_id]);
 $my_other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// ✅ My Expenses - This Month
 $my_expenses_month = 0;
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
@@ -128,7 +142,6 @@ try {
     $my_expenses_month = 0;
 }
 
-// ✅ My Transactions - This Month (deposits + withdrawals)
 $my_transactions_month = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total 
@@ -141,12 +154,11 @@ try {
     $my_transactions_month = 0;
 }
 
-// ✅ My Cash Out - This Month
 $my_cash_out_month = 0;
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
-                          FROM cash_out 
-                          WHERE MONTH(cash_out_date) = ? AND YEAR(cash_out_date) = ? 
+                          FROM store_cash_out 
+                          WHERE MONTH(cashout_date) = ? AND YEAR(cashout_date) = ? 
                           AND branch_id = ? AND employee_id = ?");
     $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
     $my_cash_out_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
@@ -154,7 +166,6 @@ try {
     $my_cash_out_month = 0;
 }
 
-// ✅ My Transfers - This Month
 $my_transfer_month = 0;
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
@@ -167,11 +178,8 @@ try {
     $my_transfer_month = 0;
 }
 
-// ✅ My Total Income
-$my_total_income = $my_commission_total + $my_other_income_total;
-
 // ============================================================
-// RECENT TRANSACTIONS (My Own)
+// RECENT TRANSACTIONS
 // ============================================================
 $stmt = $db->prepare("
     SELECT 
@@ -200,13 +208,28 @@ include_once '../../includes/employee_topbar.php';
     <div class="main-content">
         
         <!-- ============================================================
-             WELCOME CARD
+             WELCOME CARD - WITH PROFILE PICTURE
              ============================================================ -->
         <div class="welcome-card-blue">
             <div class="welcome-content">
-                <div class="welcome-icon">
-                    <i class="fas fa-hand-wave"></i>
+                <!-- PROFILE PICTURE -->
+                <div class="welcome-avatar">
+                    <?php if ($profile_pic_exists): ?>
+                        <img src="<?php echo htmlspecialchars($profile_pic_url); ?>" 
+                             alt="<?php echo htmlspecialchars($employee['full_name']); ?>"
+                             class="welcome-avatar-img"
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                        <div class="welcome-avatar-initials" style="display:none;">
+                            <?php echo htmlspecialchars($profile_initials); ?>
+                        </div>
+                    <?php else: ?>
+                        <div class="welcome-avatar-initials">
+                            <?php echo htmlspecialchars($profile_initials); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
+                
+                <!-- WELCOME INFO -->
                 <div class="welcome-info">
                     <span class="welcome-label">Welcome back,</span>
                     <h1 class="welcome-name"><?php echo htmlspecialchars($employee['full_name']); ?></h1>
@@ -237,7 +260,7 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             CAPITAL SECTION (3 Parts) - ROW 1
+             CAPITAL SECTION (3 Parts)
              ============================================================ -->
         <div class="capital-section-wrapper">
             <div class="capital-section-header">
@@ -304,15 +327,13 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             INCOME CARDS (3 Cards) - ROW 2
+             INCOME CARDS
              ============================================================ -->
         <div class="section-title-bar">
             <h3><i class="fas fa-chart-line"></i> My Income</h3>
         </div>
         
         <div class="cards-grid-3">
-            
-            <!-- Card 1: My Commission -->
             <a href="../commissions/index_employee.php" class="nav-card nav-card-commission">
                 <div class="nav-card-icon">
                     <i class="fas fa-hand-holding-usd"></i>
@@ -329,7 +350,6 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 2: My Other Income -->
             <a href="../commissions/index_employee.php?type=other" class="nav-card nav-card-other">
                 <div class="nav-card-icon">
                     <i class="fas fa-coins"></i>
@@ -346,7 +366,6 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 3: My Expenses -->
             <a href="../expenses/index_employee.php" class="nav-card nav-card-expenses">
                 <div class="nav-card-icon">
                     <i class="fas fa-receipt"></i>
@@ -362,19 +381,16 @@ include_once '../../includes/employee_topbar.php';
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
-            
         </div>
 
         <!-- ============================================================
-             ACTIVITY CARDS (3 Cards) - ROW 3
+             ACTIVITY CARDS
              ============================================================ -->
         <div class="section-title-bar">
             <h3><i class="fas fa-exchange-alt"></i> My Activity</h3>
         </div>
         
         <div class="cards-grid-3">
-            
-            <!-- Card 1: My Transactions - FIXED PATH -->
             <a href="../daily_report/index_employee.php" class="nav-card nav-card-transactions">
                 <div class="nav-card-icon">
                     <i class="fas fa-exchange-alt"></i>
@@ -391,7 +407,6 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 2: Cash Out -->
             <a href="../cash_out/index_employee.php" class="nav-card nav-card-cashout">
                 <div class="nav-card-icon">
                     <i class="fas fa-money-bill-transfer"></i>
@@ -408,7 +423,6 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 3: Transfer - FIXED PATH -->
             <a href="../transfers/index_employee.php" class="nav-card nav-card-transfer">
                 <div class="nav-card-icon">
                     <i class="fas fa-arrow-right-arrow-left"></i>
@@ -424,7 +438,6 @@ include_once '../../includes/employee_topbar.php';
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
-            
         </div>
 
         <!-- ============================================================
@@ -544,7 +557,9 @@ include_once '../../includes/employee_topbar.php';
 </div>
 
 <style>
-/* ============================================================ */
+/* ============================================================
+   GLOBAL
+   ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 html, body {
     overflow-x: hidden !important;
@@ -556,7 +571,7 @@ html, body {
     max-width: 100% !important;
     margin-left: 240px;
     width: calc(100% - 240px);
-    padding-top: 56px;
+    padding-top: 50px;
     min-height: 100vh;
     background: var(--bg-body);
     transition: margin-left 0.3s ease, width 0.3s ease;
@@ -566,19 +581,19 @@ html, body {
     overflow-x: hidden !important;
     max-width: 100% !important;
     width: 100% !important;
-    padding: 20px 24px !important;
+    padding: 12px 24px 20px 24px !important;
 }
 @media (max-width: 1024px) {
-    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; }
-    .main-content { padding: 16px 18px !important; }
+    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 50px; }
+    .main-content { padding: 10px 18px 16px 18px !important; }
 }
 @media (max-width: 768px) {
-    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
-    .main-content { padding: 16px 14px !important; width: 100%; }
+    .main-wrapper { margin-left: 0; width: 100%; padding-top: 44px; }
+    .main-content { padding: 10px 14px 16px 14px !important; width: 100%; }
 }
 @media (max-width: 480px) {
-    .main-wrapper { padding-top: 44px; width: 100%; }
-    .main-content { padding: 12px 10px !important; width: 100%; }
+    .main-wrapper { padding-top: 40px; width: 100%; }
+    .main-content { padding: 8px 10px 14px 10px !important; width: 100%; }
 }
 
 :root {
@@ -609,17 +624,17 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
 /* ============================================================
-   WELCOME CARD
+   WELCOME CARD - WITH PROFILE PICTURE
    ============================================================ */
 .welcome-card-blue {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 24px 28px;
+    padding: 20px 26px;
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
     border-radius: 16px;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
     box-shadow: 0 6px 24px rgba(30, 64, 175, 0.35);
     position: relative;
     overflow: hidden;
@@ -644,16 +659,48 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     position: relative;
     z-index: 1;
 }
-.welcome-icon {
-    width: 68px; height: 68px;
+
+/* PROFILE PICTURE */
+.welcome-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
     background: rgba(255, 255, 255, 0.18);
-    border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; color: #FCD34D;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    border: 1.5px solid rgba(252, 211, 77, 0.35);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    border: 3px solid rgba(252, 211, 77, 0.6);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    position: relative;
+    backdrop-filter: blur(8px);
 }
+.welcome-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
+}
+.welcome-avatar-initials {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 900;
+    color: #FFFFFF;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    letter-spacing: 1px;
+    background: linear-gradient(135deg, #FCD34D 0%, #F59E0B 100%);
+    border-radius: 50%;
+}
+html.dark-mode .welcome-avatar {
+    border-color: rgba(252, 211, 77, 0.5);
+}
+
 .welcome-info {
     display: flex;
     flex-direction: column;
@@ -666,7 +713,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     text-transform: uppercase; letter-spacing: 1.5px;
 }
 .welcome-name {
-    font-size: 24px; font-weight: 900;
+    font-size: 22px; font-weight: 900;
     color: #FFFFFF;
     margin: 0;
     letter-spacing: 0.3px;
@@ -677,26 +724,27 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .welcome-meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
     margin-top: 6px;
 }
 .welcome-meta-item {
     display: inline-flex; align-items: center; gap: 5px;
-    font-size: 12px; font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px; font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
     background: rgba(255, 255, 255, 0.15);
-    padding: 4px 12px;
+    padding: 4px 11px;
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(4px);
+    white-space: nowrap;
 }
 .welcome-date {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 10px 18px;
     background: rgba(255, 255, 255, 0.15);
     border-radius: 12px;
-    font-size: 13px; font-weight: 700;
+    font-size: 12px; font-weight: 700;
     color: #FFFFFF;
     border: 1px solid rgba(255, 255, 255, 0.2);
     backdrop-filter: blur(8px);
@@ -707,13 +755,13 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .welcome-date i { color: #FCD34D; }
 
 /* ============================================================
-   CAPITAL SECTION (3 Parts)
+   CAPITAL SECTION
    ============================================================ */
 .capital-section-wrapper {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
     border-radius: 16px;
-    padding: 22px 26px;
-    margin-bottom: 16px;
+    padding: 20px 24px;
+    margin-bottom: 14px;
     box-shadow: 0 6px 24px rgba(30, 64, 175, 0.35);
     position: relative;
     overflow: hidden;
@@ -733,8 +781,8 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     justify-content: space-between;
     align-items: center;
     gap: 16px;
-    margin-bottom: 18px;
-    padding-bottom: 14px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.15);
     position: relative;
     z-index: 1;
@@ -742,24 +790,24 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .csh-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .csh-icon {
-    width: 48px; height: 48px;
+    width: 46px; height: 46px;
     background: rgba(255, 255, 255, 0.18);
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 22px; color: #FCD34D;
+    font-size: 20px; color: #FCD34D;
     flex-shrink: 0;
     border: 1.5px solid rgba(252, 211, 77, 0.35);
 }
 .csh-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.csh-title { font-size: 16px; font-weight: 800; color: #FFFFFF; }
-.csh-subtitle { font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.75); }
+.csh-title { font-size: 15px; font-weight: 800; color: #FFFFFF; }
+.csh-subtitle { font-size: 11px; font-weight: 500; color: rgba(255, 255, 255, 0.75); }
 .csh-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 8px 16px;
     background: rgba(252, 211, 77, 0.25);
     color: #FCD34D;
     border-radius: 20px;
-    font-size: 12px; font-weight: 800;
+    font-size: 11px; font-weight: 800;
     border: 1.5px solid rgba(252, 211, 77, 0.4);
     white-space: nowrap;
     text-transform: uppercase;
@@ -768,15 +816,15 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .capital-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    gap: 14px;
     position: relative;
     z-index: 1;
 }
 .capital-part {
     background: rgba(255, 255, 255, 0.1);
     border-radius: 14px;
-    padding: 18px 20px;
-    display: flex; flex-direction: column; gap: 10px;
+    padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 8px;
     border: 1.5px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
@@ -798,23 +846,23 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 .cp-header { display: flex; align-items: center; gap: 10px; }
 .cp-icon {
-    width: 42px; height: 42px;
+    width: 40px; height: 40px;
     border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px; flex-shrink: 0;
+    font-size: 17px; flex-shrink: 0;
     border: 1.5px solid rgba(255, 255, 255, 0.3);
 }
 .cp-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); color: #FFFFFF; }
 .cp-icon-green { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; }
 .cp-icon-purple { background: linear-gradient(135deg, #A855F7, #7C3AED); color: #FFFFFF; }
 .cp-label {
-    font-size: 11px; font-weight: 800;
+    font-size: 10px; font-weight: 800;
     color: rgba(255, 255, 255, 0.85);
     text-transform: uppercase;
     letter-spacing: 1.2px;
 }
 .cp-value {
-    font-size: clamp(18px, 1.6vw, 26px);
+    font-size: clamp(18px, 1.6vw, 24px);
     font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
     line-height: 1.15; word-break: break-word;
@@ -835,12 +883,12 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
    SECTION TITLE BAR
    ============================================================ */
 .section-title-bar {
-    margin: 20px 0 12px 0;
+    margin: 18px 0 10px 0;
     padding-bottom: 8px;
     border-bottom: 2px solid var(--border-color);
 }
 .section-title-bar h3 {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 800;
     color: var(--text-primary);
     margin: 0;
@@ -852,31 +900,31 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .section-title-bar h3 i {
     color: #2563EB;
-    font-size: 16px;
+    font-size: 15px;
 }
 
 /* ============================================================
-   NAVIGATION CARDS (3x2 Grid)
+   NAVIGATION CARDS
    ============================================================ */
 .cards-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 14px;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
     width: 100%;
 }
 
 .nav-card {
     background: var(--bg-card);
     border-radius: 14px;
-    padding: 18px 20px;
+    padding: 16px 18px;
     display: flex;
     align-items: center;
     gap: 14px;
     box-shadow: 0 2px 8px var(--shadow-color);
     border: 1.5px solid var(--border-color);
     transition: all 0.3s ease;
-    min-height: 110px;
+    min-height: 100px;
     position: relative;
     overflow: hidden;
     min-width: 0;
@@ -902,8 +950,8 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 
 .nav-card-icon {
-    width: 52px; height: 52px;
-    border-radius: 14px;
+    width: 50px; height: 50px;
+    border-radius: 13px;
     display: flex; align-items: center; justify-content: center;
     font-size: 22px; flex-shrink: 0;
     transition: all 0.3s ease;
@@ -953,14 +1001,14 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 
 .nav-card-arrow {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     background: var(--bg-input);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
     transition: all 0.3s ease;
     flex-shrink: 0;
@@ -971,7 +1019,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     color: #FFFFFF;
 }
 
-/* ===== COMMISSION CARD (Green) ===== */
+/* COMMISSION CARD */
 .nav-card-commission::before { background: #10B981; }
 .nav-card-commission .nav-card-icon {
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
@@ -991,7 +1039,7 @@ html.dark-mode .nav-card-commission .nav-card-icon {
 }
 html.dark-mode .nav-card-commission .nav-card-value { color: #34D399; }
 
-/* ===== OTHER INCOME CARD (Purple) ===== */
+/* OTHER INCOME CARD */
 .nav-card-other::before { background: #7C3AED; }
 .nav-card-other .nav-card-icon {
     background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
@@ -1011,7 +1059,7 @@ html.dark-mode .nav-card-other .nav-card-icon {
 }
 html.dark-mode .nav-card-other .nav-card-value { color: #C4B5FD; }
 
-/* ===== EXPENSES CARD (Red) ===== */
+/* EXPENSES CARD */
 .nav-card-expenses::before { background: #DC2626; }
 .nav-card-expenses .nav-card-icon {
     background: linear-gradient(135deg, #FEE2E2, #FECACA);
@@ -1031,7 +1079,7 @@ html.dark-mode .nav-card-expenses .nav-card-icon {
 }
 html.dark-mode .nav-card-expenses .nav-card-value { color: #FCA5A5; }
 
-/* ===== TRANSACTIONS CARD (Blue) ===== */
+/* TRANSACTIONS CARD */
 .nav-card-transactions::before { background: #2563EB; }
 .nav-card-transactions .nav-card-icon {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
@@ -1051,7 +1099,7 @@ html.dark-mode .nav-card-transactions .nav-card-icon {
 }
 html.dark-mode .nav-card-transactions .nav-card-value { color: #60A5FA; }
 
-/* ===== CASH OUT CARD (Orange) ===== */
+/* CASH OUT CARD */
 .nav-card-cashout::before { background: #F59E0B; }
 .nav-card-cashout .nav-card-icon {
     background: linear-gradient(135deg, #FEF3C7, #FDE68A);
@@ -1071,7 +1119,7 @@ html.dark-mode .nav-card-cashout .nav-card-icon {
 }
 html.dark-mode .nav-card-cashout .nav-card-value { color: #FBBF24; }
 
-/* ===== TRANSFER CARD (Teal) ===== */
+/* TRANSFER CARD */
 .nav-card-transfer::before { background: #0D9488; }
 .nav-card-transfer .nav-card-icon {
     background: linear-gradient(135deg, #CCFBF1, #99F6E4);
@@ -1103,7 +1151,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .section-header-view {
-    padding: 16px 22px;
+    padding: 14px 20px;
     background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
     color: #FFFFFF;
     display: flex;
@@ -1124,7 +1172,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     pointer-events: none;
 }
 .section-header-view h3 {
-    font-size: 15px; font-weight: 800;
+    font-size: 14px; font-weight: 800;
     color: #FFFFFF;
     margin: 0;
     display: flex;
@@ -1136,7 +1184,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
 }
 .section-header-view h3 i {
     color: #FCD34D;
-    font-size: 16px;
+    font-size: 15px;
 }
 .section-count-view {
     font-size: 11px; font-weight: 800;
@@ -1170,7 +1218,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
 
 /* RECENT LIST */
 .recent-list {
-    padding: 16px 22px;
+    padding: 14px 20px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1179,7 +1227,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 14px 16px;
+    padding: 12px 14px;
     background: var(--bg-input);
     border-radius: 10px;
     border: 1.5px solid var(--border-color);
@@ -1194,10 +1242,10 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     width: 4px; height: 100%;
 }
 .ri-icon {
-    width: 44px; height: 44px;
+    width: 42px; height: 42px;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px; flex-shrink: 0;
+    font-size: 17px; flex-shrink: 0;
     border: 1.5px solid;
 }
 .ri-icon-commission {
@@ -1286,7 +1334,7 @@ html.dark-mode .ri-ref { background: #1E3A5F; color: #60A5FA; }
 
 .ri-amount {
     font-family: 'Inter', 'Courier New', monospace;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 900;
     white-space: nowrap;
     letter-spacing: -0.3px;
@@ -1322,16 +1370,16 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     background: var(--bg-card);
     border-radius: 14px;
     border: 1.5px solid var(--border-color);
-    padding: 20px 22px;
+    padding: 18px 20px;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .qa-header {
-    margin-bottom: 16px;
-    padding-bottom: 14px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
     border-bottom: 1.5px solid var(--border-color);
 }
 .qa-header h3 {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 800;
     color: var(--text-primary);
     margin: 0;
@@ -1339,7 +1387,7 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     align-items: center;
     gap: 8px;
 }
-.qa-header h3 i { color: #F59E0B; font-size: 16px; }
+.qa-header h3 i { color: #F59E0B; font-size: 15px; }
 
 .qa-grid {
     display: grid;
@@ -1350,7 +1398,7 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 16px 18px;
+    padding: 14px 16px;
     background: var(--bg-input);
     border-radius: 12px;
     text-decoration: none;
@@ -1363,10 +1411,10 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     box-shadow: 0 8px 20px var(--shadow-hover);
 }
 .qa-icon {
-    width: 44px; height: 44px;
+    width: 42px; height: 42px;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
+    font-size: 17px;
     flex-shrink: 0;
     transition: all 0.3s ease;
 }
@@ -1378,7 +1426,7 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     flex: 1;
 }
 .qa-title {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 800;
     color: var(--text-primary);
     white-space: nowrap;
@@ -1394,7 +1442,6 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     text-overflow: ellipsis;
 }
 
-/* Commission Button */
 .qa-commission .qa-icon {
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
     color: #059669;
@@ -1409,7 +1456,6 @@ html.dark-mode .qa-commission .qa-icon {
     color: #34D399;
 }
 
-/* Add Button */
 .qa-add .qa-icon {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1D4ED8;
@@ -1424,7 +1470,6 @@ html.dark-mode .qa-add .qa-icon {
     color: #60A5FA;
 }
 
-/* Other Button */
 .qa-other .qa-icon {
     background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
     color: #7C3AED;
@@ -1439,7 +1484,6 @@ html.dark-mode .qa-other .qa-icon {
     color: #C4B5FD;
 }
 
-/* Report Button */
 .qa-report .qa-icon {
     background: linear-gradient(135deg, #FEF3C7, #FDE68A);
     color: #D97706;
@@ -1481,7 +1525,9 @@ html.dark-mode .qa-report .qa-icon {
     color: #FFFFFF;
 }
 
-/* RESPONSIVE */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1200px) {
     .cards-grid-3 { grid-template-columns: repeat(2, 1fr); }
     .qa-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1490,13 +1536,15 @@ html.dark-mode .qa-report .qa-icon {
     .capital-grid-3 { grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .cp-value { font-size: clamp(16px, 1.6vw, 20px); }
     .welcome-name { font-size: 20px; }
-    .welcome-icon { width: 58px; height: 58px; font-size: 24px; }
+    .welcome-avatar { width: 64px; height: 64px; }
+    .welcome-avatar-initials { font-size: 22px; }
 }
 @media (max-width: 768px) {
-    .welcome-card-blue { flex-direction: column; align-items: flex-start; padding: 18px 20px; }
+    .welcome-card-blue { flex-direction: column; align-items: flex-start; padding: 16px 18px; }
     .welcome-date { width: 100%; justify-content: center; }
     .welcome-name { font-size: 18px; }
-    .welcome-icon { width: 52px; height: 52px; font-size: 22px; }
+    .welcome-avatar { width: 60px; height: 60px; }
+    .welcome-avatar-initials { font-size: 20px; }
     
     .capital-section-wrapper { padding: 16px; }
     .capital-section-header { flex-direction: column; align-items: flex-start; }
@@ -1506,25 +1554,26 @@ html.dark-mode .qa-report .qa-icon {
     .qa-grid { grid-template-columns: 1fr; gap: 10px; }
     
     .recent-item { flex-direction: column; align-items: flex-start; gap: 10px; }
-    .ri-amount { font-size: 15px; align-self: flex-end; }
+    .ri-amount { font-size: 14px; align-self: flex-end; }
 }
 @media (max-width: 480px) {
     .welcome-name { font-size: 16px; }
-    .welcome-icon { width: 46px; height: 46px; font-size: 18px; }
+    .welcome-avatar { width: 54px; height: 54px; }
+    .welcome-avatar-initials { font-size: 18px; }
     .welcome-meta-item { font-size: 10px; padding: 3px 9px; }
     .csh-title { font-size: 14px; }
     .csh-icon { width: 40px; height: 40px; font-size: 18px; }
     .cp-value { font-size: 16px; }
     .cp-icon { width: 36px; height: 36px; font-size: 15px; }
-    .nav-card { padding: 14px 16px; gap: 12px; min-height: 90px; }
+    .nav-card { padding: 12px 14px; gap: 12px; min-height: 90px; }
     .nav-card-icon { width: 44px; height: 44px; font-size: 18px; }
     .nav-card-value { font-size: 16px; }
     .nav-card-arrow { width: 28px; height: 28px; font-size: 10px; }
-    .qa-card { padding: 14px 16px; }
-    .qa-icon { width: 40px; height: 40px; font-size: 16px; }
-    .qa-title { font-size: 12px; }
-    .section-header-view { padding: 14px 18px; }
-    .recent-list { padding: 14px 18px; }
+    .qa-card { padding: 12px 14px; }
+    .qa-icon { width: 38px; height: 38px; font-size: 15px; }
+    .qa-title { font-size: 11px; }
+    .section-header-view { padding: 12px 16px; }
+    .recent-list { padding: 12px 16px; }
 }
 </style>
 
@@ -1540,9 +1589,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
     console.log('%c📊 Employee Dashboard', 'font-size:16px; font-weight:bold; color:#2563EB;');
-    console.log('%c9 Cards: 3 Capital + 3 Income + 3 Activity', 'font-size:12px; color:#10B981;');
-    console.log('%cMy Transactions → ../daily_report/index_employee.php', 'font-size:11px; color:#059669;');
-    console.log('%cTransfer → ../transfers/index_employee.php', 'font-size:11px; color:#0D9488;');
+    console.log('%cProfile Picture: <?php echo $profile_pic_exists ? $profile_pic_url : "Fallback to initials"; ?>', 'font-size:11px; color:#059669;');
 });
 </script>
 </body>

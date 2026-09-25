@@ -6,6 +6,7 @@
 // ✅ NARROWER (220px)
 // ✅ Mobile toggle works standalone
 // ✅ Bigger text for readability
+// ✅ Cash Out menu REMOVED from Financial section
 // ================================================================
 
 $full_name = $_SESSION['full_name'] ?? 'Employee';
@@ -523,12 +524,6 @@ function isNavActive($section, $current_section) {
                class="nav-item <?php echo isNavActive('expenses', $current_section); ?>">
                 <i class="fas fa-receipt"></i>
                 <span>Expenses</span>
-            </a>
-
-            <a href="../store_cash_out/index_employee.php"
-               class="nav-item <?php echo isNavActive('store_cash_out', $current_section); ?>">
-                <i class="fas fa-money-bill-wave"></i>
-                <span>Cash Out</span>
             </a>
 
             <a href="../transfers/index_employee.php"

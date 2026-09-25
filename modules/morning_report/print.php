@@ -2,6 +2,11 @@
 // ================================================================
 // FILE: modules/morning_report/print.php
 // WAKALA FINANCIAL SYSTEM - PRINT MORNING REPORT
+// 
+// ✅ Print-friendly design
+// ✅ Works for both admin & employee
+// ✅ Employee can only print own branch reports
+// ✅ Full English UI
 // ================================================================
 
 require_once '../../config/config.php';
@@ -23,7 +28,8 @@ $role    = $_SESSION['role'] ?? 'employee';
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($id <= 0) {
     $_SESSION['error_message'] = 'Invalid morning report.';
-    header('Location: index.php');
+    $redirect = ($role === 'admin' || $role === 'super_admin') ? 'index.php' : 'index_employee.php';
+    header('Location: ' . $redirect);
     exit();
 }
 
@@ -118,11 +124,17 @@ $logo_path = '../../assets/images/logo.PNG';
 if (!file_exists($logo_path)) {
     $logo_path = '../../assets/images/default-logo.png';
 }
+
+// Back link depending on role
+$back_link = ($role === 'admin' || $role === 'super_admin') 
+             ? 'view.php?id=' . $id 
+             : 'view_employee.php?id=' . $id;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Morning Report - <?php echo htmlspecialchars($report['report_number']); ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -138,36 +150,47 @@ if (!file_exists($logo_path)) {
             min-height: 100vh;
         }
         .print-wrapper { max-width: 850px; width: 100%; }
+        
+        /* ============================================================
+           ACTION BAR
+           ============================================================ */
         .action-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
         .btn-action {
             padding: 12px 22px; border: none; border-radius: 10px;
             font-weight: 700; font-size: 13px; cursor: pointer;
             display: inline-flex; align-items: center; gap: 8px;
             text-decoration: none; transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
         }
         .btn-print {
-            background: linear-gradient(135deg, #F59E0B, #D97706);
+            background: linear-gradient(135deg, #1E40AF, #2563EB);
             color: white;
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
+            box-shadow: 0 4px 12px rgba(30, 64, 175, 0.35);
         }
-        .btn-print:hover { transform: translateY(-2px); }
+        .btn-print:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.5); }
         .btn-back {
             background: white; color: #374151;
             border: 1.5px solid #D1D5DB;
         }
-        .btn-back:hover { background: #F3F4F6; }
+        .btn-back:hover { background: #F3F4F6; transform: translateY(-2px); }
 
+        /* ============================================================
+           PRINT PAPER
+           ============================================================ */
         .print-paper {
             background: #FFF;
             border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(217, 119, 6, 0.15);
+            box-shadow: 0 10px 40px rgba(30, 64, 175, 0.15);
             overflow: hidden;
-            border: 2px solid #FED7AA;
+            border: 2px solid #BFDBFE;
             position: relative;
         }
 
+        /* ============================================================
+           HEADER - BLUE THEME
+           ============================================================ */
         .print-header {
-            background: linear-gradient(135deg, #F59E0B 0%, #D97706 50%, #B45309 100%);
+            background: linear-gradient(135deg, #1E40AF 0%, #2563EB 50%, #3B82F6 100%);
             color: #FFF;
             padding: 30px 40px;
             position: relative;
@@ -212,28 +235,34 @@ if (!file_exists($logo_path)) {
             border: 2px solid rgba(255,255,255,0.4);
         }
 
+        /* ============================================================
+           REPORT NUMBER DISPLAY
+           ============================================================ */
         .amount-display {
             padding: 32px 40px;
             text-align: center;
-            background: linear-gradient(135deg, #FFF7ED 0%, #FED7AA 100%);
-            border-bottom: 2px dashed #F59E0B;
+            background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
+            border-bottom: 2px dashed #3B82F6;
         }
-        .amount-label { font-size: 11px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 2.5px; margin-bottom: 10px; }
-        .amount-value { font-size: 44px; font-weight: 900; color: #78350F; font-family: 'Courier New', monospace; letter-spacing: -1.5px; line-height: 1.1; word-break: break-all; }
-        .amount-sub { font-size: 13px; color: #B45309; font-weight: 600; margin-top: 8px; }
+        .amount-label { font-size: 11px; font-weight: 800; color: #1E40AF; text-transform: uppercase; letter-spacing: 2.5px; margin-bottom: 10px; }
+        .amount-value { font-size: 44px; font-weight: 900; color: #1E3A8A; font-family: 'Courier New', monospace; letter-spacing: -1.5px; line-height: 1.1; word-break: break-all; }
+        .amount-sub { font-size: 13px; color: #1E40AF; font-weight: 600; margin-top: 8px; }
 
+        /* ============================================================
+           BODY
+           ============================================================ */
         .print-body { padding: 32px 40px; }
         .info-section { margin-bottom: 24px; }
         .info-section-title {
-            font-size: 11px; font-weight: 800; color: #B45309;
+            font-size: 11px; font-weight: 800; color: #1E40AF;
             text-transform: uppercase; letter-spacing: 1.5px;
-            padding-bottom: 8px; border-bottom: 2px solid #FED7AA;
+            padding-bottom: 8px; border-bottom: 2px solid #BFDBFE;
             margin-bottom: 14px;
             display: flex; align-items: center; gap: 8px;
         }
         .info-section-title i {
-            color: #D97706; font-size: 14px;
-            background: #FEF3C7; width: 26px; height: 26px;
+            color: #2563EB; font-size: 14px;
+            background: #DBEAFE; width: 26px; height: 26px;
             border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
         }
@@ -245,10 +274,13 @@ if (!file_exists($logo_path)) {
         }
         .info-label { font-size: 10px; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.8px; }
         .info-value { font-size: 14px; font-weight: 700; color: #1F2937; word-break: break-word; }
-        .info-value.mono { font-family: 'Courier New', monospace; color: #B45309; }
+        .info-value.mono { font-family: 'Courier New', monospace; color: #1E40AF; }
 
+        /* ============================================================
+           PROVIDER TABLE
+           ============================================================ */
         .provider-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .provider-table thead tr { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; }
+        .provider-table thead tr { background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; }
         .provider-table thead th {
             padding: 12px 14px; text-align: left;
             font-weight: 700; font-size: 10px;
@@ -257,11 +289,11 @@ if (!file_exists($logo_path)) {
         }
         .provider-table thead th.text-right { text-align: right; }
         .provider-table tbody tr { border-bottom: 1px solid #E5E7EB; }
-        .provider-table tbody tr:nth-child(even) { background: #FFFBEB; }
+        .provider-table tbody tr:nth-child(even) { background: #EFF6FF; }
         .provider-table tbody td { padding: 12px 14px; color: #1F2937; vertical-align: middle; }
         .provider-table tbody td.text-right { text-align: right; }
-        .provider-table tfoot tr { background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-top: 2px solid #F59E0B; }
-        .provider-table tfoot td { padding: 14px; font-weight: 900; color: #78350F; }
+        .provider-table tfoot tr { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); border-top: 2px solid #2563EB; }
+        .provider-table tfoot td { padding: 14px; font-weight: 900; color: #1E3A8A; }
         .provider-table tfoot td.text-right { text-align: right; }
 
         .provider-cell { display: flex; align-items: center; gap: 10px; }
@@ -276,11 +308,14 @@ if (!file_exists($logo_path)) {
             border-radius: 8px; font-size: 10px; font-weight: 700;
             font-family: 'Courier New', monospace;
         }
-        .amount-cell { font-family: 'Courier New', monospace; font-weight: 800; color: #B45309; }
+        .amount-cell { font-family: 'Courier New', monospace; font-weight: 800; color: #1E40AF; }
 
+        /* ============================================================
+           FINANCIAL SUMMARY
+           ============================================================ */
         .financial-summary {
-            background: linear-gradient(135deg, #FFF7ED, #FED7AA);
-            border: 2px solid #F59E0B;
+            background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+            border: 2px solid #2563EB;
             border-radius: 12px;
             padding: 20px 24px;
             margin-top: 24px;
@@ -288,30 +323,36 @@ if (!file_exists($logo_path)) {
         .financial-row {
             display: flex; justify-content: space-between;
             align-items: center; padding: 12px 0;
-            border-bottom: 1px solid #FDBA74;
-            font-size: 14px; color: #78350F; font-weight: 600;
+            border-bottom: 1px solid #93C5FD;
+            font-size: 14px; color: #1E3A8A; font-weight: 600;
             gap: 12px; flex-wrap: wrap;
         }
         .financial-row:last-child { border-bottom: none; }
         .financial-label { display: flex; align-items: center; gap: 8px; }
-        .financial-label i { color: #D97706; }
-        .financial-value { font-family: 'Courier New', monospace; font-weight: 800; color: #D97706; font-size: 16px; }
-        .financial-divider { border-top: 2px dashed #D97706; margin: 8px 0; }
+        .financial-label i { color: #2563EB; }
+        .financial-value { font-family: 'Courier New', monospace; font-weight: 800; color: #1E40AF; font-size: 16px; }
+        .financial-divider { border-top: 2px dashed #2563EB; margin: 8px 0; }
         .financial-row-total { font-size: 18px !important; padding-top: 12px; }
-        .financial-row-total .financial-value { font-size: 24px; color: #78350F; }
+        .financial-row-total .financial-value { font-size: 24px; color: #1E3A8A; }
 
+        /* ============================================================
+           SIGNATURES
+           ============================================================ */
         .signature-section {
             display: grid; grid-template-columns: 1fr 1fr;
             gap: 40px; margin-top: 40px; padding-top: 24px;
-            border-top: 2px dashed #FDBA74;
+            border-top: 2px dashed #93C5FD;
         }
         .signature-box { text-align: center; }
         .signature-line { border-bottom: 2px solid #1F2937; height: 50px; margin-bottom: 10px; }
-        .signature-label { font-size: 11px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 1.2px; }
+        .signature-label { font-size: 11px; font-weight: 800; color: #1E40AF; text-transform: uppercase; letter-spacing: 1.2px; }
         .signature-name { font-size: 12px; color: #6B7280; margin-top: 6px; font-weight: 600; }
 
+        /* ============================================================
+           FOOTER - BLUE THEME
+           ============================================================ */
         .print-footer {
-            background: linear-gradient(135deg, #78350F, #B45309);
+            background: linear-gradient(135deg, #1E3A8A, #1E40AF);
             color: #FFF; padding: 20px 40px;
             font-size: 11px; line-height: 1.6;
         }
@@ -320,23 +361,29 @@ if (!file_exists($logo_path)) {
             align-items: center; flex-wrap: wrap; gap: 14px;
         }
         .footer-info { display: flex; align-items: center; gap: 6px; color: rgba(255,255,255,0.85); font-weight: 600; }
-        .footer-info i { color: #FCD34D; font-size: 12px; }
+        .footer-info i { color: #93C5FD; font-size: 12px; }
 
+        /* ============================================================
+           WATERMARK
+           ============================================================ */
         .watermark {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%) rotate(-30deg);
             font-size: 120px; font-weight: 900;
-            color: rgba(245, 158, 11, 0.04);
+            color: rgba(37, 99, 235, 0.04);
             pointer-events: none; user-select: none;
             z-index: 0; letter-spacing: 10px;
         }
 
+        /* ============================================================
+           PRINT STYLES
+           ============================================================ */
         @media print {
             @page { size: A4; margin: 8mm; }
             body { background: #FFF !important; padding: 0; display: block; }
             .action-bar { display: none !important; }
             .print-wrapper { max-width: 100%; }
-            .print-paper { box-shadow: none; border-radius: 0; }
+            .print-paper { box-shadow: none; border-radius: 0; border: none; }
             .print-header, .amount-display, .financial-summary, .print-footer,
             .provider-table thead tr, .provider-table tfoot tr {
                 -webkit-print-color-adjust: exact;
@@ -344,6 +391,9 @@ if (!file_exists($logo_path)) {
             }
         }
 
+        /* ============================================================
+           RESPONSIVE
+           ============================================================ */
         @media (max-width: 640px) {
             body { padding: 10px; }
             .print-header { padding: 24px 20px; }
@@ -364,8 +414,10 @@ if (!file_exists($logo_path)) {
 <body>
 
 <div class="print-wrapper">
+    
+    <!-- ACTION BAR -->
     <div class="action-bar">
-        <a href="view.php?id=<?php echo $id; ?>" class="btn-action btn-back">
+        <a href="<?php echo htmlspecialchars($back_link); ?>" class="btn-action btn-back">
             <i class="fas fa-arrow-left"></i> Back to Report
         </a>
         <button onclick="window.print()" class="btn-action btn-print">
@@ -382,7 +434,7 @@ if (!file_exists($logo_path)) {
                 <div class="header-left">
                     <div class="logo-wrapper">
                         <img src="<?php echo htmlspecialchars($logo_path); ?>" alt="Logo"
-                             onerror="this.style.display='none'; this.parentElement.innerHTML='<i class=\'fas fa-building\' style=\'font-size:36px;color:#D97706;\'></i>';">
+                             onerror="this.style.display='none'; this.parentElement.innerHTML='<i class=\'fas fa-building\' style=\'font-size:36px;color:#1E40AF;\'></i>';">
                     </div>
                     <div class="company-info">
                         <div class="company-name"><?php echo htmlspecialchars($company_name); ?></div>
@@ -480,7 +532,7 @@ if (!file_exists($logo_path)) {
                     </thead>
                     <tbody>
                         <?php $i = 1; foreach ($providers as $p):
-                            $color = $p['color_code'] ?? '#0B5ED7';
+                            $color = $p['color_code'] ?? '#1E40AF';
                             $icon = $p['icon_class'] ?? 'fas fa-university';
                         ?>
                             <tr>

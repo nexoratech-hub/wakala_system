@@ -2,11 +2,17 @@
 // ================================================================
 // FILE: modules/morning_report/add_employee.php
 // WAKALA FINANCIAL SYSTEM - ADD MORNING REPORT (EMPLOYEE) - FINAL
-// ✅ GREEN THEME
-// ✅ AUTO-FILL ONLY - Readonly
-// ✅ Cash JUU, Providers CHINI (3 kwa row)
-// ✅ Table mbili: morning_reports + daily_reports
-// ✅ FIXED: SQL columns + float computation
+// 
+// AUTO-FILL LOGIC:
+//    1. Find the LATEST EVENING STOCK (any previous date)
+//    2. If not found → fallback to CAPITAL MANAGEMENT (float + cash)
+//    3. If neither exists → "NO EVENING STOCK" + "WAITING FOR CAPITAL"
+// 
+// ✅ FIX: Check duplicate KABLA ya form (inaonyesha nani aliyeunda)
+// ✅ FIX: Check duplicate daily_reports kwenye POST (CRITICAL!)
+// ✅ FIX: Catch SQL error 1062 → friendly message
+// ✅ FIX: Green theme providers cards
+// ✅ SAVE: morning_reports + daily_reports (auto)
 // ================================================================
 
 error_reporting(E_ALL);
@@ -25,7 +31,7 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
     exit();
 }
 
-$role = $_SESSION['role'] ?? 'employee';
+$role    = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
 
 if ($role !== 'employee') {
@@ -79,26 +85,90 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $target_date)) {
 }
 
 // ============================================================
-// CHECK DUPLICATE
+// ✅ CHECK DUPLICATE #1: MORNING REPORTS (KABLA YA FORM)
+// Inaonyesha jina la aliyeunda
 // ============================================================
 $stmt = $db->prepare("
-    SELECT id, report_number 
-    FROM morning_reports 
-    WHERE branch_id = ? AND report_date = ?
+    SELECT 
+        mr.id, 
+        mr.report_number, 
+        mr.employee_id,
+        mr.submitted_at,
+        e.full_name AS created_by_name,
+        e.employee_id AS created_by_code
+    FROM morning_reports mr
+    LEFT JOIN employees e ON mr.employee_id = e.id
+    WHERE mr.branch_id = ? AND mr.report_date = ?
     LIMIT 1
 ");
 $stmt->execute([$employee_branch_id, $target_date]);
-$existing = $stmt->fetch(PDO::FETCH_ASSOC);
+$existing_mr = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if ($existing) {
-    $_SESSION['error_message'] = 'Morning report for ' . date('d M Y', strtotime($target_date)) . 
-                                  ' already exists (' . $existing['report_number'] . ').';
-    header('Location: view_employee.php?id=' . $existing['id']);
+if ($existing_mr) {
+    $created_by = $existing_mr['created_by_name'] ?? 'Another user';
+    $created_by_code = $existing_mr['created_by_code'] ?? '';
+    
+    $_SESSION['error_message'] = 
+        '❌ Morning report for ' . date('d M Y', strtotime($target_date)) . 
+        ' already exists (' . $existing_mr['report_number'] . ') ' .
+        'added by ' . $created_by . 
+        ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+        'Each branch can only have ONE morning report per day.';
+    
+    header('Location: view_employee.php?id=' . $existing_mr['id']);
     exit();
 }
 
 // ============================================================
-// AUTO-FILL LOGIC
+// ✅ CHECK DUPLICATE #2: DAILY REPORTS (KABLA YA FORM)
+// Hii inasaidia kama daily_reports ipo lakini morning_reports haipo
+// (inawezekana kwa sababu ya bug ya awali)
+// ============================================================
+$stmt = $db->prepare("
+    SELECT 
+        dr.id, 
+        dr.report_number,
+        dr.morning_report_id,
+        e.full_name AS created_by_name,
+        e.employee_id AS created_by_code
+    FROM daily_reports dr
+    LEFT JOIN employees e ON dr.employee_id = e.id
+    WHERE dr.branch_id = ? AND dr.report_date = ?
+    LIMIT 1
+");
+$stmt->execute([$employee_branch_id, $target_date]);
+$existing_dr = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if ($existing_dr) {
+    $created_by = $existing_dr['created_by_name'] ?? 'Another user';
+    $created_by_code = $existing_dr['created_by_code'] ?? '';
+    
+    // Kama daily_report ina morning_report_id, peleka kwenye view ya MR
+    if (!empty($existing_dr['morning_report_id'])) {
+        $_SESSION['error_message'] = 
+            '❌ Morning report for ' . date('d M Y', strtotime($target_date)) . 
+            ' already exists. Daily Report ' . $existing_dr['report_number'] . 
+            ' was created by ' . $created_by . 
+            ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+            'Each branch can only have ONE morning report per day.';
+        
+        header('Location: view_employee.php?id=' . $existing_dr['morning_report_id']);
+        exit();
+    } else {
+        $_SESSION['error_message'] = 
+            '❌ A Daily Report for ' . date('d M Y', strtotime($target_date)) . 
+            ' already exists (' . $existing_dr['report_number'] . ') ' .
+            'created by ' . $created_by . 
+            ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+            'Each branch can only have ONE morning report per day.';
+        
+        header('Location: index_employee.php');
+        exit();
+    }
+}
+
+// ============================================================
+// AUTO-FILL LOGIC - STEP 1: EVENING STOCK
 // ============================================================
 $source_type = null;
 $source_data = null;
@@ -107,43 +177,73 @@ $auto_cash = 0;
 $auto_notes = '';
 $has_data = false;
 
-// STEP 1: Evening Stock
+// ------------------------------------------------------------
+// STEP 1: FIND THE LATEST EVENING STOCK BEFORE TARGET DATE
+// ------------------------------------------------------------
 $stmt = $db->prepare("
-    SELECT es.*, e.full_name AS employee_name, e.employee_id AS employee_code
+    SELECT 
+        es.*, 
+        e.full_name AS employee_name, 
+        e.employee_id AS employee_code,
+        DATEDIFF(?, es.stock_date) AS days_back
     FROM evening_stocks es
     LEFT JOIN employees e ON es.employee_id = e.id
-    WHERE es.branch_id = ? AND es.stock_date < ?
+    WHERE es.branch_id = ? 
+      AND es.stock_date < ?
+      AND es.status IN ('waiting', 'approved', 'adjusted')
     ORDER BY es.stock_date DESC, es.id DESC
     LIMIT 1
 ");
-$stmt->execute([$employee_branch_id, $target_date]);
+$stmt->execute([$target_date, $employee_branch_id, $target_date]);
 $evening_stock = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if ($evening_stock) {
+    // ------------------------------------------------------------
+    // Get providers from evening_stock_providers
+    // ------------------------------------------------------------
     $stmt = $db->prepare("
-        SELECT esp.provider_id, esp.provider_code, esp.provider_name,
-               esp.closing_float, esp.closing_cash,
-               p.icon_class, p.color_code, p.provider_type, p.display_order
+        SELECT 
+            esp.provider_id, 
+            esp.provider_code, 
+            esp.provider_name,
+            esp.closing_float, 
+            esp.closing_cash,
+            esp.total_deposits,
+            esp.total_withdrawals,
+            p.icon_class, 
+            p.color_code, 
+            p.provider_type, 
+            p.display_order
         FROM evening_stock_providers esp
         LEFT JOIN providers p ON esp.provider_id = p.id
         WHERE esp.evening_stock_id = ?
-        ORDER BY p.display_order, esp.provider_name
+        ORDER BY COALESCE(p.display_order, 999), esp.provider_name
     ");
     $stmt->execute([$evening_stock['id']]);
     $esp = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ------------------------------------------------------------
+    // FALLBACK: If evening_stock_providers is empty, use provider_data JSON
+    // ------------------------------------------------------------
     if (empty($esp) && !empty($evening_stock['provider_data'])) {
         $decoded = json_decode($evening_stock['provider_data'], true);
         if (is_array($decoded) && !empty($decoded)) {
             foreach ($decoded as $pid => $float) {
+                $pid = intval($pid);
                 $stmt2 = $db->prepare("
-                    SELECT p.id, p.provider_name, p.icon_class, p.color_code, p.provider_type,
-                           p.display_order, bp.provider_code
+                    SELECT 
+                        p.id, 
+                        p.provider_name, 
+                        p.icon_class, 
+                        p.color_code, 
+                        p.provider_type,
+                        p.display_order, 
+                        bp.provider_code
                     FROM providers p
                     INNER JOIN branch_providers bp ON bp.provider_id = p.id
-                    WHERE p.id = ? AND bp.branch_id = ?
+                    WHERE p.id = ? AND bp.branch_id = ? AND bp.is_active = 1
                 ");
-                $stmt2->execute([intval($pid), $employee_branch_id]);
+                $stmt2->execute([$pid, $employee_branch_id]);
                 $pinfo = $stmt2->fetch(PDO::FETCH_ASSOC);
                 if ($pinfo) {
                     $esp[] = [
@@ -152,6 +252,8 @@ if ($evening_stock) {
                         'provider_name' => $pinfo['provider_name'],
                         'closing_float' => floatval(str_replace(',', '', $float)),
                         'closing_cash' => 0,
+                        'total_deposits' => 0,
+                        'total_withdrawals' => 0,
                         'icon_class' => $pinfo['icon_class'],
                         'color_code' => $pinfo['color_code'],
                         'provider_type' => $pinfo['provider_type'],
@@ -162,6 +264,9 @@ if ($evening_stock) {
         }
     }
 
+    // ------------------------------------------------------------
+    // Check if there is meaningful data
+    // ------------------------------------------------------------
     $has_float_data = false;
     foreach ($esp as $row) {
         if (floatval(str_replace(',', '', $row['closing_float'] ?? 0)) > 0) {
@@ -170,8 +275,8 @@ if ($evening_stock) {
         }
     }
 
-    $has_cash_data = floatval(str_replace(',', '', $evening_stock['cash_balance'] ?? 0)) > 0 || 
-                     floatval(str_replace(',', '', $evening_stock['cumm_total'] ?? 0)) > 0;
+    $cash_value = floatval(str_replace(',', '', $evening_stock['cash_balance'] ?? 0));
+    $has_cash_data = $cash_value > 0;
 
     if ($has_float_data || $has_cash_data) {
         $source_type = 'evening_stock';
@@ -180,23 +285,32 @@ if ($evening_stock) {
             'number' => $evening_stock['stock_number'],
             'date' => $evening_stock['stock_date'],
             'employee' => $evening_stock['employee_name'] ?? 'N/A',
-            'cash' => floatval(str_replace(',', '', $evening_stock['cash_balance'])),
-            'cumm' => floatval(str_replace(',', '', $evening_stock['cumm_total'])),
+            'employee_code' => $evening_stock['employee_code'] ?? '-',
+            'cash' => $cash_value,
+            'cumm' => floatval(str_replace(',', '', $evening_stock['cumm_total'] ?? 0)),
             'notes' => $evening_stock['notes'] ?? '',
+            'days_back' => intval($evening_stock['days_back'] ?? 1),
         ];
         $auto_providers = $esp;
-        $auto_cash = floatval(str_replace(',', '', $evening_stock['cash_balance']));
+        $auto_cash = $cash_value;
         $auto_notes = $evening_stock['notes'] ?? '';
         $has_data = true;
     }
 }
 
-// STEP 2: Capital Management
+// ============================================================
+// AUTO-FILL LOGIC - STEP 2: CAPITAL MANAGEMENT (Fallback)
+// ============================================================
 if (!$has_data) {
+    // ------------------------------------------------------------
+    // Get the latest CASH for this branch
+    // ------------------------------------------------------------
     $stmt = $db->prepare("
-        SELECT amount, capital_number, transaction_date, description
+        SELECT amount, capital_number, transaction_date, reference_module, transaction_type
         FROM capital_management
-        WHERE branch_id = ? AND reference_module = 'cash'
+        WHERE branch_id = ? 
+          AND transaction_type = 'opening'
+          AND (reference_module = 'cash' OR reference_module = 'cash_manual' OR reference_module IS NULL)
         ORDER BY transaction_date DESC, id DESC
         LIMIT 1
     ");
@@ -204,18 +318,35 @@ if (!$has_data) {
     $capital_cash_row = $stmt->fetch(PDO::FETCH_ASSOC);
     $capital_cash = $capital_cash_row ? floatval(str_replace(',', '', $capital_cash_row['amount'])) : 0;
 
+    // ------------------------------------------------------------
+    // Get the latest FLOAT for each provider
+    // reference_id refers to branch_providers.id
+    // ------------------------------------------------------------
     $stmt = $db->prepare("
-        SELECT cm.id, cm.capital_number, cm.amount, cm.transaction_date,
-               cm.reference_id AS provider_id,
-               p.provider_name, p.icon_class, p.color_code, p.provider_type, p.display_order,
-               COALESCE(bp.provider_code, p.provider_code) AS provider_code
+        SELECT 
+            cm.id AS capital_id,
+            cm.amount, 
+            cm.transaction_date,
+            cm.reference_id,
+            bp.provider_id,
+            bp.provider_code,
+            p.provider_name, 
+            p.icon_class, 
+            p.color_code, 
+            p.provider_type, 
+            p.display_order
         FROM capital_management cm
-        LEFT JOIN providers p ON (cm.reference_module = 'provider' AND cm.reference_id = p.id)
-        LEFT JOIN branch_providers bp ON (bp.branch_id = cm.branch_id AND bp.provider_id = p.id)
-        WHERE cm.branch_id = ? AND cm.reference_module = 'provider'
+        INNER JOIN branch_providers bp ON cm.reference_id = bp.id
+        INNER JOIN providers p ON bp.provider_id = p.id
+        WHERE cm.branch_id = ? 
+          AND cm.transaction_type = 'opening'
+          AND cm.reference_module = 'provider'
           AND cm.id IN (
-              SELECT MAX(id) FROM capital_management 
-              WHERE branch_id = ? AND reference_module = 'provider'
+              SELECT MAX(id) 
+              FROM capital_management 
+              WHERE branch_id = ? 
+                AND transaction_type = 'opening'
+                AND reference_module = 'provider'
               GROUP BY reference_id
           )
         ORDER BY p.display_order, p.provider_name
@@ -241,9 +372,11 @@ if (!$has_data) {
             'number' => 'OPENING-CAPITAL',
             'date' => $latest_date ?? date('Y-m-d'),
             'employee' => 'System Auto-fill',
+            'employee_code' => '-',
             'cash' => $capital_cash,
             'cumm' => 0,
             'notes' => 'Auto-filled from Opening Capital',
+            'days_back' => 0,
         ];
 
         foreach ($capital_providers as $cp) {
@@ -253,8 +386,10 @@ if (!$has_data) {
                 'provider_name' => $cp['provider_name'] ?? 'Unknown',
                 'closing_float' => floatval(str_replace(',', '', $cp['amount'])),
                 'closing_cash' => 0,
+                'total_deposits' => 0,
+                'total_withdrawals' => 0,
                 'icon_class' => $cp['icon_class'] ?? 'fas fa-university',
-                'color_code' => $cp['color_code'] ?? '#0B5ED7',
+                'color_code' => $cp['color_code'] ?? '#059669',
                 'provider_type' => $cp['provider_type'] ?? 'bank',
                 'display_order' => $cp['display_order'] ?? 0,
             ];
@@ -273,7 +408,7 @@ if (!$has_data) {
 }
 
 // ============================================================
-// CALCULATE TOTALS
+// CALCULATE PREVIEW TOTALS
 // ============================================================
 $preview_total_float = 0;
 foreach ($auto_providers as $sp) {
@@ -289,8 +424,6 @@ $error_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_morning_report') {
     try {
-        $db->beginTransaction();
-
         $post_date         = $_POST['report_date'] ?? date('Y-m-d');
         $post_source_type  = $_POST['source_type'] ?? 'manual';
         $post_source_id    = intval($_POST['source_evening_stock_id'] ?? 0);
@@ -298,53 +431,151 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $post_notes        = trim($_POST['notes'] ?? '');
         $post_providers    = $_POST['providers'] ?? [];
 
-        if ($post_cash < 0) throw new Exception('Cash balance cannot be negative.');
-
-        $stmt = $db->prepare("SELECT id FROM morning_reports WHERE branch_id = ? AND report_date = ? LIMIT 1");
-        $stmt->execute([$employee_branch_id, $post_date]);
-        if ($stmt->fetch()) {
-            throw new Exception('Morning report for this date already exists.');
+        // ------------------------------------------------------------
+        // VALIDATION
+        // ------------------------------------------------------------
+        if ($post_cash < 0) {
+            throw new Exception('Cash balance cannot be negative.');
+        }
+        if (strtotime($post_date) > strtotime(date('Y-m-d'))) {
+            throw new Exception('Report date cannot be in the future.');
         }
 
-        $report_number = 'MR-' . date('Ymd', strtotime($post_date)) . '-' . 
-                         strtoupper(substr($branch_code, 0, 3)) . '-' . 
-                         str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
+        // ------------------------------------------------------------
+        // ✅ CHECK #1: Morning Report ipo tayari?
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            SELECT 
+                mr.id, 
+                mr.report_number, 
+                e.full_name AS created_by,
+                e.employee_id AS created_by_code
+            FROM morning_reports mr
+            LEFT JOIN employees e ON mr.employee_id = e.id
+            WHERE mr.branch_id = ? AND mr.report_date = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$employee_branch_id, $post_date]);
+        $existing_mr = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        // ✅ FIXED: str_replace for float computation
+        if ($existing_mr) {
+            $created_by = $existing_mr['created_by'] ?? 'another user';
+            $created_by_code = $existing_mr['created_by_code'] ?? '';
+            
+            throw new Exception(
+                '❌ Morning report for ' . date('d M Y', strtotime($post_date)) . 
+                ' already exists (' . $existing_mr['report_number'] . ') ' .
+                'added by ' . $created_by . 
+                ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+                'Each branch can only have ONE morning report per day.'
+            );
+        }
+
+        // ------------------------------------------------------------
+        // ✅ CHECK #2: Daily Report ipo tayari? (CRITICAL!)
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            SELECT 
+                dr.id, 
+                dr.report_number,
+                dr.morning_report_id,
+                e.full_name AS created_by,
+                e.employee_id AS created_by_code
+            FROM daily_reports dr
+            LEFT JOIN employees e ON dr.employee_id = e.id
+            WHERE dr.branch_id = ? AND dr.report_date = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$employee_branch_id, $post_date]);
+        $existing_dr = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing_dr) {
+            $created_by = $existing_dr['created_by'] ?? 'another user';
+            $created_by_code = $existing_dr['created_by_code'] ?? '';
+            
+            $mr_info = '';
+            if (!empty($existing_dr['morning_report_id'])) {
+                $stmt2 = $db->prepare("SELECT report_number FROM morning_reports WHERE id = ?");
+                $stmt2->execute([$existing_dr['morning_report_id']]);
+                $mr_number = $stmt2->fetchColumn();
+                if ($mr_number) {
+                    $mr_info = ' (Morning Report: ' . $mr_number . ')';
+                }
+            }
+            
+            throw new Exception(
+                '❌ A Daily Report for ' . date('d M Y', strtotime($post_date)) . 
+                ' already exists (' . $existing_dr['report_number'] . ')' . $mr_info . '. ' .
+                'Created by ' . $created_by . 
+                ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+                'Each branch can only have ONE morning report per day.'
+            );
+        }
+
+        // ------------------------------------------------------------
+        // Calculate total float
+        // ------------------------------------------------------------
         $total_float = 0;
         foreach ($post_providers as $pid => $float) {
             $fv = floatval(str_replace(',', '', $float));
-            if ($fv < 0) throw new Exception('Provider float cannot be negative.');
+            if ($fv < 0) {
+                throw new Exception('Provider float cannot be negative.');
+            }
             $total_float += $fv;
         }
         $cumm_total = $total_float + $post_cash;
 
+        if ($total_float <= 0 && $post_cash <= 0) {
+            throw new Exception('Report cannot be empty. Provide at least one float or cash balance.');
+        }
+
+        // ------------------------------------------------------------
+        // Generate report number
+        // ------------------------------------------------------------
+        $report_number = 'MR-' . date('Ymd', strtotime($post_date)) . '-' . 
+                         strtoupper(substr($branch_code, 0, 3)) . '-' . 
+                         str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
+
+        // ------------------------------------------------------------
+        // Source type mapping
+        // ------------------------------------------------------------
         $db_source_type = ($post_source_type === 'capital_management') ? 'manual' : 'auto_from_evening';
         $db_source_id = ($post_source_type === 'evening_stock' && $post_source_id > 0) ? $post_source_id : null;
 
-        // 1) morning_reports
+        // ------------------------------------------------------------
+        // ✅ BEGIN TRANSACTION
+        // ------------------------------------------------------------
+        $db->beginTransaction();
+
+        // ------------------------------------------------------------
+        // 1) INSERT morning_reports
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO morning_reports 
             (report_number, employee_id, branch, branch_id, report_date,
              provider_data, cash_balance, cumm_total, submitted_at,
-             notes, source_type, source_evening_stock_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)
+             notes, source_type, source_evening_stock_id, is_locked)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 0)
         ");
         $stmt->execute([
-            $report_number, $user_id, $branch_name, $employee_branch_id, $post_date,
-            json_encode($post_providers), $post_cash, $cumm_total,
-            $post_notes, $db_source_type, $db_source_id
+            $report_number, 
+            $user_id, 
+            $branch_name, 
+            $employee_branch_id, 
+            $post_date,
+            json_encode($post_providers), 
+            $post_cash, 
+            $cumm_total,
+            $post_notes, 
+            $db_source_type, 
+            $db_source_id
         ]);
 
         $report_id = $db->lastInsertId();
 
-        // 2) morning_report_providers
-        $stmt = $db->prepare("
-            INSERT INTO morning_report_providers
-            (report_id, provider_id, provider_code, provider_name, float_balance, cash_balance, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, NOW())
-        ");
-
+        // ------------------------------------------------------------
+        // 2) Get provider map
+        // ------------------------------------------------------------
         $provider_map = [];
         $stmt2 = $db->prepare("
             SELECT p.id, p.provider_name, bp.provider_code
@@ -357,38 +588,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $provider_map[intval($row['id'])] = $row;
         }
 
+        // ------------------------------------------------------------
+        // 3) INSERT morning_report_providers
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            INSERT INTO morning_report_providers
+            (report_id, provider_id, provider_code, provider_name, 
+             float_balance, cash_balance, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, NOW())
+        ");
+
         foreach ($post_providers as $pid => $float) {
             $pid = intval($pid);
             $fv = floatval(str_replace(',', '', $float));
-            if ($pid <= 0 || $fv == 0) continue;
+            if ($pid <= 0 || $fv <= 0) continue;
 
             $pinfo = $provider_map[$pid] ?? null;
             if (!$pinfo) continue;
 
-            $stmt->execute([$report_id, $pid, $pinfo['provider_code'], $pinfo['provider_name'], $fv]);
+            $stmt->execute([
+                $report_id, $pid, $pinfo['provider_code'], 
+                $pinfo['provider_name'], $fv
+            ]);
         }
 
-        // 3) daily_reports
+        // ------------------------------------------------------------
+        // 4) INSERT daily_reports
+        // ------------------------------------------------------------
         $daily_report_number = 'DR-' . date('Ymd', strtotime($post_date)) . '-' . 
                                str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
 
         $stmt_dr = $db->prepare("
             INSERT INTO daily_reports 
             (report_number, employee_id, branch, branch_id, report_date,
-             morning_report_id, current_cash,
-             morning_total, current_float, total_business_income,
-             current_capital, created_at, notes)
+             morning_report_id, morning_total, current_cash, current_float,
+             total_business_income, current_capital, created_at, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
         ");
 
         $stmt_dr->execute([
-            $daily_report_number, $user_id, $branch_name, $employee_branch_id, $post_date,
-            $report_id, $post_cash, $cumm_total, $total_float, $cumm_total, $cumm_total, $post_notes
+            $daily_report_number, 
+            $user_id, 
+            $branch_name, 
+            $employee_branch_id, 
+            $post_date,
+            $report_id, 
+            $cumm_total, 
+            $post_cash, 
+            $total_float,
+            $cumm_total, 
+            $cumm_total, 
+            $post_notes
         ]);
 
         $daily_report_id = $db->lastInsertId();
 
-        // 4) daily_report_providers
+        // ------------------------------------------------------------
+        // 5) INSERT daily_report_providers
+        // ------------------------------------------------------------
         $stmt_drp = $db->prepare("
             INSERT INTO daily_report_providers 
             (daily_report_id, provider_id, provider_code, provider_name,
@@ -400,20 +657,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         foreach ($post_providers as $pid => $float) {
             $pid = intval($pid);
             $fv = floatval(str_replace(',', '', $float));
-            if ($pid <= 0 || $fv == 0) continue;
+            if ($pid <= 0 || $fv <= 0) continue;
 
             $pinfo = $provider_map[$pid] ?? null;
             if (!$pinfo) continue;
 
             $stmt_drp->execute([
-                $daily_report_id, $pid, $pinfo['provider_code'], $pinfo['provider_name'],
-                $fv, $fv
+                $daily_report_id, $pid, $pinfo['provider_code'], 
+                $pinfo['provider_name'], $fv, $fv
             ]);
         }
 
+        // ------------------------------------------------------------
+        // LOG ACTIVITY
+        // ------------------------------------------------------------
         logActivity(
-            $user_id, 'Add Morning Report', 'Morning Report', $report_id, '',
-            'Employee ' . $employee['full_name'] . ' added ' . $report_number . ' for ' . $branch_name . 
+            $user_id, 
+            'Add Morning Report', 
+            'Morning Report', 
+            $report_id, 
+            '',
+            'Employee ' . $employee['full_name'] . ' added ' . $report_number . 
+            ' for ' . $branch_name . 
             ' - Float: ' . number_format($total_float) . ', Cash: ' . number_format($post_cash)
         );
 
@@ -425,7 +690,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
-        $error_message = $e->getMessage();
+        
+        $error_msg = $e->getMessage();
+        
+        // ============================================================
+        // ✅ CATCH SQL ERROR 1062 - Duplicate entry
+        // ============================================================
+        if (strpos($error_msg, '1062') !== false || 
+            strpos($error_msg, 'Duplicate entry') !== false ||
+            strpos($error_msg, 'Integrity constraint') !== false) {
+            
+            // Pata taarifa za duplicate kutoka daily_reports au morning_reports
+            $post_date_safe = $_POST['report_date'] ?? date('Y-m-d');
+            
+            $stmt = $db->prepare("
+                SELECT 
+                    dr.report_number,
+                    dr.morning_report_id,
+                    e.full_name AS created_by,
+                    e.employee_id AS created_by_code
+                FROM daily_reports dr
+                LEFT JOIN employees e ON dr.employee_id = e.id
+                WHERE dr.branch_id = ? AND dr.report_date = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$employee_branch_id, $post_date_safe]);
+            $dup = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($dup) {
+                $mr_info = '';
+                if (!empty($dup['morning_report_id'])) {
+                    $stmt2 = $db->prepare("SELECT report_number FROM morning_reports WHERE id = ?");
+                    $stmt2->execute([$dup['morning_report_id']]);
+                    $mr_number = $stmt2->fetchColumn();
+                    if ($mr_number) {
+                        $mr_info = ' (Morning Report: ' . $mr_number . ')';
+                    }
+                }
+                
+                $error_msg = 
+                    '❌ Morning report for ' . date('d M Y', strtotime($post_date_safe)) . 
+                    ' already exists. Daily Report ' . $dup['report_number'] . $mr_info . 
+                    ' was created by ' . ($dup['created_by'] ?? 'another user') . 
+                    (!empty($dup['created_by_code']) ? ' (' . $dup['created_by_code'] . ')' : '') . '. ' .
+                    'Each branch can only have ONE morning report per day.';
+            } else {
+                $error_msg = 
+                    '❌ A morning report for ' . date('d M Y', strtotime($post_date_safe)) . 
+                    ' already exists. Each branch can only have ONE morning report per day.';
+            }
+        }
+        
+        $error_message = $error_msg;
     }
 }
 
@@ -443,6 +759,7 @@ include_once '../../includes/employee_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
+        <!-- BRANCH INDICATOR -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
@@ -470,6 +787,7 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
+        <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-plus-circle" style="color:#059669;"></i> New Morning Report</h2>
@@ -493,17 +811,25 @@ include_once '../../includes/employee_topbar.php';
         <?php endif; ?>
 
         <?php if (!$has_data): ?>
+            <!-- ============================================================ -->
+            <!-- NO DATA - WAITING FOR CAPITAL -->
+            <!-- ============================================================ -->
             <div class="waiting-card">
                 <div class="waiting-icon">
                     <i class="fas fa-hourglass-half"></i>
                 </div>
-                <h3 class="waiting-title">Waiting for Opening Capital</h3>
+                <h3 class="waiting-title">NO EVENING STOCK</h3>
                 <p class="waiting-text">
-                    No Evening Stock data found for your branch. 
-                    Please ask admin to add <strong>Opening Capital</strong> from Capital Management first, 
-                    or submit an <strong>Evening Stock</strong> for a previous date.
+                    No <strong>Evening Stock</strong> found for your branch, 
+                    and no <strong>Opening Capital</strong> has been set up.
+                    <br><br>
+                    Please submit an <strong>Evening Stock</strong> for a previous date, 
+                    or contact <strong>Admin</strong> to set up Opening Capital.
                 </p>
                 <div class="waiting-actions">
+                    <a href="../evening_stock/index_employee.php" class="btn btn-primary">
+                        <i class="fas fa-moon"></i> Go to Evening Stock
+                    </a>
                     <a href="index_employee.php" class="btn btn-secondary">
                         <i class="fas fa-arrow-left"></i> Back to Reports
                     </a>
@@ -511,11 +837,19 @@ include_once '../../includes/employee_topbar.php';
             </div>
         <?php else: ?>
 
+            <!-- ============================================================ -->
+            <!-- SOURCE INFO CARD -->
+            <!-- ============================================================ -->
             <div class="source-info-card <?php echo $source_type === 'capital_management' ? 'source-capital' : 'source-evening'; ?>">
                 <div class="source-info-header">
                     <?php if ($source_type === 'evening_stock'): ?>
                         <i class="fas fa-moon"></i>
                         <span>Source: Evening Stock</span>
+                        <?php if (isset($source_data['days_back']) && $source_data['days_back'] > 1): ?>
+                            <span class="days-badge">
+                                <?php echo $source_data['days_back']; ?> days ago
+                            </span>
+                        <?php endif; ?>
                     <?php else: ?>
                         <i class="fas fa-coins"></i>
                         <span>Source: Opening Capital</span>
@@ -537,11 +871,15 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
+            <!-- ============================================================ -->
+            <!-- FORM -->
+            <!-- ============================================================ -->
             <form method="POST" action="" class="add-form" id="addForm" onsubmit="return validateAdd()">
                 <input type="hidden" name="action" value="add_morning_report">
                 <input type="hidden" name="source_type" value="<?php echo htmlspecialchars($source_type); ?>">
                 <input type="hidden" name="source_evening_stock_id" value="<?php echo ($source_type === 'evening_stock' && $source_data) ? intval($source_data['id']) : 0; ?>">
 
+                <!-- CASH BALANCE -->
                 <div class="form-card">
                     <div class="form-card-header">
                         <i class="fas fa-money-bill-wave"></i>
@@ -567,6 +905,7 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
+                <!-- PROVIDERS - GREEN THEME -->
                 <div class="form-card">
                     <div class="form-card-header">
                         <i class="fas fa-university"></i>
@@ -578,11 +917,11 @@ include_once '../../includes/employee_topbar.php';
                             <div class="providers-grid-3">
                                 <?php foreach ($auto_providers as $sp):
                                     $pid = intval($sp['provider_id']);
-                                    $color = $sp['color_code'] ?? '#0B5ED7';
+                                    $color = $sp['color_code'] ?? '#059669';
                                     $icon = $sp['icon_class'] ?? 'fas fa-university';
                                     $float_val = floatval(str_replace(',', '', $sp['closing_float'] ?? 0));
                                 ?>
-                                    <div class="provider-input-card">
+                                    <div class="provider-input-card provider-input-green">
                                         <div class="provider-input-header">
                                             <div class="provider-input-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
                                                 <i class="<?php echo htmlspecialchars($icon); ?>"></i>
@@ -613,6 +952,7 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
+                <!-- NOTES -->
                 <div class="form-card">
                     <div class="form-card-header">
                         <i class="fas fa-sticky-note"></i>
@@ -627,6 +967,7 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
+                <!-- SUMMARY -->
                 <div class="summary-panel">
                     <div class="summary-panel-header">
                         <i class="fas fa-calculator"></i>
@@ -648,6 +989,7 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
+                <!-- ACTIONS -->
                 <div class="actions-bottom">
                     <a href="index_employee.php" class="btn btn-secondary">
                         <i class="fas fa-times"></i> Cancel
@@ -666,6 +1008,9 @@ include_once '../../includes/employee_topbar.php';
 </div>
 
 <style>
+/* ============================================================
+   VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f0f4f8;
     --bg-card: #ffffff;
@@ -723,6 +1068,9 @@ html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
+/* ============================================================
+   BRANCH INDICATOR
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #059669 0%, #047857 50%, #065F46 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -769,6 +1117,9 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
 
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex; justify-content: space-between;
     align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
@@ -776,6 +1127,9 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .page-header .header-left h2 { font-size: 18px; font-weight: 700; margin: 0; }
 .page-header .header-left h2 i { margin-right: 6px; }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 12px 16px; border-radius: 8px;
     margin-bottom: 14px; display: flex;
@@ -794,6 +1148,9 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     cursor: pointer; padding: 0 4px; opacity: 0.6;
 }
 
+/* ============================================================
+   WAITING CARD
+   ============================================================ */
 .waiting-card {
     background: var(--bg-card);
     border-radius: 16px;
@@ -839,6 +1196,9 @@ html.dark-mode .waiting-icon {
 html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
 .waiting-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
+/* ============================================================
+   SOURCE INFO CARD
+   ============================================================ */
 .source-info-card {
     background: var(--bg-card);
     border-radius: 12px;
@@ -861,6 +1221,14 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
 }
 .source-capital .source-info-header {
     background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+}
+.days-badge {
+    margin-left: auto;
+    font-size: 10px; font-weight: 700;
+    padding: 3px 10px;
+    background: rgba(255,255,255,0.25);
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.35);
 }
 .source-info-body {
     display: grid;
@@ -887,6 +1255,9 @@ html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
     word-break: break-word;
 }
 
+/* ============================================================
+   FORM CARDS
+   ============================================================ */
 .form-card {
     background: var(--bg-card);
     border-radius: 12px;
@@ -962,62 +1333,127 @@ html.dark-mode .readonly-input {
     color: #6EE7B7 !important;
 }
 
-.providers-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.provider-input-card {
-    background: var(--bg-input);
-    border: 1.5px solid var(--border-color);
-    border-radius: 10px;
-    overflow: hidden;
-    transition: all 0.3s ease;
-}
-.provider-input-card:hover {
-    border-color: #059669;
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
-}
-.provider-input-header {
-    padding: 10px 12px;
-    background: var(--bg-card);
-    border-bottom: 1px solid var(--border-color);
-    display: flex; align-items: center; gap: 10px;
-}
-.provider-input-icon {
-    width: 34px; height: 34px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFF; font-size: 14px; flex-shrink: 0;
-}
-.provider-input-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.provider-input-name {
-    font-size: 12px; font-weight: 800;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.provider-input-code {
-    font-size: 9px; font-weight: 700;
-    color: #059669;
-    background: #D1FAE5;
-    padding: 1px 6px;
-    border-radius: 5px;
-    align-self: flex-start;
-    font-family: 'Courier New', monospace;
-}
-html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
-.provider-input-body { padding: 10px 12px; }
-.provider-input-body label {
-    font-size: 9px; font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    display: block; margin-bottom: 5px;
-}
-.provider-input-body .form-control {
-    font-size: 13px;
-    padding: 8px 10px;
-    text-align: right;
-    font-family: 'Courier New', monospace;
-    font-weight: 700;
+/* ============================================================
+   PROVIDERS GRID - GREEN THEME
+   ============================================================ */
+.providers-grid-3 { 
+    display: grid; 
+    grid-template-columns: repeat(3, 1fr); 
+    gap: 12px; 
 }
 
+.provider-input-card.provider-input-green {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 14px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    position: relative;
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.12);
+}
+.provider-input-card.provider-input-green::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    right: -40px;
+    width: 120px;
+    height: 120px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+}
+html.dark-mode .provider-input-card.provider-input-green {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+}
+.provider-input-card.provider-input-green:hover {
+    border-color: #059669;
+    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.25);
+    transform: translateY(-3px);
+}
+html.dark-mode .provider-input-card.provider-input-green:hover {
+    border-color: #34D399;
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+}
+
+.provider-input-header {
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
+    display: flex; align-items: center; gap: 10px;
+    position: relative;
+    z-index: 1;
+}
+html.dark-mode .provider-input-header {
+    background: rgba(15, 23, 42, 0.3);
+    border-bottom-color: rgba(16, 185, 129, 0.3);
+}
+.provider-input-icon {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFF; font-size: 15px; flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
+}
+.provider-input-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.provider-input-name {
+    font-size: 13px; font-weight: 800;
+    color: #065F46;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    letter-spacing: -0.2px;
+}
+html.dark-mode .provider-input-name { color: #D1FAE5; }
+.provider-input-code {
+    font-size: 10px; font-weight: 700;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 2px 8px;
+    border-radius: 6px;
+    align-self: flex-start;
+    font-family: 'Courier New', monospace;
+    border: 1px solid rgba(5, 150, 105, 0.3);
+}
+html.dark-mode .provider-input-code {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+.provider-input-body { 
+    padding: 12px 14px; 
+    position: relative;
+    z-index: 1;
+}
+.provider-input-body label {
+    font-size: 10px; font-weight: 800;
+    color: #047857;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    display: block; margin-bottom: 6px;
+}
+html.dark-mode .provider-input-body label { color: #6EE7B7; }
+.provider-input-body .form-control {
+    font-size: 14px;
+    padding: 9px 12px;
+    text-align: right;
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    color: #065F46;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+html.dark-mode .provider-input-body .form-control {
+    background: rgba(15, 23, 42, 0.4);
+    color: #A7F3D0;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+
+/* ============================================================
+   EMPTY PROVIDERS
+   ============================================================ */
 .empty-providers {
     text-align: center;
     padding: 24px 16px;
@@ -1029,6 +1465,9 @@ html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
 }
 .empty-providers p { margin: 0; font-size: 12px; }
 
+/* ============================================================
+   SUMMARY PANEL
+   ============================================================ */
 .summary-panel {
     background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
     border: 2px solid #6EE7B7;
@@ -1083,6 +1522,9 @@ html.dark-mode .summary-value { color: #6EE7B7; }
 .summary-line-total .summary-value { font-size: 18px; color: #065F46; }
 html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
 
+/* ============================================================
+   ACTIONS
+   ============================================================ */
 .actions-bottom {
     display: flex; gap: 12px;
     justify-content: flex-end;
@@ -1117,6 +1559,9 @@ html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
 }
 .btn-secondary:hover { background: var(--bg-input); color: var(--text-primary); }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .providers-grid-3 { grid-template-columns: repeat(2, 1fr); }
     .source-info-body { grid-template-columns: repeat(2, 1fr); }
@@ -1143,7 +1588,10 @@ html.dark-mode .summary-line-total .summary-value { color: #D1FAE5; }
 <script>
 function validateAdd() {
     const reportDate = document.getElementById('report_date').value;
-    if (!reportDate) { alert('Please select report date.'); return false; }
+    if (!reportDate) { 
+        alert('Please select report date.'); 
+        return false; 
+    }
 
     const btn = document.getElementById('submitBtn');
     btn.disabled = true;

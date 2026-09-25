@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/daily_report/index.php
-// WAKALA FINANCIAL SYSTEM - DAILY REPORTS
-// ✅ REMOVED: Generate button
-// ✅ REMOVED: Employee column from providers table
-// ✅ NEW: Total Transactions card (with count)
-// ✅ NEW: Transaction count in Deposits/Withdrawals cards
-// ✅ IMPROVED: Beautiful providers table CSS
-// ✅ IMPROVED: Provider icons with dynamic colors
+// WAKALA FINANCIAL SYSTEM - DAILY REPORTS (ADMIN)
+// ✅ Export dropdown: PDF, CSV, Word
+// ✅ All text in English
+// ✅ Summary cards with soft/transparent background colors
+// ✅ Bigger Add Deposit & Add Withdrawal buttons
+// ✅ Time filters (All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -49,47 +48,27 @@ if (isset($_POST['ajax_action'])) {
             }
             
             $stmt = $db->prepare("
-                SELECT * FROM daily_reports 
+                SELECT drp.current_float
+                FROM daily_report_providers drp
+                INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
+                WHERE dr.branch_id = ? 
+                AND drp.provider_id = ?
+                ORDER BY dr.report_date DESC, dr.id DESC 
+                LIMIT 1
+            ");
+            $stmt->execute([$branch_id, $provider_id]);
+            $drp = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_float = floatval($drp['current_float'] ?? 0);
+            
+            $stmt = $db->prepare("
+                SELECT current_cash FROM daily_reports 
                 WHERE branch_id = ? 
                 ORDER BY report_date DESC, id DESC 
                 LIMIT 1
             ");
             $stmt->execute([$branch_id]);
-            $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            $current_float = 0;
-            $current_cash = 0;
-            
-            if ($latest_dr) {
-                $stmt = $db->prepare("
-                    SELECT current_float FROM daily_report_providers 
-                    WHERE daily_report_id = ? AND provider_id = ?
-                    ORDER BY id DESC LIMIT 1
-                ");
-                $stmt->execute([$latest_dr['id'], $provider_id]);
-                $drp = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($drp) {
-                    $current_float = floatval($drp['current_float'] ?? 0);
-                } else {
-                    $stmt = $db->prepare("
-                        SELECT mrp.float_balance 
-                        FROM morning_report_providers mrp
-                        INNER JOIN morning_reports mr ON mrp.report_id = mr.id
-                        WHERE mr.branch_id = ? 
-                        AND mrp.provider_id = ?
-                        ORDER BY mr.report_date DESC, mr.id DESC
-                        LIMIT 1
-                    ");
-                    $stmt->execute([$branch_id, $provider_id]);
-                    $mrp = $stmt->fetch(PDO::FETCH_ASSOC);
-                    if ($mrp) {
-                        $current_float = floatval($mrp['float_balance'] ?? 0);
-                    }
-                }
-                
-                $current_cash = floatval($latest_dr['current_cash'] ?? 0);
-            }
+            $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_cash = floatval($dr_cash['current_cash'] ?? 0);
             
             echo json_encode([
                 'success' => true,
@@ -116,9 +95,6 @@ if (isset($_POST['ajax_action'])) {
             if ($branch_id <= 0) throw new Exception('Please select a branch.');
             if ($provider_id <= 0) throw new Exception('Please select a provider.');
             if ($amount <= 0) throw new Exception('Amount must be greater than 0.');
-            if (!in_array($transaction_type, ['deposit', 'withdrawal'])) {
-                throw new Exception('Invalid transaction type.');
-            }
             
             $db->beginTransaction();
             
@@ -147,7 +123,7 @@ if (isset($_POST['ajax_action'])) {
             $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$latest_dr) {
-                throw new Exception('Hakuna daily report. Tafadhali tengeneza morning report kwanza.');
+                throw new Exception('No daily report found. Please create a morning report first.');
             }
             
             $daily_report_id = $latest_dr['id'];
@@ -164,23 +140,7 @@ if (isset($_POST['ajax_action'])) {
             if ($dr_provider) {
                 $current_float = floatval($dr_provider['current_float'] ?? 0);
             } else {
-                $stmt = $db->prepare("
-                    SELECT mrp.float_balance 
-                    FROM morning_report_providers mrp
-                    INNER JOIN morning_reports mr ON mrp.report_id = mr.id
-                    WHERE mr.branch_id = ? 
-                    AND mrp.provider_id = ?
-                    ORDER BY mr.report_date DESC, mr.id DESC
-                    LIMIT 1
-                ");
-                $stmt->execute([$branch_id, $provider_id]);
-                $mr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if (!$mr_provider) {
-                    throw new Exception('Hakuna float ya provider. Tafadhali tengeneza morning report kwanza.');
-                }
-                
-                $current_float = floatval($mr_provider['float_balance'] ?? 0);
+                throw new Exception('No provider float found. Please create a morning report first.');
             }
             
             if ($transaction_type === 'withdrawal') {
@@ -192,10 +152,10 @@ if (isset($_POST['ajax_action'])) {
             }
             
             if ($new_float < 0) {
-                throw new Exception('Float haitoshi. Current float: TSh ' . number_format($current_float, 0));
+                throw new Exception('Insufficient float. Current float: TSh ' . number_format($current_float, 0));
             }
             if ($new_cash < 0) {
-                throw new Exception('Cash haitoshi. Current cash: TSh ' . number_format($current_cash, 0));
+                throw new Exception('Insufficient cash. Current cash: TSh ' . number_format($current_cash, 0));
             }
             
             $new_capital = $new_float + $new_cash;
@@ -228,40 +188,20 @@ if (isset($_POST['ajax_action'])) {
             
             $transaction_id = $db->lastInsertId();
             
-            if ($dr_provider) {
-                $stmt = $db->prepare("
-                    UPDATE daily_report_providers 
-                    SET current_float = ?,
-                        total_deposits = total_deposits + ?,
-                        total_withdrawals = total_withdrawals + ?,
-                        updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $new_float,
-                    $transaction_type === 'deposit' ? $amount : 0,
-                    $transaction_type === 'withdrawal' ? $amount : 0,
-                    $dr_provider['id']
-                ]);
-            } else {
-                $stmt = $db->prepare("
-                    INSERT INTO daily_report_providers 
-                    (daily_report_id, provider_id, provider_code, provider_name,
-                     morning_float, morning_cash, current_float, current_cash,
-                     total_deposits, total_withdrawals, created_at)
-                    VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?, NOW())
-                ");
-                $stmt->execute([
-                    $daily_report_id,
-                    $provider_id,
-                    $branch_provider['provider_code'],
-                    $provider['provider_name'],
-                    $current_float,
-                    $new_float,
-                    $transaction_type === 'deposit' ? $amount : 0,
-                    $transaction_type === 'withdrawal' ? $amount : 0
-                ]);
-            }
+            $stmt = $db->prepare("
+                UPDATE daily_report_providers 
+                SET current_float = ?,
+                    total_deposits = total_deposits + ?,
+                    total_withdrawals = total_withdrawals + ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $new_float,
+                $transaction_type === 'deposit' ? $amount : 0,
+                $transaction_type === 'withdrawal' ? $amount : 0,
+                $dr_provider['id']
+            ]);
             
             $stmt = $db->prepare("
                 UPDATE daily_reports 
@@ -280,64 +220,108 @@ if (isset($_POST['ajax_action'])) {
                 $daily_report_id
             ]);
             
-            logActivity(
-                $user_id,
-                'Add ' . ucfirst($transaction_type),
-                'Transactions',
-                $transaction_id,
-                '',
-                ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' from ' . $provider['provider_name']
-            );
+            $stmt = $db->prepare("
+                INSERT INTO daily_report_transactions 
+                (daily_report_id, provider_id, provider_code, transaction_type,
+                 amount, reference_number, description, transaction_date,
+                 transaction_time, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+            ");
+            $stmt->execute([
+                $daily_report_id,
+                $provider_id,
+                $branch_provider['provider_code'],
+                $transaction_type,
+                $amount,
+                $reference_number,
+                $description,
+                $transaction_date,
+                date('H:i:s'),
+                $user_id
+            ]);
             
-            $stmt = $db->prepare("SELECT full_name FROM employees WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $emp = $stmt->fetch(PDO::FETCH_ASSOC);
-            $employee_name = $emp['full_name'] ?? 'N/A';
+            logActivity($user_id, 'Add ' . ucfirst($transaction_type), 'Transactions', $transaction_id, '', 
+                ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' from ' . $provider['provider_name']);
             
             $db->commit();
             
             echo json_encode([
                 'success' => true,
-                'message' => ucfirst($transaction_type) . ' ya TSh ' . number_format($amount) . ' imefanikiwa!',
+                'message' => ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' completed successfully!',
                 'transaction' => [
                     'id' => $transaction_id,
-                    'transaction_number' => $transaction_number,
-                    'provider_id' => $provider_id,
-                    'provider_code' => $branch_provider['provider_code'],
-                    'provider_name' => $provider['provider_name'],
-                    'amount' => $amount,
-                    'type' => $transaction_type,
                     'new_float' => $new_float,
                     'new_cash' => $new_cash,
-                    'new_capital' => $new_capital,
-                    'employee_name' => $employee_name,
-                    'time' => date('H:i:s'),
                     'formatted_amount' => formatCurrency($amount),
                     'formatted_float' => formatCurrency($new_float),
-                    'formatted_cash' => formatCurrency($new_cash),
-                    'formatted_capital' => formatCurrency($new_capital)
+                    'formatted_cash' => formatCurrency($new_cash)
                 ]
             ]);
             exit();
         }
         
     } catch (Exception $e) {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
+        if ($db->inTransaction()) $db->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         exit();
     }
 }
 
 // ============================================================
-// BRANCH FILTER
+// TIME FILTER LOGIC
 // ============================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'today';
+$custom_from = isset($_GET['from_date']) ? $_GET['from_date'] : '';
+$custom_to = isset($_GET['to_date']) ? $_GET['to_date'] : '';
+
+$today = date('Y-m-d');
+
+switch ($filter) {
+    case 'all':
+        $from_date = '2000-01-01';
+        $to_date = date('Y-m-d');
+        break;
+    case 'today':
+        $from_date = $today;
+        $to_date = $today;
+        break;
+    case '1d':
+        $from_date = date('Y-m-d', strtotime('-1 day'));
+        $to_date = $today;
+        break;
+    case '1w':
+        $from_date = date('Y-m-d', strtotime('-7 days'));
+        $to_date = $today;
+        break;
+    case '1m':
+        $from_date = date('Y-m-d', strtotime('-1 month'));
+        $to_date = $today;
+        break;
+    case '3m':
+        $from_date = date('Y-m-d', strtotime('-3 months'));
+        $to_date = $today;
+        break;
+    case '6m':
+        $from_date = date('Y-m-d', strtotime('-6 months'));
+        $to_date = $today;
+        break;
+    case '1y':
+        $from_date = date('Y-m-d', strtotime('-1 year'));
+        $to_date = $today;
+        break;
+    case 'custom':
+        $from_date = !empty($custom_from) ? $custom_from : date('Y-m-01');
+        $to_date = !empty($custom_to) ? $custom_to : $today;
+        break;
+    default:
+        $from_date = date('Y-m-01');
+        $to_date = $today;
+}
+
+// Branch filter
 $selected_branch = 0;
 if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id'] !== '0') {
     $selected_branch = intval($_GET['branch_id']);
-} elseif (isset($_GET['branch']) && $_GET['branch'] !== '' && $_GET['branch'] !== '0') {
-    $selected_branch = intval($_GET['branch']);
 }
 
 if ($selected_branch == 0) {
@@ -363,10 +347,8 @@ if ($selected_branch > 0) {
     }
 }
 
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
-$to_date = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
-
 try {
+    // Get reports with providers
     $sql = "SELECT 
                 dr.id as report_id,
                 dr.report_number,
@@ -374,6 +356,7 @@ try {
                 dr.created_at,
                 dr.net_profit,
                 dr.current_capital,
+                dr.current_cash,
                 e.full_name as employee_name,
                 b.branch_name as branch_name,
                 b.branch_code as branch_code,
@@ -382,9 +365,7 @@ try {
                 drp.provider_code,
                 drp.provider_name,
                 drp.morning_float,
-                drp.morning_cash,
                 drp.current_float,
-                drp.current_cash,
                 drp.total_deposits as provider_deposits,
                 drp.total_withdrawals as provider_withdrawals,
                 p.icon_class,
@@ -423,6 +404,7 @@ try {
                 'created_at' => $row['created_at'],
                 'net_profit' => $row['net_profit'],
                 'current_capital' => $row['current_capital'],
+                'current_cash' => $row['current_cash'],
                 'providers' => []
             ];
         }
@@ -433,12 +415,9 @@ try {
                 'provider_code' => $row['provider_code'],
                 'provider_name' => $row['provider_name'],
                 'morning_float' => $row['morning_float'],
-                'morning_cash' => $row['morning_cash'],
                 'current_float' => $row['current_float'],
-                'current_cash' => $row['current_cash'],
                 'total_deposits' => $row['provider_deposits'],
                 'total_withdrawals' => $row['provider_withdrawals'],
-                'employee_name' => $row['employee_name'],
                 'icon_class' => $row['icon_class'] ?? 'fas fa-university',
                 'color_code' => $row['color_code'] ?? '#3B82F6',
                 'provider_type' => $row['provider_type'] ?? 'bank'
@@ -447,13 +426,12 @@ try {
     }
     $reports = array_values($reports);
 
+    // Get branches
     $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
     $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ============================================================
-    // SUMMARY - Daily Reports
-    // ============================================================
+    // Summary
     $sql_summary = "SELECT 
             COUNT(*) as total_reports,
             SUM(total_deposits) as total_deposits,
@@ -473,13 +451,7 @@ try {
     $stmt->execute($params_summary);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // ============================================================
-    // ✅ COUNT TRANSACTIONS (Deposits & Withdrawals)
-    // ============================================================
-    $deposit_count = 0;
-    $withdrawal_count = 0;
-    $total_transactions_count = 0;
-
+    // Transaction counts
     $sql_txn_count = "SELECT 
             COUNT(*) as total_count,
             SUM(CASE WHEN transaction_type = 'deposit' THEN 1 ELSE 0 END) as deposit_count,
@@ -501,11 +473,8 @@ try {
     $deposit_count = intval($txn_count_result['deposit_count'] ?? 0);
     $withdrawal_count = intval($txn_count_result['withdrawal_count'] ?? 0);
 
-    // ============================================================
-    // TOTAL FLOAT
-    // ============================================================
-    $sql_float = "SELECT 
-                    COALESCE(SUM(drp.current_float), 0) as total_float
+    // Total Float
+    $sql_float = "SELECT COALESCE(SUM(drp.current_float), 0) as total_float
                   FROM daily_report_providers drp
                   INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
                   WHERE dr.report_date BETWEEN ? AND ?";
@@ -521,29 +490,19 @@ try {
     $float_result = $stmt->fetch(PDO::FETCH_ASSOC);
     $total_float = floatval($float_result['total_float'] ?? 0);
 
-    // ============================================================
-    // TOTAL CASH
-    // ============================================================
-    $sql_cash = "SELECT 
-                    COALESCE(SUM(current_cash), 0) as total_cash
-                  FROM daily_reports
-                  WHERE report_date BETWEEN ? AND ?";
-    $params_cash = [$from_date, $to_date];
-    
-    if ($selected_branch > 0) {
-        $sql_cash .= " AND branch_id = ?";
-        $params_cash[] = $selected_branch;
-    }
-    
-    $stmt = $db->prepare($sql_cash);
-    $stmt->execute($params_cash);
-    $cash_result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_cash = floatval($cash_result['total_cash'] ?? 0);
+    // Total Cash
+    $stmt = $db->prepare("
+        SELECT current_cash FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch]);
+    $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_cash = floatval($dr_cash['current_cash'] ?? 0);
     $total_capital = $total_float + $total_cash;
 
-    // ============================================================
-    // PROVIDERS FOR MODAL
-    // ============================================================
+    // Providers for modal
     $providers_for_modal = [];
     if ($selected_branch > 0) {
         $stmt = $db->prepare("
@@ -592,9 +551,7 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-store-alt"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">
-                        <?php echo $selected_branch > 0 ? 'Current Branch' : 'Showing'; ?>
-                    </span>
+                    <span class="branch-indicator-label">Current Branch</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -615,7 +572,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- Capital Card -->
+        <!-- CAPITAL CARD -->
         <div class="capital-card-compact">
             <div class="capital-compact-icon">
                 <i class="fas fa-university"></i>
@@ -623,7 +580,7 @@ include_once '../../includes/admin_topbar.php';
             <div class="capital-compact-content">
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-coins"></i> Total Float
+                        <i class="fas fa-coins"></i> Float
                     </span>
                     <span class="capital-compact-value capital-float-value" id="totalFloatDisplay">
                         <?php echo formatCurrency($total_float); ?>
@@ -631,7 +588,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-money-bill-wave"></i> Cash Balance
+                        <i class="fas fa-money-bill-wave"></i> Cash
                     </span>
                     <span class="capital-compact-value capital-cash-value" id="totalCashDisplay">
                         <?php echo formatCurrency($total_cash); ?>
@@ -639,7 +596,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
                 <div class="capital-compact-item">
                     <span class="capital-compact-label">
-                        <i class="fas fa-building"></i> Total Capital
+                        <i class="fas fa-building"></i> Capital
                     </span>
                     <span class="capital-compact-value capital-capital-value" id="totalCapitalDisplay">
                         <?php echo formatCurrency($total_capital); ?>
@@ -647,110 +604,60 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
             <div class="capital-compact-badge">
-                <i class="fas fa-clock"></i> From Reports
+                <i class="fas fa-clock"></i> Live
             </div>
         </div>
 
-        <!-- Page Header (Generate button REMOVED) -->
-        <div class="page-header">
-            <div class="header-left">
-                <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> Daily Reports</h2>
-                <p class="text-muted">
-                    <i class="fas fa-info-circle"></i>
-                    Daily report inaundwa automatically baada ya ku-submit morning report
-                </p>
+        <!-- TIME FILTER BAR -->
+        <div class="time-filter-bar">
+            <div class="time-filter-left">
+                <i class="fas fa-calendar-alt"></i>
+                <span class="time-filter-label">Period:</span>
             </div>
-            <div class="header-right">
-                <button type="button" class="btn btn-deposit" onclick="openTransactionModal('deposit')">
-                    <i class="fas fa-arrow-down"></i> Add Deposit
-                </button>
+            <div class="time-filter-buttons">
+                <a href="?filter=all&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">All</a>
+                <a href="?filter=today&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">Today</a>
+                <a href="?filter=1d&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1d' ? 'active' : ''; ?>">1D</a>
+                <a href="?filter=1w&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1w' ? 'active' : ''; ?>">1W</a>
+                <a href="?filter=1m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1m' ? 'active' : ''; ?>">1M</a>
+                <a href="?filter=3m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '3m' ? 'active' : ''; ?>">3M</a>
+                <a href="?filter=6m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '6m' ? 'active' : ''; ?>">6M</a>
+                <a href="?filter=1y&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1y' ? 'active' : ''; ?>">1Y</a>
+                <a href="?filter=custom&branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo date('Y-m-01'); ?>&to_date=<?php echo date('Y-m-d'); ?>" 
+                   class="time-btn time-btn-custom <?php echo $filter === 'custom' ? 'active' : ''; ?>">
+                    <i class="fas fa-sliders-h"></i> Custom
+                </a>
+            </div>
+        </div>
+
+        <!-- FILTER BAR -->
+        <div class="filter-bar-main">
+            <form method="GET" action="" class="filter-form-main">
+                <input type="hidden" name="filter" value="custom">
                 
-                <button type="button" class="btn btn-withdrawal" onclick="openTransactionModal('withdrawal')">
-                    <i class="fas fa-arrow-up"></i> Add Withdrawal
-                </button>
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> From</label>
+                    <input type="date" name="from_date" class="filter-input" 
+                           value="<?php echo htmlspecialchars($from_date); ?>">
+                </div>
                 
-                <div class="dropdown export-dropdown">
-                    <button class="btn btn-export dropdown-toggle" onclick="toggleDropdown()">
-                        <i class="fas fa-file-export"></i> Export
-                        <i class="fas fa-chevron-down"></i>
-                    </button>
-                    <div class="dropdown-menu" id="exportMenu">
-                        <a href="#" onclick="exportData('csv')"><i class="fas fa-file-csv"></i> CSV</a>
-                        <a href="#" onclick="exportData('excel')"><i class="fas fa-file-excel"></i> Excel</a>
-                        <a href="#" onclick="exportData('pdf')"><i class="fas fa-file-pdf"></i> PDF</a>
-                        <a href="#" onclick="window.print()"><i class="fas fa-print"></i> Print</a>
-                    </div>
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> To</label>
+                    <input type="date" name="to_date" class="filter-input" 
+                           value="<?php echo htmlspecialchars($to_date); ?>">
                 </div>
-            </div>
-        </div>
-
-        <!-- ============================================================
-             Summary Cards - UPDATED
-             ============================================================ -->
-        <div class="summary-cards">
-            <!-- ✅ CARD 1: TOTAL TRANSACTIONS (idadi) -->
-            <div class="summary-card summary-card-transactions">
-                <div class="summary-icon-wrapper summary-icon-purple">
-                    <i class="fas fa-exchange-alt"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Transactions</span>
-                    <span class="summary-value" id="totalTransactionsDisplay"><?php echo number_format($total_transactions_count); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-info-circle"></i>
-                        All deposits & withdrawals
-                    </span>
-                </div>
-                <div class="summary-card-decoration"></div>
-            </div>
-            
-            <!-- ✅ CARD 2: TOTAL DEPOSITS (amount + count) -->
-            <div class="summary-card summary-card-deposits">
-                <div class="summary-icon-wrapper summary-icon-green">
-                    <i class="fas fa-arrow-down"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Deposits</span>
-                    <span class="summary-value" id="totalDepositsDisplay"><?php echo formatCurrency($summary['total_deposits'] ?? 0); ?></span>
-                    <span class="summary-sub" id="depositCountDisplay">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($deposit_count); ?> transactions
-                    </span>
-                </div>
-                <div class="summary-card-decoration"></div>
-            </div>
-            
-            <!-- ✅ CARD 3: TOTAL WITHDRAWALS (amount + count) -->
-            <div class="summary-card summary-card-withdrawals">
-                <div class="summary-icon-wrapper summary-icon-red">
-                    <i class="fas fa-arrow-up"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Withdrawals</span>
-                    <span class="summary-value" id="totalWithdrawalsDisplay"><?php echo formatCurrency($summary['total_withdrawals'] ?? 0); ?></span>
-                    <span class="summary-sub" id="withdrawalCountDisplay">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($withdrawal_count); ?> transactions
-                    </span>
-                </div>
-                <div class="summary-card-decoration"></div>
-            </div>
-        </div>
-
-        <!-- Filters -->
-        <div class="filters-bar">
-            <form method="GET" action="" class="filters-form">
-                <div class="filter-group">
-                    <label>From</label>
-                    <input type="date" name="from_date" value="<?php echo htmlspecialchars($from_date); ?>" class="form-control">
-                </div>
-                <div class="filter-group">
-                    <label>To</label>
-                    <input type="date" name="to_date" value="<?php echo htmlspecialchars($to_date); ?>" class="form-control">
-                </div>
-                <div class="filter-group">
-                    <label>Branch</label>
-                    <select name="branch_id" class="form-control">
+                
+                <div class="filter-item">
+                    <label><i class="fas fa-store-alt"></i> Branch</label>
+                    <select name="branch_id" class="filter-input filter-select">
                         <option value="0">All Branches</option>
                         <?php foreach ($branches as $b): ?>
                             <option value="<?php echo $b['id']; ?>" <?php echo $selected_branch == $b['id'] ? 'selected' : ''; ?>>
@@ -759,11 +666,137 @@ include_once '../../includes/admin_topbar.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="filter-group">
-                    <button type="submit" class="btn btn-filter"><i class="fas fa-search"></i> Filter</button>
-                    <a href="index.php" class="btn btn-reset"><i class="fas fa-undo"></i> Reset</a>
+                
+                <div class="filter-actions">
+                    <button type="submit" class="btn-filter-main">
+                        <i class="fas fa-search"></i> Filter
+                    </button>
+                    <a href="index.php" class="btn-reset-main">
+                        <i class="fas fa-undo"></i> Reset
+                    </a>
                 </div>
             </form>
+        </div>
+
+        <!-- SUMMARY CARDS -->
+        <div class="summary-cards-soft">
+            <div class="summary-card-soft summary-card-soft-purple">
+                <div class="summary-icon-soft">
+                    <i class="fas fa-exchange-alt"></i>
+                </div>
+                <div class="summary-info-soft">
+                    <span class="summary-label-soft">Total Transactions</span>
+                    <span class="summary-value-soft" id="totalTransactionsDisplay">
+                        <?php echo number_format($total_transactions_count); ?>
+                    </span>
+                    <span class="summary-sub-soft">
+                        <i class="fas fa-info-circle"></i> All deposits & withdrawals
+                    </span>
+                </div>
+                <div class="summary-decoration-soft"></div>
+            </div>
+            
+            <div class="summary-card-soft summary-card-soft-green">
+                <div class="summary-icon-soft">
+                    <i class="fas fa-arrow-down"></i>
+                </div>
+                <div class="summary-info-soft">
+                    <span class="summary-label-soft">Total Deposits</span>
+                    <span class="summary-value-soft" id="totalDepositsDisplay">
+                        <?php echo formatCurrency($summary['total_deposits'] ?? 0); ?>
+                    </span>
+                    <span class="summary-sub-soft" id="depositCountDisplay">
+                        <i class="fas fa-list"></i> <?php echo number_format($deposit_count); ?> transactions
+                    </span>
+                </div>
+                <div class="summary-decoration-soft"></div>
+            </div>
+            
+            <div class="summary-card-soft summary-card-soft-red">
+                <div class="summary-icon-soft">
+                    <i class="fas fa-arrow-up"></i>
+                </div>
+                <div class="summary-info-soft">
+                    <span class="summary-label-soft">Total Withdrawals</span>
+                    <span class="summary-value-soft" id="totalWithdrawalsDisplay">
+                        <?php echo formatCurrency($summary['total_withdrawals'] ?? 0); ?>
+                    </span>
+                    <span class="summary-sub-soft" id="withdrawalCountDisplay">
+                        <i class="fas fa-list"></i> <?php echo number_format($withdrawal_count); ?> transactions
+                    </span>
+                </div>
+                <div class="summary-decoration-soft"></div>
+            </div>
+            
+            <div class="summary-card-soft summary-card-soft-blue">
+                <div class="summary-icon-soft">
+                    <i class="fas fa-file-alt"></i>
+                </div>
+                <div class="summary-info-soft">
+                    <span class="summary-label-soft">Total Reports</span>
+                    <span class="summary-value-soft">
+                        <?php echo number_format($summary['total_reports'] ?? 0); ?>
+                    </span>
+                    <span class="summary-sub-soft">
+                        <i class="fas fa-check-circle"></i> Completed reports
+                    </span>
+                </div>
+                <div class="summary-decoration-soft"></div>
+            </div>
+        </div>
+
+        <!-- PAGE HEADER WITH BIGGER BUTTONS + EXPORT -->
+        <div class="page-header">
+            <div class="header-left">
+                <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> Daily Reports</h2>
+                <p class="text-muted">
+                    <i class="fas fa-calendar"></i>
+                    <?php echo date('d M Y', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
+                </p>
+            </div>
+            <div class="header-right">
+                <button type="button" class="btn-action-big btn-action-deposit" onclick="openTransactionModal('deposit')">
+                    <i class="fas fa-arrow-down"></i>
+                    <span>Add Deposit</span>
+                </button>
+                
+                <button type="button" class="btn-action-big btn-action-withdrawal" onclick="openTransactionModal('withdrawal')">
+                    <i class="fas fa-arrow-up"></i>
+                    <span>Add Withdrawal</span>
+                </button>
+                
+                <!-- EXPORT DROPDOWN - PDF, CSV, Word -->
+                <div class="dropdown export-dropdown">
+                    <button type="button" class="btn-action-big btn-action-export dropdown-toggle" onclick="toggleExportDropdown(event)">
+                        <i class="fas fa-file-export"></i>
+                        <span>Export</span>
+                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                    </button>
+                    <div class="dropdown-menu" id="exportDropdownMenu">
+                        <a href="#" onclick="exportData('pdf'); return false;">
+                            <i class="fas fa-file-pdf" style="color:#DC2626;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as PDF</span>
+                                <span class="dropdown-item-desc">Print-ready document</span>
+                            </div>
+                        </a>
+                        <a href="#" onclick="exportData('csv'); return false;">
+                            <i class="fas fa-file-csv" style="color:#059669;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as CSV</span>
+                                <span class="dropdown-item-desc">Excel compatible</span>
+                            </div>
+                        </a>
+                        <a href="#" onclick="exportData('word'); return false;">
+                            <i class="fas fa-file-word" style="color:#2563EB;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as Word</span>
+                                <span class="dropdown-item-desc">Microsoft Word document</span>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Global Search -->
@@ -800,7 +833,6 @@ include_once '../../includes/admin_topbar.php';
                          data-report-date="<?php echo $report['report_date']; ?>"
                          data-search="<?php echo htmlspecialchars($search_data); ?>">
                         
-                        <!-- REPORT HEADER -->
                         <div class="report-group-header">
                             <div class="report-header-left">
                                 <div class="report-icon">
@@ -895,7 +927,6 @@ include_once '../../includes/admin_topbar.php';
                                             </div>
                                         </th>
                                     </tr>
-                                    <!-- COLUMN HEADERS (Employee column REMOVED) -->
                                     <tr>
                                         <th style="width: 50px;">#</th>
                                         <th>Date</th>
@@ -921,7 +952,7 @@ include_once '../../includes/admin_topbar.php';
                                         $sum_deposits += floatval($p['total_deposits']);
                                         $sum_withdrawals += floatval($p['total_withdrawals']);
                                         
-                                        $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code'] . ' ' . ($p['employee_name'] ?? ''));
+                                        $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code']);
                                         $provider_color = $p['color_code'] ?? '#3B82F6';
                                         $provider_icon = $p['icon_class'] ?? 'fas fa-university';
                                     ?>
@@ -1045,10 +1076,10 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-inbox"></i>
                 <h3>No daily reports found</h3>
-                <p>Daily reports zinaundwa automatically baada ya ku-submit morning report.</p>
+                <p>No daily reports found in this period.</p>
                 <p style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">
                     <i class="fas fa-info-circle"></i>
-                    Submitting morning report itaunda daily report automatically.
+                    Change the filter or create a morning report first.
                 </p>
             </div>
         <?php endif; ?>
@@ -1057,9 +1088,7 @@ include_once '../../includes/admin_topbar.php';
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- ============================================================
-   TRANSACTION MODAL
-   ============================================================ -->
+<!-- TRANSACTION MODAL -->
 <div class="txn-modal-overlay" id="txnModalOverlay" onclick="closeTransactionModal(event)">
     <div class="txn-modal" onclick="event.stopPropagation()">
         
@@ -1128,7 +1157,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="txn-balance-item">
                         <span class="txn-balance-label">
-                            <i class="fas fa-arrow-right"></i> After Transaction
+                            <i class="fas fa-arrow-right"></i> After
                         </span>
                         <span class="txn-balance-value txn-after-value" id="txnAfterFloat">TSh 0</span>
                     </div>
@@ -1145,10 +1174,6 @@ include_once '../../includes/admin_topbar.php';
                            autocomplete="off"
                            required
                            oninput="formatMoneyInput(this); updateBalancePreview();">
-                    <small class="txn-form-hint">
-                        <i class="fas fa-info-circle"></i> 
-                        Weka amount na comma separator (mfano: 1,000,000)
-                    </small>
                 </div>
                 
                 <div class="txn-form-group">
@@ -1233,7 +1258,9 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper { background: var(--bg-body) !important; }
 .main-content { background: var(--bg-body) !important; }
 
-/* Branch Card */
+/* ============================================================
+   BRANCH CARD
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 10px; padding: 12px 20px; margin-bottom: 12px;
@@ -1247,15 +1274,12 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border-radius: 50%; display: flex; align-items: center;
     justify-content: center; font-size: 16px; color: #FFFFFF; flex-shrink: 0;
 }
-.branch-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.branch-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .branch-indicator-label {
     font-size: 10px; font-weight: 500; opacity: 0.7;
     text-transform: uppercase; letter-spacing: 1px; color: #FFFFFF;
 }
-.branch-indicator-name {
-    font-weight: 700; font-size: 14px; color: #FFFFFF;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;
-}
+.branch-indicator-name { font-weight: 700; font-size: 14px; color: #FFFFFF; }
 .branch-indicator-code {
     font-size: 10px; font-weight: 600; color: #FFFFFF;
     padding: 2px 10px; background: rgba(255, 255, 255, 0.15); border-radius: 12px;
@@ -1265,19 +1289,20 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     color: rgba(255,255,255,0.85); padding: 3px 10px;
     background: rgba(255, 255, 255, 0.08); border-radius: 12px; white-space: nowrap;
 }
-.branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.branch-indicator-right .date-display {
+.date-display {
     font-size: 12px; color: rgba(255,255,255,0.85);
     padding: 5px 12px; background: rgba(255, 255, 255, 0.1);
     border-radius: 16px; display: flex; align-items: center; gap: 5px;
     white-space: nowrap;
 }
 
-/* Capital Card */
+/* ============================================================
+   CAPITAL CARD
+   ============================================================ */
 .capital-card-compact {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
-    border-radius: 14px; padding: 20px 26px; margin-bottom: 18px;
-    display: flex; align-items: center; gap: 22px;
+    border-radius: 14px; padding: 18px 24px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 20px;
     box-shadow: 0 6px 24px rgba(30, 64, 175, 0.35);
     flex-wrap: wrap; max-width: 100%; position: relative; overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1289,32 +1314,31 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border-radius: 50%; pointer-events: none;
 }
 .capital-compact-icon {
-    width: 60px; height: 60px; background: rgba(255,255,255,0.18);
+    width: 55px; height: 55px; background: rgba(255,255,255,0.18);
     border-radius: 14px; display: flex; align-items: center;
-    justify-content: center; font-size: 26px; color: #FFFFFF;
+    justify-content: center; font-size: 24px; color: #FFFFFF;
     flex-shrink: 0; position: relative; z-index: 1;
     backdrop-filter: blur(8px); border: 1.5px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 .capital-compact-content {
     flex: 1; min-width: 0;
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;
     position: relative; z-index: 1;
 }
 .capital-compact-item {
-    display: flex; flex-direction: column; gap: 6px;
-    padding: 8px 0; border-left: 3px solid rgba(255, 255, 255, 0.15);
-    padding-left: 16px; transition: all 0.3s ease;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 0; border-left: 3px solid rgba(255, 255, 255, 0.15);
+    padding-left: 14px; transition: all 0.3s ease;
 }
 .capital-compact-item:hover { border-left-color: #FCD34D; transform: translateX(4px); }
 .capital-compact-label {
-    font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.85);
+    font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.85);
     text-transform: uppercase; letter-spacing: 1.2px;
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 5px;
 }
-.capital-compact-label i { font-size: 12px; color: #FCD34D; }
+.capital-compact-label i { font-size: 11px; color: #FCD34D; }
 .capital-compact-value {
-    font-size: 26px; font-weight: 900; letter-spacing: 0.5px;
+    font-size: 22px; font-weight: 900; letter-spacing: 0.5px;
     line-height: 1.15; word-break: break-word;
     font-family: 'Inter', 'Courier New', monospace;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
@@ -1330,332 +1354,904 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border: 1.5px solid rgba(252, 211, 77, 0.35);
     flex-shrink: 0; white-space: nowrap;
     position: relative; z-index: 1;
-    box-shadow: 0 2px 10px rgba(252, 211, 77, 0.2);
 }
 
 /* ============================================================
-   SUMMARY CARDS - UPDATED
+   TIME FILTER BAR
    ============================================================ */
-.summary-cards {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 16px; margin-bottom: 18px; max-width: 100%;
-}
-.summary-card {
-    position: relative; background: var(--bg-card);
-    border-radius: 14px; padding: 18px 22px;
+.time-filter-bar {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
     border: 1.5px solid var(--border-color);
-    display: flex; align-items: center; gap: 16px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 0; overflow: hidden;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-.summary-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px var(--shadow-hover); }
 
-/* ✅ Card 1: Transactions - Purple */
-.summary-card-transactions { border-left: 4px solid #7C3AED; }
-/* Card 2: Deposits - Green */
-.summary-card-deposits { border-left: 4px solid #059669; }
-/* Card 3: Withdrawals - Red */
-.summary-card-withdrawals { border-left: 4px solid #DC2626; }
-
-.summary-icon-wrapper {
-    width: 52px; height: 52px; border-radius: 14px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-.summary-card:hover .summary-icon-wrapper { transform: scale(1.08) rotate(-4deg); }
-
-/* ✅ New: Purple icon for transactions */
-.summary-icon-purple { 
-    background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%); 
-    color: #7C3AED; 
-    border: 1.5px solid #C4B5FD; 
-}
-.summary-icon-green { 
-    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); 
-    color: #059669; 
-    border: 1.5px solid #6EE7B7; 
-}
-.summary-icon-red { 
-    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%); 
-    color: #DC2626; 
-    border: 1.5px solid #FCA5A5; 
+.time-filter-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
 }
 
-html.dark-mode .summary-icon-purple { 
-    background: linear-gradient(135deg, #4C1D95 0%, #5B21B6 100%); 
-    color: #C4B5FD; 
-    border-color: #A78BFA; 
-}
-html.dark-mode .summary-icon-green { 
-    background: linear-gradient(135deg, #065F46 0%, #047857 100%); 
-    color: #34D399; 
-    border-color: #10B981; 
-}
-html.dark-mode .summary-icon-red { 
-    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%); 
-    color: #FCA5A5; 
-    border-color: #DC2626; 
+.time-filter-left i {
+    color: #bb0404;
+    font-size: 14px;
 }
 
-.summary-info { 
-    display: flex; flex-direction: column; min-width: 0; 
-    flex: 1; gap: 2px; 
-}
-.summary-label {
-    font-size: 11px; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.summary-value {
-    font-size: 22px; font-weight: 900; color: var(--text-primary);
-    word-break: break-word; font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px; line-height: 1.2;
+.time-filter-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex: 1;
 }
 
-/* ✅ NEW: Small text under value */
-.summary-sub {
+.time-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.time-btn:hover {
+    background: var(--bg-table-hover);
+    border-color: #bb0404;
+    color: #bb0404;
+    transform: translateY(-1px);
+}
+
+.time-btn.active {
+    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
+    color: #FFFFFF;
+    border-color: #8a0303;
+    box-shadow: 0 4px 12px rgba(187, 4, 4, 0.35);
+    transform: translateY(-1px);
+}
+
+.time-btn-custom {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    color: #FFFFFF;
+    border-color: #6D28D9;
+}
+
+.time-btn-custom:hover {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    color: #FFFFFF;
+    border-color: #5B21B6;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+}
+
+.time-btn-custom.active {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    border-color: #5B21B6;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
+}
+
+/* ============================================================
+   MAIN FILTER BAR
+   ============================================================ */
+.filter-bar-main {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.filter-form-main {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.filter-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 160px;
+}
+
+.filter-item label {
     font-size: 11px;
+    font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.filter-item label i {
+    color: #bb0404;
+    font-size: 11px;
+}
+
+.filter-input {
+    padding: 11px 14px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    font-family: 'Inter', sans-serif;
+    transition: all 0.25s ease;
+    width: 100%;
+}
+
+.filter-input:focus {
+    outline: none;
+    border-color: #bb0404;
+    box-shadow: 0 0 0 3px rgba(187, 4, 4, 0.12);
+    background: var(--bg-card);
+}
+
+.filter-select {
+    cursor: pointer;
+}
+
+.filter-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    flex-shrink: 0;
+}
+
+.btn-filter-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 22px;
+    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(187, 4, 4, 0.3);
+    white-space: nowrap;
+}
+
+.btn-filter-main:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(187, 4, 4, 0.45);
+    color: #FFFFFF;
+}
+
+.btn-reset-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 22px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.btn-reset-main:hover {
+    background: var(--bg-table-hover);
+    color: var(--text-primary);
+    border-color: #94A3B8;
+    transform: translateY(-2px);
+}
+
+/* ============================================================
+   SUMMARY CARDS - SOFT BACKGROUND
+   ============================================================ */
+.summary-cards-soft {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+    max-width: 100%;
+}
+
+.summary-card-soft {
+    position: relative;
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0;
+    overflow: hidden;
+    border: 1.5px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.summary-card-soft:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
+}
+
+.summary-card-soft-purple {
+    background: rgba(124, 58, 237, 0.08);
+    border-color: rgba(124, 58, 237, 0.2);
+}
+.summary-card-soft-purple .summary-icon-soft {
+    background: rgba(124, 58, 237, 0.15);
+    color: #7C3AED;
+    border: 1.5px solid rgba(124, 58, 237, 0.3);
+}
+.summary-card-soft-purple .summary-value-soft { color: #6D28D9; }
+
+.summary-card-soft-green {
+    background: rgba(5, 150, 105, 0.08);
+    border-color: rgba(5, 150, 105, 0.2);
+}
+.summary-card-soft-green .summary-icon-soft {
+    background: rgba(5, 150, 105, 0.15);
+    color: #059669;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+.summary-card-soft-green .summary-value-soft { color: #047857; }
+
+.summary-card-soft-red {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.2);
+}
+.summary-card-soft-red .summary-icon-soft {
+    background: rgba(220, 38, 38, 0.15);
+    color: #DC2626;
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+}
+.summary-card-soft-red .summary-value-soft { color: #B91C1C; }
+
+.summary-card-soft-blue {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.2);
+}
+.summary-card-soft-blue .summary-icon-soft {
+    background: rgba(37, 99, 235, 0.15);
+    color: #2563EB;
+    border: 1.5px solid rgba(37, 99, 235, 0.3);
+}
+.summary-card-soft-blue .summary-value-soft { color: #1D4ED8; }
+
+html.dark-mode .summary-card-soft-purple { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html.dark-mode .summary-card-soft-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html.dark-mode .summary-card-soft-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html.dark-mode .summary-card-soft-blue { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
+html.dark-mode .summary-card-soft-purple .summary-value-soft { color: #C4B5FD; }
+html.dark-mode .summary-card-soft-green .summary-value-soft { color: #6EE7B7; }
+html.dark-mode .summary-card-soft-red .summary-value-soft { color: #FCA5A5; }
+html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
+
+.summary-icon-soft {
+    width: 50px;
+    height: 50px;
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.summary-card-soft:hover .summary-icon-soft {
+    transform: scale(1.08) rotate(-4deg);
+}
+
+.summary-info-soft {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+    gap: 2px;
+}
+
+.summary-label-soft {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 800;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.summary-value-soft {
+    font-size: 20px;
+    font-weight: 900;
+    word-break: break-word;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    line-height: 1.2;
+}
+
+.summary-sub-soft {
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-muted);
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    margin-top: 4px;
+    gap: 4px;
+    margin-top: 3px;
     letter-spacing: 0.2px;
     line-height: 1.3;
 }
-.summary-sub i {
-    font-size: 10px;
+
+.summary-sub-soft i {
+    font-size: 9px;
     color: var(--text-light);
     flex-shrink: 0;
 }
-html.dark-mode .summary-sub { color: var(--text-muted); }
-html.dark-mode .summary-sub i { color: var(--text-light); }
 
-.summary-card-decoration {
-    position: absolute; top: -30px; right: -30px;
-    width: 100px; height: 100px; border-radius: 50%;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.02) 100%);
+.summary-decoration-soft {
+    position: absolute;
+    top: -30px;
+    right: -30px;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
     pointer-events: none;
 }
 
-/* Page Header */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 16px; flex-wrap: wrap; gap: 12px; max-width: 100%;
-}
-.page-header .header-left h2 { font-size: 20px; font-weight: 700; margin: 0; }
-.page-header .header-left h2 i { margin-right: 8px; }
-.page-header .header-left .text-muted { font-size: 12px; color: var(--text-muted); margin: 4px 0 0 0; }
-.header-right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; max-width: 100%; }
-
-/* Buttons */
-.btn {
-    padding: 8px 16px; border: none; border-radius: 8px;
-    font-weight: 600; font-size: 12px; cursor: pointer;
-    text-decoration: none; display: inline-flex; align-items: center;
-    gap: 6px; transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif; white-space: nowrap;
-}
-.btn-deposit { background: #059669; color: white; }
-.btn-deposit:hover { background: #047857; transform: translateY(-1px); color: white; }
-.btn-withdrawal { background: #DC2626; color: white; }
-.btn-withdrawal:hover { background: #B91C1C; transform: translateY(-1px); color: white; }
-.btn-export { background: #10B981; color: white; }
-.btn-export:hover { background: #059669; transform: translateY(-1px); color: white; }
-.btn-filter { background: #bb0404; color: white; }
-.btn-filter:hover { background: #8a0303; color: white; }
-.btn-reset { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
-.btn-reset:hover { background: var(--bg-table-hover); color: var(--text-primary); }
-.btn-secondary { background: var(--bg-table-even); color: var(--text-secondary); border: 1px solid var(--border-color); }
-.btn-sm { padding: 5px 12px; font-size: 11px; }
-
-/* Filters */
-.filters-bar {
-    background: var(--bg-card); padding: 14px 18px;
-    border-radius: 10px; border: 1px solid var(--border-color);
-    margin-bottom: 16px; max-width: 100%;
-}
-.filters-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
-.filter-group { display: flex; flex-direction: column; gap: 4px; }
-.filter-group label {
-    font-size: 11px; font-weight: 600; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-.form-control {
-    padding: 8px 12px; border: 1px solid var(--border-color);
-    border-radius: 6px; font-size: 12px; color: var(--text-primary);
-    background: var(--bg-input); transition: all 0.3s ease;
-    min-width: 140px; font-family: 'Inter', sans-serif;
-}
-.form-control:focus {
-    outline: none; border-color: #bb0404;
-    box-shadow: 0 0 0 3px rgba(187,4,4,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: 100%;
 }
 
-/* Dropdown */
-.dropdown { position: relative; display: inline-block; }
+.page-header .header-left h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.page-header .header-left h2 i {
+    margin-right: 8px;
+}
+
+.page-header .header-left .text-muted {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 4px 0 0 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    max-width: 100%;
+}
+
+/* ============================================================
+   BIGGER ACTION BUTTONS
+   ============================================================ */
+.btn-action-big {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px 26px;
+    border: none;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 800;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-action-big i:first-child {
+    font-size: 16px;
+}
+
+.btn-action-big::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.6s ease, height 0.6s ease;
+}
+
+.btn-action-big:hover::before {
+    width: 300px;
+    height: 300px;
+}
+
+.btn-action-big:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.btn-action-big > * {
+    position: relative;
+    z-index: 1;
+}
+
+.btn-action-deposit {
+    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+    color: #FFFFFF;
+}
+.btn-action-deposit:hover {
+    background: linear-gradient(135deg, #047857 0%, #059669 100%);
+    color: #FFFFFF;
+    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.45);
+}
+
+.btn-action-withdrawal {
+    background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%);
+    color: #FFFFFF;
+}
+.btn-action-withdrawal:hover {
+    background: linear-gradient(135deg, #B91C1C 0%, #DC2626 100%);
+    color: #FFFFFF;
+    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.45);
+}
+
+.btn-action-export {
+    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
+    color: #FFFFFF;
+}
+.btn-action-export:hover {
+    background: linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%);
+    color: #FFFFFF;
+    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.45);
+}
+
+.btn-action-export .dropdown-arrow {
+    font-size: 11px;
+    transition: transform 0.3s ease;
+    margin-left: 2px;
+}
+
+/* ============================================================
+   EXPORT DROPDOWN
+   ============================================================ */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.export-dropdown.open .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
 .dropdown-menu {
-    display: none; position: absolute; right: 0; top: 100%;
-    margin-top: 4px; background: var(--bg-card); min-width: 180px;
-    border-radius: 8px; box-shadow: 0 4px 20px var(--shadow-hover);
-    border: 1px solid var(--border-color); z-index: 1000;
-    overflow: hidden; padding: 4px 0;
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    min-width: 260px;
+    background: var(--bg-card);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    border: 1.5px solid var(--border-color);
+    overflow: hidden;
+    z-index: 1000;
+    animation: dropdownFadeIn 0.2s ease forwards;
 }
-.dropdown-menu.show { display: block; }
-.dropdown-menu a {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px; text-decoration: none; color: var(--text-primary);
-    font-size: 12px; transition: background 0.2s ease;
-}
-.dropdown-menu a:hover { background: var(--bg-table-hover); }
+.export-dropdown.open .dropdown-menu { display: block; }
 
-/* Global Search */
+@keyframes dropdownFadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.dropdown-menu a {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    text-decoration: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    border-bottom: 1px solid var(--border-color);
+    position: relative;
+}
+.dropdown-menu a:last-child { border-bottom: none; }
+.dropdown-menu a:hover {
+    background: var(--bg-table-hover);
+    padding-left: 22px;
+}
+.dropdown-menu a::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0;
+    width: 0; height: 100%;
+    background: linear-gradient(90deg, #1E40AF, #2563EB);
+    transition: width 0.2s ease;
+}
+.dropdown-menu a:hover::before { width: 4px; }
+.dropdown-menu a > i {
+    font-size: 24px;
+    width: 30px;
+    text-align: center;
+    flex-shrink: 0;
+}
+.dropdown-menu a > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+.dropdown-item-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.dropdown-item-desc {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* ============================================================
+   SEARCH BAR
+   ============================================================ */
 .search-bar-wrapper {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; margin-bottom: 16px; flex-wrap: wrap; max-width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    max-width: 100%;
 }
 .search-input-group {
-    display: flex; align-items: center; gap: 8px;
-    background: var(--bg-card); border: 1px solid var(--border-color);
-    border-radius: 8px; padding: 6px 12px; width: 280px;
-    transition: all 0.3s ease; max-width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    padding: 8px 14px;
+    width: 320px;
+    transition: all 0.3s ease;
+    max-width: 100%;
 }
-.search-input-group:focus-within { border-color: #bb0404; box-shadow: 0 0 0 3px rgba(187,4,4,0.1); }
-.search-input-group > i { color: #bb0404; font-size: 12px; }
+.search-input-group:focus-within {
+    border-color: #bb0404;
+    box-shadow: 0 0 0 3px rgba(187, 4, 4, 0.12);
+}
+.search-input-group > i {
+    color: #bb0404;
+    font-size: 13px;
+}
 .search-input-group input {
-    flex: 1; border: none; background: transparent;
-    padding: 4px 0; font-size: 12px; color: var(--text-primary);
-    outline: none; font-family: 'Inter', sans-serif; min-width: 0;
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-primary);
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    min-width: 0;
 }
-.search-input-group input::placeholder { color: var(--text-light); font-size: 11px; }
+.search-input-group input::placeholder {
+    color: var(--text-light);
+    font-size: 12px;
+}
 .search-input-group button {
-    background: #FEE2E2; color: #DC2626; border: none;
-    width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 9px; transition: all 0.2s ease; flex-shrink: 0;
+    background: #FEE2E2;
+    color: #DC2626;
+    border: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
 }
-.search-input-group button:hover { background: #DC2626; color: white; }
+.search-input-group button:hover {
+    background: #DC2626;
+    color: white;
+}
 .search-count {
-    font-size: 10px; font-weight: 700; padding: 2px 8px;
-    background: #F59E0B; color: #FFFFFF; border-radius: 8px; flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 9px;
+    background: #F59E0B;
+    color: #FFFFFF;
+    border-radius: 8px;
+    flex-shrink: 0;
 }
 .record-count {
-    font-size: 12px; font-weight: 600; color: var(--text-muted);
-    padding: 6px 14px; background: var(--bg-card);
-    border-radius: 8px; border: 1px solid var(--border-color); white-space: nowrap;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border-radius: 10px;
+    border: 1.5px solid var(--border-color);
+    white-space: nowrap;
 }
 
-/* Report Group */
+/* ============================================================
+   REPORT GROUP
+   ============================================================ */
 .report-group {
-    background: var(--bg-card); border-radius: 12px;
-    border: 1px solid var(--border-color); margin-bottom: 16px;
-    overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color);
-    transition: all 0.3s ease; max-width: 100%;
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 16px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    transition: all 0.3s ease;
+    max-width: 100%;
 }
 .report-group:hover { box-shadow: 0 4px 16px var(--shadow-hover); }
 .report-group.hidden-by-search { display: none !important; }
 
 .report-group-header {
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
-    padding: 14px 20px; display: flex; justify-content: space-between;
-    align-items: center; gap: 16px; flex-wrap: wrap; color: #FFFFFF; max-width: 100%;
+    padding: 14px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    color: #FFFFFF;
+    max-width: 100%;
 }
-.report-header-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+.report-header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+    min-width: 0;
+}
 .report-icon {
-    width: 42px; height: 42px; background: rgba(255,255,255,0.15);
-    border-radius: 10px; display: flex; align-items: center;
-    justify-content: center; font-size: 18px; color: #FFFFFF; flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: #FFFFFF;
+    flex-shrink: 0;
 }
 .report-header-info { flex: 1; min-width: 0; }
-.report-header-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
-.report-label { font-size: 11px; font-weight: 600; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+.report-header-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+.report-label {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
 .report-number {
-    font-size: 16px; font-weight: 800; color: #FFFFFF;
-    font-family: 'Courier New', monospace; letter-spacing: 0.5px; word-break: break-all;
+    font-size: 16px;
+    font-weight: 800;
+    color: #FFFFFF;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
+    word-break: break-all;
 }
-.report-header-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.report-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
 .report-header-meta .meta-item {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 11px; color: rgba(255,255,255,0.85); font-weight: 500; white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.85);
+    font-weight: 500;
+    white-space: nowrap;
 }
-.report-header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
+.report-header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
 .report-stat {
-    display: flex; flex-direction: column; align-items: center;
-    padding: 6px 14px; background: rgba(255,255,255,0.12);
-    border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); white-space: nowrap;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    white-space: nowrap;
 }
 .report-stat .stat-label {
-    font-size: 9px; font-weight: 600; opacity: 0.7;
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 9px;
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
-.report-stat .stat-value { font-size: 14px; font-weight: 800; color: #FFFFFF; margin-top: 2px; }
+.report-stat .stat-value {
+    font-size: 14px;
+    font-weight: 800;
+    color: #FFFFFF;
+    margin-top: 2px;
+}
 .report-stat .stat-value.text-success { color: #86EFAC; }
 .report-stat .stat-value.text-danger { color: #FCA5A5; }
-.report-header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.btn-view-report, .btn-edit-report, .btn-delete-report {
-    padding: 6px 14px; border: none; border-radius: 6px;
-    font-size: 11px; font-weight: 700; cursor: pointer;
-    text-decoration: none; display: inline-flex; align-items: center;
-    gap: 5px; transition: all 0.2s ease; white-space: nowrap;
+.report-header-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
 }
-.btn-view-report { background: rgba(255,255,255,0.2); color: #FFFFFF; border: 1px solid rgba(255,255,255,0.2); }
+.btn-view-report, .btn-edit-report, .btn-delete-report {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+.btn-view-report {
+    background: rgba(255,255,255,0.2);
+    color: #FFFFFF;
+    border: 1px solid rgba(255,255,255,0.2);
+}
 .btn-view-report:hover { background: #FFFFFF; color: #bb0404; }
-.btn-edit-report { background: rgba(252, 211, 77, 0.25); color: #FCD34D; border: 1px solid rgba(252, 211, 77, 0.3); }
+.btn-edit-report {
+    background: rgba(252, 211, 77, 0.25);
+    color: #FCD34D;
+    border: 1px solid rgba(252, 211, 77, 0.3);
+}
 .btn-edit-report:hover { background: #FCD34D; color: #78350F; }
-.btn-delete-report { background: rgba(248, 113, 113, 0.25); color: #FECACA; border: 1px solid rgba(248, 113, 113, 0.3); padding: 6px 10px; }
+.btn-delete-report {
+    background: rgba(248, 113, 113, 0.25);
+    color: #FECACA;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    padding: 6px 10px;
+}
 .btn-delete-report:hover { background: #FCA5A5; color: #7F1D1D; }
 
 /* ============================================================
-   PROVIDERS TABLE - BEAUTIFUL DESIGN
+   PROVIDERS TABLE
    ============================================================ */
 .providers-table-wrapper {
-    overflow-x: auto; overflow-y: hidden;
-    max-width: 100%; -webkit-overflow-scrolling: touch; scroll-behavior: smooth;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
     background: var(--bg-card);
 }
 .providers-table-wrapper::-webkit-scrollbar { height: 10px; }
-.providers-table-wrapper::-webkit-scrollbar-track { 
-    background: var(--bg-table-even); 
-    border-radius: 5px; 
+.providers-table-wrapper::-webkit-scrollbar-track {
+    background: var(--bg-table-even);
+    border-radius: 5px;
     margin: 0 8px;
 }
-.providers-table-wrapper::-webkit-scrollbar-thumb { 
-    background: linear-gradient(135deg, #bb0404, #8a0303); 
-    border-radius: 5px; 
-}
-.providers-table-wrapper::-webkit-scrollbar-thumb:hover { 
-    background: linear-gradient(135deg, #8a0303, #6b0202); 
+.providers-table-wrapper::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #bb0404, #8a0303);
+    border-radius: 5px;
 }
 
-.providers-table { 
-    width: 100%; 
+.providers-table {
+    width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 13px; 
-    min-width: 1100px; 
+    font-size: 13px;
+    min-width: 1100px;
 }
 
-/* Search Row */
 .table-search-row { background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important; }
 .table-search-cell {
     padding: 12px 16px !important;
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important;
-    border-bottom: none !important; text-align: center !important;
+    border-bottom: none !important;
+    text-align: center !important;
     border-radius: 0 !important;
 }
 .table-search-row-content {
-    display: flex; align-items: center; justify-content: center;
-    gap: 16px; flex-wrap: wrap; width: 100%; padding: 2px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    width: 100%;
+    padding: 2px 0;
 }
 .table-search-wrapper {
-    position: relative; display: inline-flex;
-    align-items: center; gap: 8px;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     background: rgba(255, 255, 255, 0.98);
-    border-radius: 10px; padding: 8px 14px;
-    width: 300px; max-width: 100%; flex-shrink: 0; order: 1;
+    border-radius: 10px;
+    padding: 8px 14px;
+    width: 300px;
+    max-width: 100%;
+    flex-shrink: 0;
+    order: 1;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     border: 2px solid transparent;
     transition: all 0.3s ease;
@@ -1664,378 +2260,393 @@ html.dark-mode .summary-sub i { color: var(--text-light); }
     border-color: #FCD34D;
     box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
 }
-html.dark-mode .table-search-wrapper { 
-    background: rgba(30, 41, 59, 0.98); 
-    border-color: rgba(255, 255, 255, 0.1);
-}
 .table-search-icon { color: #bb0404; font-size: 13px; flex-shrink: 0; }
 .table-search-input {
-    flex: 1; border: none; background: transparent;
-    padding: 4px 2px; font-size: 13px;
-    font-family: 'Inter', sans-serif; color: #1F2937; outline: none; min-width: 0;
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 4px 2px;
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    color: #1F2937;
+    outline: none;
+    min-width: 0;
     font-weight: 500;
 }
-html.dark-mode .table-search-input { color: #F9FAFB; }
 .table-search-input::placeholder { color: #9CA3AF; font-size: 12px; }
 .table-search-clear {
-    width: 22px; height: 22px; border-radius: 50%;
-    background: #FEE2E2; color: #DC2626; border: none;
-    cursor: pointer; display: flex; align-items: center;
-    justify-content: center; font-size: 10px;
-    transition: all 0.2s ease; flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #FEE2E2;
+    color: #DC2626;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
 }
-.table-search-clear:hover { background: #DC2626; color: #FFFFFF; transform: scale(1.1); }
+.table-search-clear:hover { background: #DC2626; color: #FFFFFF; }
 .table-search-count {
-    font-size: 10px; font-weight: 800; padding: 3px 9px;
-    background: #FCD34D; color: #78350F; border-radius: 8px;
-    white-space: nowrap; flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 9px;
+    background: #FCD34D;
+    color: #78350F;
+    border-radius: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .table-scroll-controls {
-    display: flex; align-items: center; justify-content: center;
-    gap: 10px; padding: 0; background: transparent;
-    border: none; flex-shrink: 0; order: 2; margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-shrink: 0;
+    order: 2;
+    margin: 0 auto;
 }
 .scroll-label {
-    font-size: 11px; font-weight: 800; color: #FCD34D;
-    text-transform: uppercase; letter-spacing: 1px;
-    display: flex; align-items: center; gap: 5px;
-    white-space: nowrap; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    font-size: 11px;
+    font-weight: 800;
+    color: #FCD34D;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     padding: 0 4px;
 }
-.scroll-label i { font-size: 11px; color: #FCD34D; }
 .scroll-btn {
-    width: 36px; height: 36px; border-radius: 8px;
-    border: 2px solid #FFFFFF; background: #FFFFFF;
-    color: #bb0404; cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 800;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 2px solid #FFFFFF;
+    background: #FFFFFF;
+    color: #bb0404;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 800;
     transition: all 0.2s ease;
     box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
     flex-shrink: 0;
 }
 .scroll-btn:hover {
-    background: #FCD34D; color: #78350F;
-    border-color: #FCD34D; transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
+    background: #FCD34D;
+    color: #78350F;
+    border-color: #FCD34D;
+    transform: translateY(-2px);
 }
-.scroll-btn:active { transform: translateY(0); box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3); }
 
-/* Column Headers */
-.providers-table thead tr:not(.table-search-row) { 
+.providers-table thead tr:not(.table-search-row) {
     background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%);
 }
-html.dark-mode .providers-table thead tr:not(.table-search-row) {
-    background: linear-gradient(135deg, #334155 0%, #1e293b 100%);
-}
 .providers-table thead th:not(.table-search-cell) {
-    padding: 14px 16px; text-align: left; font-weight: 800;
-    color: var(--text-secondary); text-transform: uppercase;
-    font-size: 10px; letter-spacing: 1px;
-    border-bottom: 3px solid #bb0404; white-space: nowrap;
-    position: sticky; top: 0; z-index: 5;
+    padding: 14px 16px;
+    text-align: left;
+    font-weight: 800;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 1px;
+    border-bottom: 3px solid #bb0404;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 5;
 }
 .providers-table thead th.text-right { text-align: right; }
 
-/* Body Rows */
 .providers-table tbody tr {
     border-bottom: 1px solid var(--border-color);
     transition: all 0.25s ease;
-    position: relative;
 }
-.providers-table tbody tr:hover { 
+.providers-table tbody tr:hover {
     background: linear-gradient(135deg, rgba(187, 4, 4, 0.04), rgba(187, 4, 4, 0.02));
-    transform: scale(1.001);
-    box-shadow: 0 2px 8px rgba(187, 4, 4, 0.08);
 }
 .providers-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
-.providers-table tbody tr:nth-child(even):hover {
-    background: linear-gradient(135deg, rgba(187, 4, 4, 0.04), rgba(187, 4, 4, 0.02));
-}
 .providers-table tbody td {
-    padding: 14px 16px; color: var(--text-primary); vertical-align: middle;
+    padding: 14px 16px;
+    color: var(--text-primary);
+    vertical-align: middle;
 }
 .providers-table tbody td.text-right { text-align: right; }
 .provider-row.hidden-by-search { display: none !important; }
 
-/* Row Number */
 .row-number {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
     background: linear-gradient(135deg, #F1F5F9, #E2E8F0);
-    font-size: 11px; font-weight: 800; color: #475569;
+    font-size: 11px;
+    font-weight: 800;
+    color: #475569;
     border: 2px solid #CBD5E1;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
-html.dark-mode .row-number {
-    background: linear-gradient(135deg, #334155, #1e293b);
-    color: #CBD5E1;
-    border-color: #475569;
-}
-
-/* Date Cell */
-.date-cell { 
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 700; color: var(--text-secondary); 
+.date-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
     white-space: nowrap;
 }
-.date-cell i {
-    color: #bb0404;
-    font-size: 11px;
-}
-
-/* Provider Cell */
-.provider-cell { 
-    display: flex; align-items: center; gap: 12px; min-width: 0; 
-}
+.date-cell i { color: #bb0404; font-size: 11px; }
+.provider-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .provider-icon-circle {
-    width: 38px; height: 38px; border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 16px; flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #FFFFFF;
+    font-size: 16px;
+    flex-shrink: 0;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
     border: 2px solid rgba(255, 255, 255, 0.3);
     transition: all 0.3s ease;
 }
-.provider-icon-circle:hover {
-    transform: scale(1.08) rotate(-5deg);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
-}
-.provider-name-text { 
-    font-weight: 800; color: var(--text-primary); 
-    font-size: 13px; white-space: nowrap;
+.provider-icon-circle:hover { transform: scale(1.08) rotate(-5deg); }
+.provider-name-text {
+    font-weight: 800;
+    color: var(--text-primary);
+    font-size: 13px;
+    white-space: nowrap;
     letter-spacing: 0.2px;
 }
-
-/* Code Badge */
 .code-badge {
-    display: inline-flex; align-items: center; gap: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 5px 12px;
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
-    color: #1D4ED8; 
-    border-radius: 8px;
-    font-size: 11px; font-weight: 800;
-    font-family: 'Courier New', monospace; 
-    letter-spacing: 0.5px; white-space: nowrap;
-    border: 1.5px solid #93C5FD;
-    box-shadow: 0 2px 4px rgba(29, 78, 216, 0.1);
-}
-html.dark-mode .code-badge { 
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
-    color: #93C5FD; 
-    border-color: #3B82F6;
-}
-
-/* Amount Badges - IMPROVED */
-.amount-float {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 12px;
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1D4ED8;
-    border-radius: 8px; font-weight: 800; font-size: 12px;
-    font-family: 'Courier New', monospace; 
-    border: 1.5px solid #93C5FD; 
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 800;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
     white-space: nowrap;
-    box-shadow: 0 2px 4px rgba(29, 78, 216, 0.1);
+    border: 1.5px solid #93C5FD;
 }
-.amount-float i { font-size: 10px; opacity: 0.8; }
-html.dark-mode .amount-float { 
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
-    color: #93C5FD; 
-    border-color: #3B82F6;
+.amount-float {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1D4ED8;
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    border: 1.5px solid #93C5FD;
+    white-space: nowrap;
 }
-
 .amount-float-bold {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: 6px 14px;
-    background: linear-gradient(135deg, #1E40AF, #2563EB); 
+    background: linear-gradient(135deg, #1E40AF, #2563EB);
     color: #FFFFFF;
-    border-radius: 8px; font-weight: 900; font-size: 13px;
-    font-family: 'Courier New', monospace; 
-    border: 1.5px solid #1E40AF; 
+    border-radius: 8px;
+    font-weight: 900;
+    font-size: 13px;
+    font-family: 'Courier New', monospace;
+    border: 1.5px solid #1E40AF;
     white-space: nowrap;
     box-shadow: 0 3px 8px rgba(30, 64, 175, 0.25);
-    letter-spacing: 0.3px;
 }
-.amount-float-bold i { font-size: 10px; }
-html.dark-mode .amount-float-bold { 
-    background: linear-gradient(135deg, #2563EB, #3B82F6); 
-    color: #FFFFFF; 
-}
-
 .amount-deposit {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: 6px 12px;
-    background: linear-gradient(135deg, #DCFCE7, #BBF7D0); 
+    background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
     color: #15803D;
-    border-radius: 8px; font-weight: 800; font-size: 12px;
-    font-family: 'Courier New', monospace; 
-    border: 1.5px solid #86EFAC; 
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    border: 1.5px solid #86EFAC;
     white-space: nowrap;
-    box-shadow: 0 2px 4px rgba(21, 128, 61, 0.1);
 }
-.amount-deposit i { font-size: 10px; }
-html.dark-mode .amount-deposit { 
-    background: linear-gradient(135deg, #14532D, #166534); 
-    color: #4ADE80; 
-    border-color: #16A34A;
-}
-
 .amount-withdrawal {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: 6px 12px;
-    background: linear-gradient(135deg, #FEE2E2, #FECACA); 
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
     color: #991B1B;
-    border-radius: 8px; font-weight: 800; font-size: 12px;
-    font-family: 'Courier New', monospace; 
-    border: 1.5px solid #FCA5A5; 
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    border: 1.5px solid #FCA5A5;
     white-space: nowrap;
-    box-shadow: 0 2px 4px rgba(153, 27, 27, 0.1);
-}
-.amount-withdrawal i { font-size: 10px; }
-html.dark-mode .amount-withdrawal { 
-    background: linear-gradient(135deg, #7F1D1D, #991B1B); 
-    color: #FCA5A5; 
-    border-color: #DC2626;
 }
 
-/* Provider Actions */
-.provider-actions { 
-    display: flex; gap: 6px; justify-content: center; 
-}
+.provider-actions { display: flex; gap: 6px; justify-content: center; }
 .btn-provider {
-    width: 36px; height: 36px; border-radius: 10px; border: none;
-    display: inline-flex; align-items: center; justify-content: center;
-    cursor: pointer; transition: all 0.25s ease;
-    text-decoration: none; font-size: 14px;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    text-decoration: none;
+    font-size: 14px;
     position: relative;
     overflow: hidden;
 }
-.btn-provider::before {
-    content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    width: 0; height: 0;
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    transition: width 0.4s ease, height 0.4s ease;
+.btn-provider-view {
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1D4ED8;
+    border: 1.5px solid #93C5FD;
 }
-.btn-provider:hover::before {
-    width: 100%; height: 100%;
-}
-.btn-provider-view { 
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE); 
-    color: #1D4ED8; 
-    border: 1.5px solid #93C5FD; 
-    box-shadow: 0 2px 6px rgba(29, 78, 216, 0.15);
-}
-.btn-provider-view:hover { 
-    background: linear-gradient(135deg, #1D4ED8, #2563EB); 
-    color: #FFFFFF; 
+.btn-provider-view:hover {
+    background: linear-gradient(135deg, #1D4ED8, #2563EB);
+    color: #FFFFFF;
     transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
 }
-.btn-provider-edit { 
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A); 
-    color: #D97706; 
-    border: 1.5px solid #FCD34D; 
-    box-shadow: 0 2px 6px rgba(217, 119, 6, 0.15);
+.btn-provider-edit {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    color: #D97706;
+    border: 1.5px solid #FCD34D;
 }
-.btn-provider-edit:hover { 
-    background: linear-gradient(135deg, #D97706, #F59E0B); 
-    color: #FFFFFF; 
+.btn-provider-edit:hover {
+    background: linear-gradient(135deg, #D97706, #F59E0B);
+    color: #FFFFFF;
     transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(217, 119, 6, 0.4);
 }
-.btn-provider-delete { 
-    background: linear-gradient(135deg, #FEE2E2, #FECACA); 
-    color: #991B1B; 
-    border: 1.5px solid #FCA5A5; 
-    box-shadow: 0 2px 6px rgba(153, 27, 27, 0.15);
+.btn-provider-delete {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    color: #991B1B;
+    border: 1.5px solid #FCA5A5;
 }
-.btn-provider-delete:hover { 
-    background: linear-gradient(135deg, #991B1B, #DC2626); 
-    color: #FFFFFF; 
+.btn-provider-delete:hover {
+    background: linear-gradient(135deg, #991B1B, #DC2626);
+    color: #FFFFFF;
     transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(153, 27, 27, 0.4);
 }
 
-html.dark-mode .btn-provider-view { 
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF); 
-    color: #60A5FA; 
-    border-color: #3B82F6; 
-}
-html.dark-mode .btn-provider-edit { 
-    background: linear-gradient(135deg, #5F3A1E, #78350F); 
-    color: #FBBF24; 
-    border-color: #F59E0B; 
-}
-html.dark-mode .btn-provider-delete { 
-    background: linear-gradient(135deg, #7F1D1D, #991B1B); 
-    color: #FCA5A5; 
-    border-color: #DC2626; 
-}
-
-/* Totals Row */
 .totals-row {
     background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important;
     border-top: 3px solid #bb0404;
 }
-html.dark-mode .totals-row { 
-    background: linear-gradient(135deg, #334155 0%, #1e293b 100%) !important; 
-}
-.totals-row td { 
-    padding: 16px 16px; 
-    font-weight: 900; 
-    color: var(--text-primary); 
+.totals-row td {
+    padding: 16px 16px;
+    font-weight: 900;
+    color: var(--text-primary);
     border-bottom: none;
     font-size: 13px;
 }
-.totals-row td strong {
-    font-size: 13px;
-    letter-spacing: 0.3px;
-}
 
-/* Messages */
 .no-providers-message {
-    padding: 30px; text-align: center; color: var(--text-muted);
-    font-size: 14px; display: flex; align-items: center;
-    justify-content: center; gap: 10px; background: var(--bg-table-even);
+    padding: 30px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: var(--bg-table-even);
     font-weight: 500;
 }
-.no-providers-message i {
-    font-size: 20px;
-    color: #bb0404;
-    opacity: 0.6;
-}
 .no-provider-results {
-    text-align: center; padding: 40px 20px; background: var(--bg-table-even);
+    text-align: center;
+    padding: 40px 20px;
+    background: var(--bg-table-even);
 }
-.no-provider-results i { 
-    font-size: 44px; color: var(--text-light); 
-    opacity: 0.4; display: block; margin-bottom: 12px; 
+.no-provider-results i {
+    font-size: 44px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 12px;
 }
-.no-provider-results p { 
-    font-size: 14px; color: var(--text-muted); 
-    margin: 0 0 16px 0; font-weight: 500;
+.no-provider-results p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 16px 0;
+    font-weight: 500;
 }
 
 .empty-state, .no-search-results {
-    text-align: center; padding: 60px 20px;
-    background: var(--bg-card); border-radius: 12px;
-    border: 1px solid var(--border-color); max-width: 100%;
+    text-align: center;
+    padding: 60px 20px;
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    max-width: 100%;
 }
 .empty-state i, .no-search-results i {
-    font-size: 56px; color: var(--text-light);
-    opacity: 0.4; display: block; margin-bottom: 16px;
+    font-size: 56px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 16px;
 }
-.empty-state h3, .no-search-results h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
-.empty-state p, .no-search-results p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
+.empty-state h3, .no-search-results h3 {
+    font-size: 18px;
+    color: var(--text-primary);
+    margin: 0 0 8px 0;
+}
+.empty-state p, .no-search-results p {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 20px 0;
+}
+
+.btn {
+    padding: 10px 22px;
+    border: none;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+.btn-secondary {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.btn-secondary:hover { background: var(--bg-table-hover); color: var(--text-primary); }
+.btn-sm { padding: 5px 12px; font-size: 11px; }
 
 /* ============================================================
    TRANSACTION MODAL
    ============================================================ */
 .txn-modal-overlay {
-    display: none; position: fixed;
+    display: none;
+    position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(4px);
@@ -2047,7 +2658,7 @@ html.dark-mode .totals-row {
 }
 .txn-modal-overlay.show { display: flex; animation: fadeIn 0.2s ease forwards; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideUp {
+@keyframes slideUpModal {
     from { opacity: 0; transform: translateY(30px) scale(0.96); }
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
@@ -2060,7 +2671,7 @@ html.dark-mode .totals-row {
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-    animation: slideUp 0.3s ease forwards;
+    animation: slideUpModal 0.3s ease forwards;
     border: 1px solid var(--border-color);
 }
 
@@ -2074,8 +2685,12 @@ html.dark-mode .totals-row {
     overflow: hidden;
     color: white;
 }
-.txn-modal-header.txn-header-deposit { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
-.txn-modal-header.txn-header-withdrawal { background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%); }
+.txn-modal-header.txn-header-deposit {
+    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+}
+.txn-modal-header.txn-header-withdrawal {
+    background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%);
+}
 .txn-modal-header::before {
     content: '';
     position: absolute;
@@ -2092,16 +2707,13 @@ html.dark-mode .totals-row {
     display: flex; align-items: center; justify-content: center;
     font-size: 22px; flex-shrink: 0;
     border: 2px solid rgba(255, 255, 255, 0.25);
-    backdrop-filter: blur(8px);
     position: relative;
     z-index: 1;
 }
 .txn-modal-header-content { flex: 1; min-width: 0; position: relative; z-index: 1; }
 .txn-modal-header-content h3 {
     font-size: 18px; font-weight: 800;
-    margin: 0 0 2px 0;
-    color: #FFFFFF;
-    letter-spacing: 0.3px;
+    margin: 0 0 2px 0; color: #FFFFFF;
 }
 .txn-modal-header-content p {
     font-size: 12px; margin: 0;
@@ -2138,8 +2750,6 @@ html.dark-mode .totals-row {
 }
 .txn-modal-message.success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .txn-modal-message.error { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
-html.dark-mode .txn-modal-message.success { background: #065F46; color: #D1FAE5; border-color: #047857; }
-html.dark-mode .txn-modal-message.error { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 
 .txn-provider-info {
     background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
@@ -2150,9 +2760,7 @@ html.dark-mode .txn-modal-message.error { background: #7F1D1D; color: #FEE2E2; b
     display: flex;
     align-items: center;
     gap: 14px;
-    animation: slideDown 0.3s ease forwards;
 }
-html.dark-mode .txn-provider-info { background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%); border-color: #3B82F6; }
 .txn-provider-icon {
     width: 44px; height: 44px;
     border-radius: 50%;
@@ -2160,7 +2768,6 @@ html.dark-mode .txn-provider-info { background: linear-gradient(135deg, #1E3A5F 
     color: #FFFFFF;
     display: flex; align-items: center; justify-content: center;
     font-size: 18px; flex-shrink: 0;
-    box-shadow: 0 3px 10px rgba(11, 94, 215, 0.35);
 }
 .txn-provider-details { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .txn-provider-label {
@@ -2168,13 +2775,10 @@ html.dark-mode .txn-provider-info { background: linear-gradient(135deg, #1E3A5F 
     text-transform: uppercase; letter-spacing: 1px;
     color: #1E40AF;
 }
-html.dark-mode .txn-provider-label { color: #93C5FD; }
 .txn-provider-name {
-    font-size: 15px; font-weight: 800;
-    color: #1E293B;
+    font-size: 15px; font-weight: 800; color: #1E293B;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-html.dark-mode .txn-provider-name { color: #F1F5F9; }
 .txn-provider-code {
     font-size: 11px; font-weight: 700;
     color: #1D4ED8;
@@ -2184,7 +2788,6 @@ html.dark-mode .txn-provider-name { color: #F1F5F9; }
     align-self: flex-start;
     font-family: 'Courier New', monospace;
 }
-html.dark-mode .txn-provider-code { background: #0F172A; color: #60A5FA; }
 
 .txn-form-group { margin-bottom: 16px; }
 .txn-form-group label {
@@ -2221,11 +2824,6 @@ html.dark-mode .txn-provider-code { background: #0F172A; color: #60A5FA; }
     text-align: right;
     padding-right: 18px;
 }
-.txn-form-hint {
-    display: flex; align-items: center; gap: 5px;
-    font-size: 11px; color: var(--text-muted); margin-top: 4px;
-}
-.txn-form-hint i { color: #2563EB; font-size: 11px; }
 
 .txn-balance-preview {
     background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
@@ -2236,9 +2834,7 @@ html.dark-mode .txn-provider-code { background: #0F172A; color: #60A5FA; }
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 14px;
-    animation: slideDown 0.3s ease forwards;
 }
-html.dark-mode .txn-balance-preview { background: linear-gradient(135deg, #5F3A1E 0%, #78350F 100%); border-color: #F59E0B; }
 .txn-balance-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .txn-balance-label {
     font-size: 10px; font-weight: 700;
@@ -2246,21 +2842,14 @@ html.dark-mode .txn-balance-preview { background: linear-gradient(135deg, #5F3A1
     color: #92400E;
     display: flex; align-items: center; gap: 5px;
 }
-html.dark-mode .txn-balance-label { color: #FCD34D; }
-.txn-balance-label i { font-size: 11px; }
 .txn-balance-value {
     font-size: 15px; font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
     word-break: break-all;
-    overflow-wrap: anywhere;
-    line-height: 1.15;
 }
 .txn-float-value { color: #1D4ED8; }
-html.dark-mode .txn-float-value { color: #60A5FA; }
 .txn-cash-value { color: #059669; }
-html.dark-mode .txn-cash-value { color: #34D399; }
 .txn-after-value { color: #7C3AED; }
-html.dark-mode .txn-after-value { color: #A78BFA; }
 
 .txn-form-actions {
     display: flex; gap: 12px; padding-top: 8px; flex-wrap: wrap;
@@ -2289,38 +2878,78 @@ html.dark-mode .txn-after-value { color: #A78BFA; }
 .txn-btn-submit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.5); }
 .txn-btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-@keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-@keyframes highlight {
-    0% { background: #FCD34D; transform: scale(1.05); }
-    100% { background: ''; transform: scale(1); }
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 1200px) {
+    .summary-cards-soft { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* Responsive */
 @media (max-width: 1024px) {
-    .summary-cards { grid-template-columns: repeat(3, 1fr); }
-    .capital-compact-content { grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-    .capital-compact-value { font-size: 22px; }
+    .capital-compact-content { grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+    .capital-compact-value { font-size: 18px; }
+    .filter-form-main { flex-wrap: wrap; }
+    .filter-item { min-width: 140px; }
 }
 
 @media (max-width: 768px) {
-    .summary-cards { grid-template-columns: 1fr; }
-    .filters-form { flex-direction: column; }
-    .filter-group { width: 100%; }
-    .filter-group .form-control { width: 100%; }
-    .page-header { flex-direction: column; align-items: flex-start; }
+    .summary-cards-soft { grid-template-columns: 1fr; }
+    
+    .time-filter-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+    .time-filter-left { justify-content: center; }
+    .time-filter-buttons { justify-content: center; }
+    .time-btn { flex: 1; min-width: 60px; }
+    
+    .filter-form-main {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .filter-item { min-width: 100%; }
+    .filter-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+    .btn-filter-main, .btn-reset-main {
+        width: 100%;
+        justify-content: center;
+    }
+    
     .header-right { width: 100%; flex-wrap: wrap; }
-    .header-right .btn { flex: 1; justify-content: center; }
+    .btn-action-big {
+        flex: 1;
+        min-width: 140px;
+        justify-content: center;
+        padding: 12px 20px;
+        font-size: 13px;
+    }
+    
+    .export-dropdown { flex: 1; }
+    .export-dropdown .btn-action-export {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .page-header { flex-direction: column; align-items: flex-start; }
     
     .branch-indicator { flex-direction: column; align-items: flex-start; }
     .branch-indicator-right { width: 100%; }
     
-    .capital-card-compact { flex-direction: column; align-items: stretch; padding: 16px 18px; gap: 14px; }
-    .capital-compact-icon { width: 50px; height: 50px; font-size: 22px; align-self: flex-start; }
+    .capital-card-compact {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 16px 18px;
+        gap: 14px;
+    }
+    .capital-compact-icon {
+        width: 50px; height: 50px; font-size: 22px;
+        align-self: flex-start;
+    }
     .capital-compact-content { grid-template-columns: 1fr; gap: 12px; }
-    .capital-compact-value { font-size: 20px; }
+    .capital-compact-value { font-size: 18px; }
     
     .search-input-group { width: 100%; }
     .report-group-header { flex-direction: column; align-items: flex-start; }
@@ -2341,17 +2970,26 @@ html.dark-mode .txn-after-value { color: #A78BFA; }
 }
 
 @media (max-width: 480px) {
-    .summary-card { padding: 14px 16px; gap: 12px; }
-    .summary-icon-wrapper { width: 44px; height: 44px; font-size: 18px; }
-    .summary-value { font-size: 18px; }
-    .summary-label { font-size: 10px; }
-    .summary-sub { font-size: 10px; }
-    .capital-compact-value { font-size: 17px; }
+    .summary-card-soft { padding: 14px 16px; gap: 12px; }
+    .summary-icon-soft { width: 44px; height: 44px; font-size: 18px; }
+    .summary-value-soft { font-size: 16px; }
+    .summary-label-soft { font-size: 9px; }
+    .summary-sub-soft { font-size: 9px; }
+    
+    .capital-compact-value { font-size: 16px; }
     .capital-compact-icon { width: 44px; height: 44px; font-size: 18px; }
+    
+    .time-btn { font-size: 11px; padding: 7px 12px; }
+    .time-filter-label { font-size: 10px; }
+    
+    .btn-action-big { padding: 11px 16px; font-size: 12px; }
+    .btn-action-big i:first-child { font-size: 14px; }
+    
+    .filter-item label { font-size: 10px; }
+    .filter-input { font-size: 12px; padding: 9px 12px; }
+    
     .scroll-btn { width: 32px; height: 32px; font-size: 13px; }
     .scroll-label { font-size: 9px; }
-    .txn-modal-header-content h3 { font-size: 16px; }
-    .txn-amount-input { font-size: 18px !important; }
 }
 </style>
 
@@ -2372,28 +3010,20 @@ function formatMoneyInput(input) {
     }
     
     value = value.replace(/^0+/, '') || '0';
-    
-    if (value.length > 15) {
-        value = value.substring(0, 15);
-    }
+    if (value.length > 15) value = value.substring(0, 15);
     
     let formatted = '';
     let count = 0;
     for (let i = value.length - 1; i >= 0; i--) {
-        if (count > 0 && count % 3 === 0) {
-            formatted = ',' + formatted;
-        }
+        if (count > 0 && count % 3 === 0) formatted = ',' + formatted;
         formatted = value[i] + formatted;
         count++;
     }
     
     input.value = formatted;
-    
     const newLength = formatted.length;
     const newCursorPos = cursorPos + (newLength - oldLength);
-    try {
-        input.setSelectionRange(newCursorPos, newCursorPos);
-    } catch (e) { }
+    try { input.setSelectionRange(newCursorPos, newCursorPos); } catch (e) { }
 }
 
 function formatMoney(num) {
@@ -2406,12 +3036,64 @@ function parseMoney(str) {
 }
 
 // ============================================================
+// TOGGLE EXPORT DROPDOWN
+// ============================================================
+function toggleExportDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.querySelector('.export-dropdown');
+    dropdown.classList.toggle('open');
+}
+
+document.addEventListener('click', function(e) {
+    const dropdown = document.querySelector('.export-dropdown');
+    if (dropdown && !dropdown.contains(e.target)) {
+        dropdown.classList.remove('open');
+    }
+});
+
+// ============================================================
+// EXPORT DATA
+// ============================================================
+function exportData(format) {
+    const dropdown = document.querySelector('.export-dropdown');
+    if (dropdown) dropdown.classList.remove('open');
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const fromDate = urlParams.get('from_date') || '<?php echo $from_date; ?>';
+    const toDate = urlParams.get('to_date') || '<?php echo $to_date; ?>';
+    const branchId = '<?php echo $selected_branch; ?>';
+    
+    const exportUrl = `export.php?format=${format}&from_date=${fromDate}&to_date=${toDate}&branch_id=${branchId}`;
+    
+    const formatLabels = { 'pdf': 'PDF', 'csv': 'CSV', 'word': 'Word' };
+    
+    const msg = `Export Daily Reports as ${formatLabels[format]}?\n\n` +
+                `Period: ${fromDate} to ${toDate}\n` +
+                `Branch: <?php echo htmlspecialchars($branch_name); ?>\n` +
+                `Records: <?php echo count($reports); ?> reports`;
+    
+    if (confirm(msg)) {
+        const exportBtn = document.querySelector('.btn-action-export');
+        const originalContent = exportBtn.innerHTML;
+        exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Exporting...</span>';
+        exportBtn.disabled = true;
+        
+        window.location.href = exportUrl;
+        
+        setTimeout(function() {
+            exportBtn.innerHTML = originalContent;
+            exportBtn.disabled = false;
+        }, 2000);
+    }
+}
+
+// ============================================================
 // TRANSACTION MODAL
 // ============================================================
 let currentProviderData = { float: 0, cash: 0 };
 let currentTxnType = 'deposit';
 
-function openTransactionModal(type, providerId = null, providerName = null) {
+function openTransactionModal(type, providerId = null) {
     currentTxnType = type;
     
     const overlay = document.getElementById('txnModalOverlay');
@@ -2455,19 +3137,14 @@ function openTransactionModal(type, providerId = null, providerName = null) {
     document.body.style.overflow = 'hidden';
     
     setTimeout(() => {
-        if (providerId) {
-            document.getElementById('txnAmount').focus();
-        } else {
-            document.getElementById('txnProviderSelect').focus();
-        }
+        if (providerId) document.getElementById('txnAmount').focus();
+        else document.getElementById('txnProviderSelect').focus();
     }, 300);
 }
 
 function closeTransactionModal(event) {
     if (event && event.target !== event.currentTarget) return;
-    
-    const overlay = document.getElementById('txnModalOverlay');
-    overlay.classList.remove('show');
+    document.getElementById('txnModalOverlay').classList.remove('show');
     document.body.style.overflow = '';
 }
 
@@ -2503,11 +3180,7 @@ async function onProviderChange() {
         formData.append('provider_id', providerId);
         formData.append('branch_id', '<?php echo $selected_branch; ?>');
         
-        const response = await fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        });
-        
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
         const data = await response.json();
         
         if (data.success) {
@@ -2523,30 +3196,18 @@ async function onProviderChange() {
             balancePreview.style.display = 'grid';
             updateBalancePreview();
         }
-    } catch (err) {
-        console.error('Error:', err);
-    }
+    } catch (err) { console.error('Error:', err); }
 }
 
 function updateBalancePreview() {
     const amount = parseMoney(document.getElementById('txnAmount').value);
     const currentFloat = currentProviderData.float;
     
-    let afterFloat = currentFloat;
-    if (currentTxnType === 'deposit') {
-        afterFloat = currentFloat + amount;
-    } else {
-        afterFloat = currentFloat - amount;
-    }
+    let afterFloat = currentTxnType === 'deposit' ? currentFloat + amount : currentFloat - amount;
     
     const afterEl = document.getElementById('txnAfterFloat');
     afterEl.textContent = formatMoney(afterFloat);
-    
-    if (currentTxnType === 'withdrawal' && afterFloat < 0) {
-        afterEl.style.color = '#DC2626';
-    } else {
-        afterEl.style.color = '';
-    }
+    afterEl.style.color = (currentTxnType === 'withdrawal' && afterFloat < 0) ? '#DC2626' : '';
 }
 
 async function submitTransaction(event) {
@@ -2559,33 +3220,19 @@ async function submitTransaction(event) {
     const providerId = formData.get('provider_id');
     const amount = parseMoney(formData.get('amount'));
     
-    if (!providerId) {
-        showModalMessage('Tafadhali chagua provider.', 'error');
-        return;
-    }
-    if (amount <= 0) {
-        showModalMessage('Tafadhali weka amount sahihi.', 'error');
-        return;
-    }
+    if (!providerId) { showModalMessage('Please select a provider.', 'error'); return; }
+    if (amount <= 0) { showModalMessage('Please enter a valid amount.', 'error'); return; }
     
     formData.set('amount', amount);
-    
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Inatuma...';
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     
     try {
-        const response = await fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        });
-        
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
         const data = await response.json();
         
         if (data.success) {
             showModalMessage(data.message, 'success');
-            
-            updateTableRow(data.transaction);
-            updateSummaryCards(data.transaction);
             
             setTimeout(() => {
                 closeTransactionModal();
@@ -2594,13 +3241,12 @@ async function submitTransaction(event) {
                 window.location.reload();
             }, 1500);
         } else {
-            showModalMessage(data.message || 'Kuna tatizo. Jaribu tena.', 'error');
+            showModalMessage(data.message || 'An error occurred. Please try again.', 'error');
             submitBtn.disabled = false;
             submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
         }
     } catch (err) {
-        console.error('Error:', err);
-        showModalMessage('Kuna tatizo la mtandao. Jaribu tena.', 'error');
+        showModalMessage('Network error. Please try again.', 'error');
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
     }
@@ -2611,89 +3257,6 @@ function showModalMessage(message, type) {
     messageDiv.className = 'txn-modal-message ' + type;
     messageDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> <span>${message}</span>`;
     messageDiv.style.display = 'flex';
-}
-
-function updateTableRow(txn) {
-    const rows = document.querySelectorAll(`.provider-row[data-provider-id="${txn.provider_id}"]`);
-    
-    rows.forEach(row => {
-        const floatCell = row.querySelector('.current-float-cell');
-        if (floatCell) {
-            floatCell.textContent = txn.formatted_float;
-            floatCell.style.animation = 'highlight 1s ease';
-        }
-        
-        if (txn.type === 'deposit') {
-            const depositCell = row.querySelector('.deposits-cell');
-            if (depositCell) {
-                const currentNum = parseMoney(depositCell.textContent);
-                const newTotal = currentNum + parseFloat(txn.amount);
-                depositCell.textContent = '+ ' + formatMoney(newTotal);
-                depositCell.style.animation = 'highlight 1s ease';
-            }
-        }
-        
-        if (txn.type === 'withdrawal') {
-            const withdrawalCell = row.querySelector('.withdrawals-cell');
-            if (withdrawalCell) {
-                const currentNum = parseMoney(withdrawalCell.textContent);
-                const newTotal = currentNum + parseFloat(txn.amount);
-                withdrawalCell.textContent = '- ' + formatMoney(newTotal);
-                withdrawalCell.style.animation = 'highlight 1s ease';
-            }
-        }
-    });
-}
-
-// ============================================================
-// UPDATE SUMMARY CARDS (With transaction count)
-// ============================================================
-function updateSummaryCards(txn) {
-    // ✅ Update Total Transactions count
-    const totalTxnEl = document.getElementById('totalTransactionsDisplay');
-    if (totalTxnEl) {
-        const currentNum = parseMoney(totalTxnEl.textContent);
-        const newTotal = currentNum + 1;
-        totalTxnEl.textContent = newTotal.toLocaleString();
-        totalTxnEl.style.animation = 'highlight 1s ease';
-    }
-    
-    const depositEl = document.getElementById('totalDepositsDisplay');
-    const withdrawalEl = document.getElementById('totalWithdrawalsDisplay');
-    
-    if (txn.type === 'deposit' && depositEl) {
-        const currentNum = parseMoney(depositEl.textContent);
-        const newTotal = currentNum + parseFloat(txn.amount);
-        depositEl.textContent = formatMoney(newTotal);
-        depositEl.style.animation = 'highlight 1s ease';
-        
-        // ✅ Update deposit count
-        const depositCountEl = document.getElementById('depositCountDisplay');
-        if (depositCountEl) {
-            const match = depositCountEl.textContent.match(/(\d+)/);
-            if (match) {
-                const newCount = parseInt(match[1]) + 1;
-                depositCountEl.innerHTML = `<i class="fas fa-list"></i> ${newCount.toLocaleString()} transactions`;
-            }
-        }
-    }
-    
-    if (txn.type === 'withdrawal' && withdrawalEl) {
-        const currentNum = parseMoney(withdrawalEl.textContent);
-        const newTotal = currentNum + parseFloat(txn.amount);
-        withdrawalEl.textContent = formatMoney(newTotal);
-        withdrawalEl.style.animation = 'highlight 1s ease';
-        
-        // ✅ Update withdrawal count
-        const withdrawalCountEl = document.getElementById('withdrawalCountDisplay');
-        if (withdrawalCountEl) {
-            const match = withdrawalCountEl.textContent.match(/(\d+)/);
-            if (match) {
-                const newCount = parseInt(match[1]) + 1;
-                withdrawalCountEl.innerHTML = `<i class="fas fa-list"></i> ${newCount.toLocaleString()} transactions`;
-            }
-        }
-    }
 }
 
 // ============================================================
@@ -2813,11 +3376,23 @@ function scrollTable(direction, reportId) {
     });
 }
 
+function deleteReport(id) {
+    if (confirm('Are you sure you want to delete this daily report?')) {
+        window.location.href = 'delete.php?id=' + id;
+    }
+}
+
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         const txnOverlay = document.getElementById('txnModalOverlay');
         if (txnOverlay && txnOverlay.classList.contains('show')) {
             closeTransactionModal();
+            return;
+        }
+        
+        const dropdown = document.querySelector('.export-dropdown');
+        if (dropdown && dropdown.classList.contains('open')) {
+            dropdown.classList.remove('open');
             return;
         }
         
@@ -2831,35 +3406,6 @@ document.addEventListener('keydown', function(e) {
         }
     }
 });
-
-function toggleDropdown() {
-    document.getElementById('exportMenu').classList.toggle('show');
-}
-document.addEventListener('click', function(e) {
-    if (!e.target.closest('.export-dropdown')) {
-        var menu = document.getElementById('exportMenu');
-        if (menu) menu.classList.remove('show');
-    }
-});
-
-function exportData(format) {
-    document.getElementById('exportMenu').classList.remove('show');
-    var params = new URLSearchParams();
-    params.set('format', format);
-    var selectedBranch = '<?php echo $selected_branch; ?>';
-    if (selectedBranch && selectedBranch !== '0') params.set('branch_id', selectedBranch);
-    var fromDate = '<?php echo $from_date; ?>';
-    var toDate = '<?php echo $to_date; ?>';
-    if (fromDate) params.set('from_date', fromDate);
-    if (toDate) params.set('to_date', toDate);
-    window.location.href = 'export.php?' + params.toString();
-}
-
-function deleteReport(id) {
-    if (confirm('Are you sure you want to delete this daily report?')) {
-        window.location.href = 'delete.php?id=' + id;
-    }
-}
 
 document.addEventListener('DOMContentLoaded', function() {
     function syncDarkMode() {

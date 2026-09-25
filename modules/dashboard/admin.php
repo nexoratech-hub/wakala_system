@@ -2,10 +2,9 @@
 // ================================================================
 // FILE: modules/dashboard/admin.php
 // WAKALA FINANCIAL SYSTEM - ADMIN DASHBOARD
-// ✅ Capital Section (Float | Cash | Total Capital)
-// ✅ 9 Cards: 3 Capital + 3 Income + 3 Activity
-// ✅ All cards show BRANCH-WIDE data (admin view)
-// ✅ REMOVED: Admin Filter Bar (branch filter iko kwenye topbar)
+// ✅ FIXED: Spacing sahihi - haigusi sidebar wala header
+// ✅ FIXED: Profile picture inaonekana
+// ✅ FIXED: Welcome card imepanda juu
 // ================================================================
 
 require_once '../../config/config.php';
@@ -41,7 +40,30 @@ if (!$admin) {
     exit();
 }
 
-// Branch filter - inatoka kwenye session (topbar) au GET
+// ============================================================
+// PROFILE PICTURE HANDLING
+// ============================================================
+$profile_pic_url = '';
+$profile_pic_exists = false;
+$profile_initials = '';
+
+$name_parts = explode(' ', trim($admin['full_name']));
+if (count($name_parts) >= 2) {
+    $profile_initials = strtoupper(substr($name_parts[0], 0, 1) . substr(end($name_parts), 0, 1));
+} else {
+    $profile_initials = strtoupper(substr($admin['full_name'] ?? 'U', 0, 2));
+}
+
+if (!empty($admin['profile_pic'])) {
+    $pic_path = $admin['profile_pic'];
+    $full_path = __DIR__ . '/../../' . $pic_path;
+    $profile_pic_url = '../../' . $pic_path;
+    if (file_exists($full_path)) {
+        $profile_pic_exists = true;
+    }
+}
+
+// Branch filter
 $selected_branch = 0;
 if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id'] !== '0') {
     $selected_branch = intval($_GET['branch_id']);
@@ -57,7 +79,6 @@ if ($selected_branch == 0) {
     $selected_branch = intval($admin['branch_id'] ?? 0);
 }
 
-// Branch info
 $branch_name = 'All Branches';
 $branch_code = '';
 $branch_location = '';
@@ -73,7 +94,7 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// CAPITAL DATA (Float + Cash + Total Capital)
+// CAPITAL DATA
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
@@ -107,20 +128,12 @@ $total_cash = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_cash'] ?? 0);
 $total_capital = $total_float + $total_cash;
 
 // ============================================================
-// SUMMARY DATA - BRANCH WIDE
+// SUMMARY DATA
 // ============================================================
 $today = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
 
-// ✅ Total Commission - Today
-$sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions WHERE DATE(commission_date) = ?";
-$params = [$today];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql); $stmt->execute($params);
-$commission_today = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-
-// ✅ Total Commission - This Month
 $sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions 
         WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?";
 $params = [$month, $year];
@@ -128,21 +141,12 @@ if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_
 $stmt = $db->prepare($sql); $stmt->execute($params);
 $commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// ✅ Total Commission - All Time
-$sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions WHERE 1=1";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql); $stmt->execute($params);
-$commission_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-
-// ✅ Total Other Income - All Time
 $sql = "SELECT COALESCE(SUM(other_income), 0) as total FROM commissions WHERE 1=1";
 $params = [];
 if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
 $stmt = $db->prepare($sql); $stmt->execute($params);
 $other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// ✅ Total Expenses - This Month
 $expenses_month = 0;
 try {
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses 
@@ -153,7 +157,6 @@ try {
     $expenses_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 } catch (PDOException $e) { $expenses_month = 0; }
 
-// ✅ Total Transactions - This Month
 $transactions_month = 0;
 try {
     $sql = "SELECT COUNT(*) as total FROM transactions 
@@ -164,18 +167,16 @@ try {
     $transactions_month = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 } catch (PDOException $e) { $transactions_month = 0; }
 
-// ✅ Total Cash Out - This Month
 $cash_out_month = 0;
 try {
-    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM cash_out 
-            WHERE MONTH(cash_out_date) = ? AND YEAR(cash_out_date) = ?";
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM store_cash_out 
+            WHERE MONTH(cashout_date) = ? AND YEAR(cashout_date) = ?";
     $params = [$month, $year];
     if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
     $stmt = $db->prepare($sql); $stmt->execute($params);
     $cash_out_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 } catch (PDOException $e) { $cash_out_month = 0; }
 
-// ✅ Total Transfers - This Month
 $transfer_month = 0;
 try {
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM transfers 
@@ -187,7 +188,7 @@ try {
 } catch (PDOException $e) { $transfer_month = 0; }
 
 // ============================================================
-// RECENT COMMISSIONS (BRANCH-WIDE)
+// RECENT COMMISSIONS
 // ============================================================
 $sql = "
     SELECT 
@@ -219,14 +220,25 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ============================================================
-             WELCOME CARD (Red for Admin)
-             ============================================================ -->
+        <!-- WELCOME CARD WITH PROFILE -->
         <div class="welcome-card-red">
             <div class="welcome-content">
-                <div class="welcome-icon">
-                    <i class="fas fa-shield-alt"></i>
+                <div class="welcome-avatar">
+                    <?php if ($profile_pic_exists): ?>
+                        <img src="<?php echo htmlspecialchars($profile_pic_url); ?>" 
+                             alt="<?php echo htmlspecialchars($admin['full_name']); ?>"
+                             class="welcome-avatar-img"
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                        <div class="welcome-avatar-initials" style="display:none;">
+                            <?php echo htmlspecialchars($profile_initials); ?>
+                        </div>
+                    <?php else: ?>
+                        <div class="welcome-avatar-initials">
+                            <?php echo htmlspecialchars($profile_initials); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
+                
                 <div class="welcome-info">
                     <span class="welcome-label">Welcome back, Administrator</span>
                     <h1 class="welcome-name"><?php echo htmlspecialchars($admin['full_name']); ?></h1>
@@ -256,9 +268,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-             CAPITAL SECTION (3 Parts) - ROW 1
-             ============================================================ -->
+        <!-- CAPITAL SECTION -->
         <div class="capital-section-wrapper">
             <div class="capital-section-header">
                 <div class="csh-left">
@@ -323,16 +333,12 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-             INCOME CARDS (3 Cards) - ROW 2
-             ============================================================ -->
+        <!-- INCOME CARDS -->
         <div class="section-title-bar">
             <h3><i class="fas fa-chart-line"></i> Branch Income</h3>
         </div>
         
         <div class="cards-grid-3">
-            
-            <!-- Card 1: Commission -->
             <a href="../commissions/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-commission">
                 <div class="nav-card-icon">
                     <i class="fas fa-hand-holding-usd"></i>
@@ -349,7 +355,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 2: Other Income -->
             <a href="../commissions/index.php?branch_id=<?php echo $selected_branch; ?>&type=other" class="nav-card nav-card-other">
                 <div class="nav-card-icon">
                     <i class="fas fa-coins"></i>
@@ -366,7 +371,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 3: Expenses -->
             <a href="../expenses/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-expenses">
                 <div class="nav-card-icon">
                     <i class="fas fa-receipt"></i>
@@ -382,19 +386,14 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
-            
         </div>
 
-        <!-- ============================================================
-             ACTIVITY CARDS (3 Cards) - ROW 3
-             ============================================================ -->
+        <!-- ACTIVITY CARDS -->
         <div class="section-title-bar">
             <h3><i class="fas fa-exchange-alt"></i> Branch Activity</h3>
         </div>
         
         <div class="cards-grid-3">
-            
-            <!-- Card 1: Transactions -->
             <a href="../daily_report/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-transactions">
                 <div class="nav-card-icon">
                     <i class="fas fa-exchange-alt"></i>
@@ -411,7 +410,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 2: Cash Out -->
             <a href="../cash_out/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-cashout">
                 <div class="nav-card-icon">
                     <i class="fas fa-money-bill-transfer"></i>
@@ -428,7 +426,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </a>
             
-            <!-- Card 3: Transfer -->
             <a href="../transfers/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-transfer">
                 <div class="nav-card-icon">
                     <i class="fas fa-arrow-right-arrow-left"></i>
@@ -444,12 +441,9 @@ include_once '../../includes/admin_topbar.php';
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
-            
         </div>
 
-        <!-- ============================================================
-             RECENT COMMISSIONS
-             ============================================================ -->
+        <!-- RECENT COMMISSIONS -->
         <div class="section-container">
             <div class="section-header-view">
                 <h3>
@@ -466,7 +460,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="recent-list">
                     <?php foreach ($recent_commissions as $txn): 
                         $is_commission = $txn['total_commission'] > 0;
-                        $is_other = $txn['other_income'] > 0;
                         $amount = $is_commission ? floatval($txn['total_commission']) : floatval($txn['other_income']);
                         $type_label = $is_commission ? 'COMMISSION' : 'OTHER INCOME';
                         $type_class = $is_commission ? 'commission' : 'other';
@@ -508,9 +501,7 @@ include_once '../../includes/admin_topbar.php';
             <?php endif; ?>
         </div>
 
-        <!-- ============================================================
-             QUICK ACTIONS (Admin)
-             ============================================================ -->
+        <!-- QUICK ACTIONS -->
         <div class="quick-actions-wrapper">
             <div class="qa-header">
                 <h3><i class="fas fa-bolt"></i> Admin Quick Actions</h3>
@@ -563,41 +554,66 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* ============================================================ */
+/* ============================================================
+   GLOBAL
+   ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 html, body {
     overflow-x: hidden !important;
     max-width: 100vw !important;
     width: 100% !important;
 }
+
+/* ✅ FIXED: Spacing sahihi */
 .main-wrapper {
     overflow-x: hidden !important;
     max-width: 100% !important;
-    margin-left: 240px;
-    width: calc(100% - 240px);
-    padding-top: 56px;
+    margin-left: 260px;                    /* ✅ Space kwa sidebar */
+    width: calc(100% - 260px);
+    padding-top: 70px;                     /* ✅ Space kwa header */
     min-height: 100vh;
     background: var(--bg-body);
     transition: margin-left 0.3s ease, width 0.3s ease;
     position: relative;
 }
+
 .main-content {
     overflow-x: hidden !important;
     max-width: 100% !important;
     width: 100% !important;
-    padding: 20px 24px !important;
+    padding: 20px 28px 24px 28px !important;   /* ✅ Top + Left + Right + Bottom */
 }
+
 @media (max-width: 1024px) {
-    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; }
-    .main-content { padding: 16px 18px !important; }
+    .main-wrapper {
+        margin-left: 260px;
+        width: calc(100% - 260px);
+        padding-top: 70px;
+    }
+    .main-content {
+        padding: 18px 22px 20px 22px !important;
+    }
 }
+
 @media (max-width: 768px) {
-    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
-    .main-content { padding: 16px 14px !important; width: 100%; }
+    .main-wrapper {
+        margin-left: 0;
+        width: 100%;
+        padding-top: 62px;                  /* ✅ Space kwa header ya mobile */
+    }
+    .main-content {
+        padding: 16px 16px 18px 16px !important;
+    }
 }
+
 @media (max-width: 480px) {
-    .main-wrapper { padding-top: 44px; width: 100%; }
-    .main-content { padding: 12px 10px !important; width: 100%; }
+    .main-wrapper {
+        padding-top: 58px;
+        width: 100%;
+    }
+    .main-content {
+        padding: 14px 12px 16px 12px !important;
+    }
 }
 
 :root {
@@ -628,17 +644,17 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
 /* ============================================================
-   WELCOME CARD (RED - ADMIN)
+   WELCOME CARD WITH PROFILE
    ============================================================ */
 .welcome-card-red {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 24px 28px;
+    padding: 22px 28px;
     background: linear-gradient(135deg, #991B1B 0%, #B91C1C 50%, #DC2626 100%);
     border-radius: 16px;
-    margin-bottom: 16px;
+    margin-bottom: 18px;
     box-shadow: 0 6px 24px rgba(153, 27, 27, 0.35);
     position: relative;
     overflow: hidden;
@@ -663,16 +679,48 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     position: relative;
     z-index: 1;
 }
-.welcome-icon {
-    width: 68px; height: 68px;
+
+/* PROFILE PICTURE */
+.welcome-avatar {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
     background: rgba(255, 255, 255, 0.18);
-    border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; color: #FCD34D;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    border: 1.5px solid rgba(252, 211, 77, 0.35);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    border: 3px solid rgba(252, 211, 77, 0.6);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    position: relative;
+    backdrop-filter: blur(8px);
 }
+.welcome-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
+}
+.welcome-avatar-initials {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 900;
+    color: #FFFFFF;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    letter-spacing: 1px;
+    background: linear-gradient(135deg, #FCD34D 0%, #F59E0B 100%);
+    border-radius: 50%;
+}
+html.dark-mode .welcome-avatar {
+    border-color: rgba(252, 211, 77, 0.5);
+}
+
 .welcome-info {
     display: flex;
     flex-direction: column;
@@ -696,26 +744,27 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .welcome-meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
     margin-top: 6px;
 }
 .welcome-meta-item {
     display: inline-flex; align-items: center; gap: 5px;
-    font-size: 12px; font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px; font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
     background: rgba(255, 255, 255, 0.15);
-    padding: 4px 12px;
+    padding: 4px 11px;
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(4px);
+    white-space: nowrap;
 }
 .welcome-date {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 10px 18px;
     background: rgba(255, 255, 255, 0.15);
     border-radius: 12px;
-    font-size: 13px; font-weight: 700;
+    font-size: 12px; font-weight: 700;
     color: #FFFFFF;
     border: 1px solid rgba(255, 255, 255, 0.2);
     backdrop-filter: blur(8px);
@@ -726,13 +775,13 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .welcome-date i { color: #FCD34D; }
 
 /* ============================================================
-   CAPITAL SECTION (3 Parts)
+   CAPITAL SECTION
    ============================================================ */
 .capital-section-wrapper {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
     border-radius: 16px;
     padding: 22px 26px;
-    margin-bottom: 16px;
+    margin-bottom: 18px;
     box-shadow: 0 6px 24px rgba(30, 64, 175, 0.35);
     position: relative;
     overflow: hidden;
@@ -1065,7 +1114,7 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     background: var(--bg-card);
     border-radius: 14px;
     border: 1.5px solid var(--border-color);
-    margin-bottom: 16px;
+    margin-bottom: 18px;
     overflow: hidden;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
@@ -1381,15 +1430,17 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
     .capital-grid-3 { grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .cp-value { font-size: clamp(16px, 1.6vw, 20px); }
     .welcome-name { font-size: 20px; }
-    .welcome-icon { width: 58px; height: 58px; font-size: 24px; }
+    .welcome-avatar { width: 68px; height: 68px; }
+    .welcome-avatar-initials { font-size: 24px; }
 }
 @media (max-width: 768px) {
     .welcome-card-red { flex-direction: column; align-items: flex-start; padding: 18px 20px; }
     .welcome-date { width: 100%; justify-content: center; }
     .welcome-name { font-size: 18px; }
-    .welcome-icon { width: 52px; height: 52px; font-size: 22px; }
+    .welcome-avatar { width: 64px; height: 64px; }
+    .welcome-avatar-initials { font-size: 22px; }
     
-    .capital-section-wrapper { padding: 16px; }
+    .capital-section-wrapper { padding: 18px; }
     .capital-section-header { flex-direction: column; align-items: flex-start; }
     .capital-grid-3 { grid-template-columns: 1fr; gap: 10px; }
     
@@ -1401,7 +1452,8 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
 }
 @media (max-width: 480px) {
     .welcome-name { font-size: 16px; }
-    .welcome-icon { width: 46px; height: 46px; font-size: 18px; }
+    .welcome-avatar { width: 58px; height: 58px; }
+    .welcome-avatar-initials { font-size: 20px; }
     .welcome-meta-item { font-size: 10px; padding: 3px 9px; }
     .csh-title { font-size: 14px; }
     .csh-icon { width: 40px; height: 40px; font-size: 18px; }
@@ -1431,8 +1483,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
     console.log('%c🛡️ Admin Dashboard', 'font-size:16px; font-weight:bold; color:#DC2626;');
-    console.log('%cBranch-wide data view', 'font-size:12px; color:#DC2626;');
-    console.log('%cBranch filter iko kwenye TOPBAR tu ✅', 'font-size:12px; color:#F59E0B;');
+    console.log('%cProfile Picture: <?php echo $profile_pic_exists ? $profile_pic_url : "Fallback to initials"; ?>', 'font-size:11px; color:#059669;');
 });
 </script>
 </body>

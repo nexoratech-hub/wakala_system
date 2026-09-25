@@ -2,12 +2,14 @@
 // ================================================================
 // FILE: modules/morning_report/index.php
 // WAKALA FINANCIAL SYSTEM - MORNING REPORTS (ADMIN) - FINAL
+// 
 // ✅ BLUE THEME
-// ✅ Summary Cards: 2 JUU, 2 CHINI (2x2)
-// ✅ Report Card Design (kama employee)
-// ✅ View/Edit/Delete kwenye Report Header
+// ✅ Summary Cards: 2x2 GRID + SOFT BACKGROUND (60% opacity)
+// ✅ "AWAITING STOCK" badge for dates not yet reached (ENGLISH)
+// ✅ Report Card Design
+// ✅ View/Edit/Delete on Report Header
 // ✅ Provider rows + Footer totals
-// ✅ Nzuri text colors
+// ✅ ALL INSTRUCTIONS IN ENGLISH
 // ================================================================
 
 require_once '../../config/config.php';
@@ -74,6 +76,12 @@ if ($selected_branch > 0) {
 $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
 $search    = isset($_GET['search'])    ? trim($_GET['search']) : '';
+
+// ============================================================
+// TODAY - For "AWAITING STOCK" check
+// ============================================================
+$today_date = date('Y-m-d');
+$yesterday_date = date('Y-m-d', strtotime('-1 day'));
 
 // ============================================================
 // FETCH MORNING REPORTS
@@ -150,6 +158,49 @@ try {
     }
 } catch (Exception $e) {
     $reports = [];
+}
+
+// ============================================================
+// CHECK IF "AWAITING STOCK" TODAY
+// ============================================================
+$awaiting_today = true;
+$awaiting_branch_name = '';
+
+if ($selected_branch > 0) {
+    // Check for today
+    $stmt = $db->prepare("
+        SELECT COUNT(*) FROM morning_reports 
+        WHERE branch_id = ? AND report_date = ?
+    ");
+    $stmt->execute([$selected_branch, $today_date]);
+    if ($stmt->fetchColumn() > 0) {
+        $awaiting_today = false;
+    } else {
+        // Check for yesterday
+        $stmt->execute([$selected_branch, $yesterday_date]);
+        if ($stmt->fetchColumn() > 0) {
+            $awaiting_today = false;
+        }
+    }
+    $awaiting_branch_name = $branch_name;
+} else {
+    // All branches - check if each branch has a report for today/yesterday
+    $awaiting_branches = [];
+    foreach ($branches as $b) {
+        $stmt = $db->prepare("
+            SELECT COUNT(*) FROM morning_reports 
+            WHERE branch_id = ? AND report_date IN (?, ?)
+        ");
+        $stmt->execute([$b['id'], $today_date, $yesterday_date]);
+        if ($stmt->fetchColumn() == 0) {
+            $awaiting_branches[] = $b['branch_name'];
+        }
+    }
+    if (empty($awaiting_branches)) {
+        $awaiting_today = false;
+    } else {
+        $awaiting_branch_name = implode(', ', $awaiting_branches);
+    }
 }
 
 // ============================================================
@@ -244,45 +295,75 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-             SUMMARY CARDS - 2 JUU, 2 CHINI (2x2 GRID)
+             AWAITING STOCK BANNER — ENGLISH
+             ============================================================ -->
+        <?php if ($awaiting_today): ?>
+            <div class="awaiting-banner">
+                <div class="awaiting-icon">
+                    <i class="fas fa-hourglass-half"></i>
+                </div>
+                <div class="awaiting-content">
+                    <h4>AWAITING STOCK</h4>
+                    <p>
+                        <strong><?php echo htmlspecialchars($awaiting_branch_name); ?></strong> 
+                        <?php echo $selected_branch > 0 ? 'does not have' : 'do not have'; ?> 
+                        a morning report for today (<?php echo date('d M Y'); ?>). 
+                        Please create an <strong>Evening Stock</strong> for yesterday or set 
+                        <strong>Opening Capital</strong>.
+                    </p>
+                </div>
+                <div class="awaiting-action">
+                    <button type="button" class="btn-awaiting-add" onclick="openAddPicker()">
+                        <i class="fas fa-plus-circle"></i> Add Now
+                    </button>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- ============================================================
+             SUMMARY CARDS - 2x2 GRID + SOFT BACKGROUND (60% opacity)
              ============================================================ -->
         <div class="summary-cards">
             
+            <!-- CARD 1: TOTAL REPORTS (Blue) -->
             <div class="summary-card summary-blue">
-                <div class="sc-icon sc-icon-blue">
+                <div class="sc-bg-icon sc-bg-blue">
                     <i class="fas fa-file-alt"></i>
                 </div>
-                <div class="sc-info">
+                <div class="sc-content">
                     <span class="sc-label">Total Reports</span>
                     <span class="sc-value"><?php echo number_format($total_reports); ?></span>
                 </div>
             </div>
 
+            <!-- CARD 2: TOTAL FLOAT (Green) -->
             <div class="summary-card summary-green">
-                <div class="sc-icon sc-icon-green">
+                <div class="sc-bg-icon sc-bg-green">
                     <i class="fas fa-coins"></i>
                 </div>
-                <div class="sc-info">
+                <div class="sc-content">
                     <span class="sc-label">Total Float</span>
                     <span class="sc-value"><?php echo formatCurrency($total_float); ?></span>
                 </div>
             </div>
 
+            <!-- CARD 3: TOTAL CASH (Orange) -->
             <div class="summary-card summary-orange">
-                <div class="sc-icon sc-icon-orange">
+                <div class="sc-bg-icon sc-bg-orange">
                     <i class="fas fa-money-bill-wave"></i>
                 </div>
-                <div class="sc-info">
+                <div class="sc-content">
                     <span class="sc-label">Total Cash</span>
                     <span class="sc-value"><?php echo formatCurrency($total_cash); ?></span>
                 </div>
             </div>
 
+            <!-- CARD 4: GRAND TOTAL (Purple) -->
             <div class="summary-card summary-purple">
-                <div class="sc-icon sc-icon-purple">
+                <div class="sc-bg-icon sc-bg-purple">
                     <i class="fas fa-chart-line"></i>
                 </div>
-                <div class="sc-info">
+                <div class="sc-content">
                     <span class="sc-label">Grand Total</span>
                     <span class="sc-value"><?php echo formatCurrency($total_float + $total_cash); ?></span>
                 </div>
@@ -578,7 +659,7 @@ include_once '../../includes/admin_topbar.php';
             <button class="modal-close" onclick="closeAddPicker()">&times;</button>
         </div>
         <div class="modal-body">
-            <p class="modal-intro">Chagua branch ili kuongeza morning report:</p>
+            <p class="modal-intro">Select a branch to add a morning report:</p>
             <div class="branch-picker-grid">
                 <?php foreach ($branches as $b): ?>
                     <a href="add.php?branch_id=<?php echo $b['id']; ?>&date=<?php echo date('Y-m-d'); ?>" 
@@ -628,6 +709,7 @@ include_once '../../includes/admin_topbar.php';
     --border-color: #cbd5e1;
     --shadow-color: rgba(30, 64, 175, 0.08);
     --shadow-hover: rgba(30, 64, 175, 0.15);
+    
     --blue-primary: #1e40af;
     --blue-dark: #1e3a8a;
     --blue-mid: #2563eb;
@@ -635,6 +717,7 @@ include_once '../../includes/admin_topbar.php';
     --blue-lighter: #dbeafe;
     --blue-lightest: #eff6ff;
     --blue-accent: #60a5fa;
+    
     --green-primary: #059669;
     --green-light: #10b981;
     --orange-primary: #d97706;
@@ -668,8 +751,21 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 /* ============================================================
    BRANCH INDICATOR
    ============================================================ */
-.branch-indicator { background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); border-radius: 12px; padding: 14px 22px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3); flex-wrap: wrap; gap: 12px; position: relative; overflow: hidden; }
-.branch-indicator::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: rgba(255, 255, 255, 0.08); border-radius: 50%; pointer-events: none; }
+.branch-indicator { 
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); 
+    border-radius: 12px; padding: 14px 22px; margin-bottom: 14px; 
+    display: flex; justify-content: space-between; align-items: center; 
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3); 
+    flex-wrap: wrap; gap: 12px; 
+    position: relative; overflow: hidden; 
+}
+.branch-indicator::before { 
+    content: ''; position: absolute; 
+    top: -50%; right: -10%; 
+    width: 300px; height: 300px; 
+    background: rgba(255, 255, 255, 0.08); 
+    border-radius: 50%; pointer-events: none; 
+}
 .branch-indicator-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; flex: 1; position: relative; z-index: 1; }
 .branch-icon-wrapper { width: 42px; height: 42px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #FFFFFF; flex-shrink: 0; backdrop-filter: blur(8px); border: 1.5px solid rgba(255, 255, 255, 0.3); }
 .branch-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
@@ -714,7 +810,97 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
 @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ============================================================
-   ✅ SUMMARY CARDS - 2 JUU, 2 CHINI (2x2 GRID)
+   AWAITING STOCK BANNER - ENGLISH
+   ============================================================ */
+.awaiting-banner {
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 50%, #FCD34D 100%);
+    border: 2px solid #F59E0B;
+    border-left: 6px solid #D97706;
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    box-shadow: 0 4px 16px rgba(217, 119, 6, 0.2);
+    flex-wrap: wrap;
+    animation: slideDown 0.5s ease;
+    position: relative;
+    overflow: hidden;
+}
+.awaiting-banner::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -5%;
+    width: 200px; height: 200px;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 50%;
+    pointer-events: none;
+}
+html.dark-mode .awaiting-banner {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 50%, #92400E 100%);
+    border-color: #D97706;
+    border-left-color: #FBBF24;
+}
+.awaiting-icon {
+    width: 54px; height: 54px;
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; color: #78350F;
+    flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    animation: pulse 2s ease-in-out infinite;
+    position: relative;
+    z-index: 1;
+}
+html.dark-mode .awaiting-icon { background: rgba(0,0,0,0.25); color: #FCD34D; border-color: rgba(251, 191, 36, 0.4); }
+@keyframes pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.5); }
+    50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(217, 119, 6, 0); }
+}
+.awaiting-content { flex: 1; min-width: 0; position: relative; z-index: 1; }
+.awaiting-content h4 {
+    font-size: 15px; font-weight: 900;
+    color: #78350F;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin: 0 0 4px 0;
+}
+html.dark-mode .awaiting-content h4 { color: #FCD34D; }
+.awaiting-content p {
+    font-size: 13px; color: #78350F;
+    margin: 0; line-height: 1.6;
+}
+html.dark-mode .awaiting-content p { color: #FDE68A; }
+.awaiting-content strong {
+    background: rgba(255, 255, 255, 0.5);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 800;
+}
+html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #FCD34D; }
+.awaiting-action { position: relative; z-index: 1; flex-shrink: 0; }
+.btn-awaiting-add {
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+    color: #FFFFFF;
+    padding: 11px 22px;
+    border: none; border-radius: 10px;
+    font-weight: 800; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 14px rgba(180, 83, 9, 0.4);
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+}
+.btn-awaiting-add:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 22px rgba(180, 83, 9, 0.55);
+}
+
+/* ============================================================
+   ✅ SUMMARY CARDS - SOFT BACKGROUND (60% opacity)
    ============================================================ */
 .summary-cards {
     display: grid;
@@ -725,89 +911,90 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
 }
 
 .summary-card {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 18px;
     padding: 22px 24px;
-    background: var(--bg-card);
-    border-radius: 14px;
-    border: 1.5px solid var(--border-color);
-    box-shadow: 0 3px 10px var(--shadow-color);
+    border-radius: 16px;
+    border: 2px solid;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
     transition: all 0.3s ease;
     min-width: 0;
-    position: relative;
     overflow: hidden;
 }
 
-/* Colored left border kwa kila card */
-.summary-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 5px;
-    height: 100%;
-    border-radius: 14px 0 0 14px;
+/* ✅ BACKGROUND COLORS - 60% OPACITY (soft, not full) */
+.summary-blue {
+    background: linear-gradient(135deg, rgba(219, 234, 254, 0.6) 0%, rgba(191, 219, 254, 0.6) 100%);
+    border-color: rgba(59, 130, 246, 0.4);
+}
+.summary-green {
+    background: linear-gradient(135deg, rgba(209, 250, 229, 0.6) 0%, rgba(167, 243, 208, 0.6) 100%);
+    border-color: rgba(16, 185, 129, 0.4);
+}
+.summary-orange {
+    background: linear-gradient(135deg, rgba(254, 243, 199, 0.6) 0%, rgba(253, 230, 138, 0.6) 100%);
+    border-color: rgba(245, 158, 11, 0.4);
+}
+.summary-purple {
+    background: linear-gradient(135deg, rgba(237, 233, 254, 0.6) 0%, rgba(221, 214, 254, 0.6) 100%);
+    border-color: rgba(139, 92, 246, 0.4);
 }
 
-.summary-blue::before { background: linear-gradient(180deg, #1e40af, #3b82f6); }
-.summary-green::before { background: linear-gradient(180deg, #059669, #10b981); }
-.summary-orange::before { background: linear-gradient(180deg, #d97706, #f59e0b); }
-.summary-purple::before { background: linear-gradient(180deg, #7c3aed, #8b5cf6); }
+/* DARK MODE - 60% opacity */
+html.dark-mode .summary-blue {
+    background: linear-gradient(135deg, rgba(30, 58, 95, 0.6) 0%, rgba(30, 64, 175, 0.6) 100%);
+    border-color: rgba(59, 130, 246, 0.5);
+}
+html.dark-mode .summary-green {
+    background: linear-gradient(135deg, rgba(6, 95, 70, 0.6) 0%, rgba(4, 120, 87, 0.6) 100%);
+    border-color: rgba(16, 185, 129, 0.5);
+}
+html.dark-mode .summary-orange {
+    background: linear-gradient(135deg, rgba(95, 58, 30, 0.6) 0%, rgba(120, 53, 15, 0.6) 100%);
+    border-color: rgba(217, 119, 6, 0.5);
+}
+html.dark-mode .summary-purple {
+    background: linear-gradient(135deg, rgba(76, 29, 149, 0.6) 0%, rgba(91, 33, 182, 0.6) 100%);
+    border-color: rgba(139, 92, 246, 0.5);
+}
 
 .summary-card:hover {
     transform: translateY(-4px);
-    box-shadow: 0 10px 24px var(--shadow-hover);
-    border-color: var(--blue-light);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
-.sc-icon {
-    width: 60px;
-    height: 60px;
-    border-radius: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 24px;
-    flex-shrink: 0;
+/* Background Icon (decorative, faded) */
+.sc-bg-icon {
+    position: absolute;
+    right: -10px;
+    bottom: -15px;
+    font-size: 110px;
+    opacity: 0.08;
+    pointer-events: none;
+    line-height: 1;
+    transform: rotate(-15deg);
 }
+.sc-bg-blue { color: #1e40af; }
+.sc-bg-green { color: #059669; }
+.sc-bg-orange { color: #d97706; }
+.sc-bg-purple { color: #7c3aed; }
 
-.sc-icon-blue {
-    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-    color: #1e40af;
-    border: 1.5px solid #93c5fd;
-    box-shadow: 0 4px 12px rgba(30, 64, 175, 0.15);
-}
-.sc-icon-green {
-    background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
-    color: #059669;
-    border: 1.5px solid #6ee7b7;
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
-}
-.sc-icon-orange {
-    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-    color: #d97706;
-    border: 1.5px solid #fcd34d;
-    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.15);
-}
-.sc-icon-purple {
-    background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
-    color: #7c3aed;
-    border: 1.5px solid #c4b5fd;
-    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.15);
-}
+html.dark-mode .sc-bg-icon { opacity: 0.12; }
+html.dark-mode .sc-bg-blue { color: #60a5fa; }
+html.dark-mode .sc-bg-green { color: #34d399; }
+html.dark-mode .sc-bg-orange { color: #fbbf24; }
+html.dark-mode .sc-bg-purple { color: #a78bfa; }
 
-html.dark-mode .sc-icon-blue { background: #1e3a5f; color: #60a5fa; border-color: #3b82f6; }
-html.dark-mode .sc-icon-green { background: #065f46; color: #34d399; border-color: #10b981; }
-html.dark-mode .sc-icon-orange { background: #5f3a1e; color: #fbbf24; border-color: #d97706; }
-html.dark-mode .sc-icon-purple { background: #4c1d95; color: #ddd6fe; border-color: #8b5cf6; }
-
-.sc-info {
+.sc-content {
     display: flex;
     flex-direction: column;
     gap: 6px;
     min-width: 0;
     flex: 1;
-    overflow: hidden;
+    position: relative;
+    z-index: 1;
 }
 
 .sc-label {
@@ -815,45 +1002,41 @@ html.dark-mode .sc-icon-purple { background: #4c1d95; color: #ddd6fe; border-col
     text-transform: uppercase;
     letter-spacing: 1.2px;
     font-weight: 800;
-    color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .sc-value {
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 900;
-    color: var(--text-primary);
-    font-family: 'Inter', 'Courier New', monospace;
     line-height: 1.1;
     letter-spacing: -0.5px;
     word-break: break-word;
     overflow-wrap: anywhere;
     display: block;
     max-width: 100%;
+    font-family: 'Inter', 'Courier New', monospace;
 }
 
 /* Text colors per card */
-.summary-blue .sc-value { color: #1e40af; }
-.summary-green .sc-value { color: #059669; }
-.summary-orange .sc-value { color: #d97706; }
-.summary-purple .sc-value { color: #7c3aed; }
+.summary-blue .sc-label { color: #1e40af; }
+.summary-blue .sc-value { color: #1e3a8a; }
+.summary-green .sc-label { color: #047857; }
+.summary-green .sc-value { color: #065F46; }
+.summary-orange .sc-label { color: #B45309; }
+.summary-orange .sc-value { color: #78350F; }
+.summary-purple .sc-label { color: #6D28D9; }
+.summary-purple .sc-value { color: #4C1D95; }
 
-html.dark-mode .summary-blue .sc-value { color: #60a5fa; }
-html.dark-mode .summary-green .sc-value { color: #34d399; }
-html.dark-mode .summary-orange .sc-value { color: #fbbf24; }
-html.dark-mode .summary-purple .sc-value { color: #a78bfa; }
-
-.summary-blue .sc-label { color: #1e40af; opacity: 0.75; }
-.summary-green .sc-label { color: #059669; opacity: 0.75; }
-.summary-orange .sc-label { color: #d97706; opacity: 0.75; }
-.summary-purple .sc-label { color: #7c3aed; opacity: 0.75; }
-
-html.dark-mode .summary-blue .sc-label { color: #93c5fd; opacity: 0.9; }
-html.dark-mode .summary-green .sc-label { color: #6ee7b7; opacity: 0.9; }
-html.dark-mode .summary-orange .sc-label { color: #fcd34d; opacity: 0.9; }
-html.dark-mode .summary-purple .sc-label { color: #c4b5fd; opacity: 0.9; }
+html.dark-mode .summary-blue .sc-label { color: #93c5fd; }
+html.dark-mode .summary-blue .sc-value { color: #DBEAFE; }
+html.dark-mode .summary-green .sc-label { color: #6ee7b7; }
+html.dark-mode .summary-green .sc-value { color: #D1FAE5; }
+html.dark-mode .summary-orange .sc-label { color: #fcd34d; }
+html.dark-mode .summary-orange .sc-value { color: #FEF3C7; }
+html.dark-mode .summary-purple .sc-label { color: #c4b5fd; }
+html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
 
 /* ============================================================
    FILTERS
@@ -1422,11 +1605,14 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .page-header .header-right .btn-export,
     .page-header .header-right .btn-back { flex: 1; justify-content: center; }
 
-    /* ✅ SUMMARY CARDS - STILL 2x2 on tablet */
+    .awaiting-banner { flex-direction: column; align-items: flex-start; text-align: left; }
+    .awaiting-action { width: 100%; }
+    .btn-awaiting-add { width: 100%; justify-content: center; }
+
     .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .summary-card { padding: 16px 16px; gap: 12px; }
-    .sc-icon { width: 46px; height: 46px; font-size: 18px; border-radius: 12px; }
-    .sc-value { font-size: 16px; letter-spacing: -0.3px; }
+    .summary-card { padding: 16px 16px; gap: 12px; border-radius: 12px; }
+    .sc-bg-icon { font-size: 80px; }
+    .sc-value { font-size: 18px; letter-spacing: -0.3px; }
     .sc-label { font-size: 9px; letter-spacing: 0.8px; }
 
     .filters-form { flex-direction: column; }
@@ -1458,14 +1644,13 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .amount-total, .amount-grand { font-size: 13px; }
 }
 @media (max-width: 480px) {
-    /* ✅ SUMMARY CARDS - STILL 2x2 on mobile, compact */
     .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .summary-card {
-        padding: 12px 12px; gap: 8px;
+        padding: 14px 12px; gap: 10px;
         flex-direction: column; align-items: flex-start;
     }
-    .sc-icon { width: 40px; height: 40px; font-size: 16px; }
-    .sc-value { font-size: 14px; letter-spacing: -0.2px; }
+    .sc-bg-icon { font-size: 70px; right: -8px; bottom: -10px; }
+    .sc-value { font-size: 15px; letter-spacing: -0.2px; }
     .sc-label { font-size: 8px; }
     .report-header-number { font-size: 12px; }
     .btn-action-header { padding: 8px 10px; font-size: 10px; }

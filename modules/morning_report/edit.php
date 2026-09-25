@@ -1,12 +1,16 @@
 <?php
 // ================================================================
-// FILE: modules/morning_report/generate.php
-// WAKALA FINANCIAL SYSTEM - AUTO-GENERATE MORNING REPORT
+// FILE: modules/morning_report/edit.php
+// WAKALA FINANCIAL SYSTEM - EDIT MORNING REPORT (ADMIN) - FINAL
 // 
-// LOGIC:
-// Morning Report ya tarehe X inachukua Evening Stock ya tarehe X-1
-// Kama tarehe X-1 haikuwa na Evening Stock, inachukua Evening Stock
-// ya karibu zaidi nyuma (X-2, X-3, ...)
+// FEATURES:
+//    - Edit existing morning report
+//    - Loads current data from morning_reports
+//    - Updates morning_reports + morning_report_providers
+//    - Syncs to daily_reports + daily_report_providers
+//    - Cannot edit if is_locked = 1
+//    - Cannot edit future dates
+//    - Full English UI
 // ================================================================
 
 require_once '../../config/config.php';
@@ -31,254 +35,347 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
-// GET PARAMETERS
+// GET REPORT ID
 // ============================================================
-$branch_id = isset($_GET['branch_id']) ? intval($_GET['branch_id']) : 0;
-$target_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+$report_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
-if ($branch_id <= 0) {
-    $_SESSION['error_message'] = 'Please select a branch.';
+if ($report_id <= 0) {
+    $_SESSION['error_message'] = 'Invalid morning report ID.';
     header('Location: index.php');
+    exit();
+}
+
+// ============================================================
+// FETCH MORNING REPORT
+// ============================================================
+$stmt = $db->prepare("
+    SELECT 
+        mr.*,
+        e.full_name AS employee_name,
+        e.employee_id AS employee_code,
+        b.branch_name AS branch_display_name,
+        b.branch_code AS branch_display_code,
+        b.location AS branch_location,
+        es.stock_number AS source_stock_number,
+        es.stock_date AS source_stock_date
+    FROM morning_reports mr
+    LEFT JOIN employees e ON mr.employee_id = e.id
+    LEFT JOIN branches b ON mr.branch_id = b.id
+    LEFT JOIN evening_stocks es ON mr.source_evening_stock_id = es.id
+    WHERE mr.id = ?
+");
+$stmt->execute([$report_id]);
+$report = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$report) {
+    $_SESSION['error_message'] = 'Morning report not found.';
+    header('Location: index.php');
+    exit();
+}
+
+// ============================================================
+// BLOCK EDIT IF LOCKED
+// ============================================================
+if (intval($report['is_locked']) === 1) {
+    $_SESSION['error_message'] = 'Cannot edit a locked morning report.';
+    header('Location: view.php?id=' . $report_id);
     exit();
 }
 
 // ============================================================
 // GET BRANCH INFO
 // ============================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE id = ? AND is_active = 1");
-$stmt->execute([$branch_id]);
-$branch = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$branch) {
-    $_SESSION['error_message'] = 'Branch not found.';
-    header('Location: index.php');
-    exit();
-}
-
-$branch_name = $branch['branch_name'];
-$branch_code = $branch['branch_code'] ?? '';
-$branch_location = $branch['location'] ?? '';
+$branch_id = intval($report['branch_id']);
+$branch_name = $report['branch_display_name'] ?? 'Unknown';
+$branch_code = $report['branch_display_code'] ?? '';
+$branch_location = $report['branch_location'] ?? '';
 
 // ============================================================
-// CHECK IF MORNING REPORT ALREADY EXISTS FOR TARGET DATE
-// ============================================================
-$stmt = $db->prepare("
-    SELECT id, report_number 
-    FROM morning_reports 
-    WHERE branch_id = ? AND report_date = ?
-    LIMIT 1
-");
-$stmt->execute([$branch_id, $target_date]);
-$existing = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if ($existing) {
-    $_SESSION['error_message'] = 'Morning report for ' . date('d M Y', strtotime($target_date)) . 
-                                  ' already exists (' . $existing['report_number'] . ').';
-    header('Location: index.php?branch_id=' . $branch_id);
-    exit();
-}
-
-// ============================================================
-// FIND THE LATEST EVENING STOCK BEFORE TARGET DATE
-// LOGIC: Tafuta evening stock ya tarehe iliyopita (target_date - 1).
-// Kama haipo, tafuta ya karibu zaidi nyuma.
+// FETCH EXISTING PROVIDERS
 // ============================================================
 $stmt = $db->prepare("
     SELECT 
-        es.*,
-        e.full_name AS employee_name,
-        e.employee_id AS employee_code
-    FROM evening_stocks es
-    LEFT JOIN employees e ON es.employee_id = e.id
-    WHERE es.branch_id = ? 
-      AND es.stock_date < ?
-    ORDER BY es.stock_date DESC, es.id DESC
-    LIMIT 1
+        mrp.*,
+        p.icon_class, 
+        p.color_code, 
+        p.provider_type, 
+        p.display_order
+    FROM morning_report_providers mrp
+    LEFT JOIN providers p ON mrp.provider_id = p.id
+    WHERE mrp.report_id = ?
+    ORDER BY p.display_order, mrp.provider_name
 ");
-$stmt->execute([$branch_id, $target_date]);
-$source_stock = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt->execute([$report_id]);
+$existing_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
-// IF NO SOURCE STOCK FOUND - SHOW ERROR
+// GET ALL BRANCH PROVIDERS (for adding new ones)
 // ============================================================
-$can_generate = true;
-$error_msg = '';
+$stmt = $db->prepare("
+    SELECT 
+        p.id, 
+        p.provider_name, 
+        p.icon_class, 
+        p.color_code, 
+        p.provider_type, 
+        p.display_order, 
+        bp.provider_code
+    FROM providers p
+    INNER JOIN branch_providers bp ON bp.provider_id = p.id
+    WHERE bp.branch_id = ? AND bp.is_active = 1
+    ORDER BY p.display_order, p.provider_name
+");
+$stmt->execute([$branch_id]);
+$branch_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-if (!$source_stock) {
-    $can_generate = false;
-    $error_msg = 'Hakuna Evening Stock iliyopatikana kabla ya tarehe ' . 
-                 date('d M Y', strtotime($target_date)) . '. ' .
-                 'Tafadhali hakikisha kuwa kuna Evening Stock ya siku zilizopita.';
+// Build map: provider_id => existing provider data
+$existing_map = [];
+foreach ($existing_providers as $ep) {
+    $existing_map[intval($ep['provider_id'])] = $ep;
+}
+
+// Build provider list for the form (combine existing + branch)
+$form_providers = [];
+foreach ($branch_providers as $bp) {
+    $pid = intval($bp['id']);
+    $existing = $existing_map[$pid] ?? null;
+    
+    $form_providers[] = [
+        'provider_id' => $pid,
+        'provider_code' => $bp['provider_code'],
+        'provider_name' => $bp['provider_name'],
+        'icon_class' => $bp['icon_class'],
+        'color_code' => $bp['color_code'],
+        'provider_type' => $bp['provider_type'],
+        'display_order' => $bp['display_order'],
+        'float_balance' => $existing ? floatval($existing['float_balance']) : 0,
+        'has_existing' => $existing ? true : false,
+    ];
 }
 
 // ============================================================
-// HANDLE POST - CREATE MORNING REPORT
+// CALCULATE TOTALS
+// ============================================================
+$current_total_float = 0;
+foreach ($existing_providers as $ep) {
+    $current_total_float += floatval($ep['float_balance']);
+}
+$current_cash = floatval(str_replace(',', '', $report['cash_balance'] ?? 0));
+$current_cumm = $current_total_float + $current_cash;
+
+// ============================================================
+// HANDLE POST - UPDATE
 // ============================================================
 $error_message = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'generate_morning_report') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'edit_morning_report') {
     try {
         $db->beginTransaction();
 
-        $post_branch_id   = intval($_POST['branch_id'] ?? 0);
-        $post_date        = $_POST['report_date'] ?? date('Y-m-d');
-        $post_source_id   = intval($_POST['source_evening_stock_id'] ?? 0);
-        $post_cash        = floatval(str_replace(',', '', $_POST['cash_balance'] ?? 0));
-        $post_notes       = trim($_POST['notes'] ?? '');
-        $post_providers   = $_POST['providers'] ?? []; // [provider_id => float]
+        $post_date       = $_POST['report_date'] ?? $report['report_date'];
+        $post_cash       = floatval(str_replace(',', '', $_POST['cash_balance'] ?? 0));
+        $post_notes      = trim($_POST['notes'] ?? '');
+        $post_providers  = $_POST['providers'] ?? [];
 
-        if ($post_branch_id <= 0) throw new Exception('Invalid branch.');
-        if ($post_source_id <= 0) throw new Exception('Source evening stock is required.');
-
-        // Re-check duplicate
-        $stmt = $db->prepare("SELECT id FROM morning_reports WHERE branch_id = ? AND report_date = ? LIMIT 1");
-        $stmt->execute([$post_branch_id, $post_date]);
-        if ($stmt->fetch()) {
-            throw new Exception('Morning report for this date already exists.');
+        // ------------------------------------------------------------
+        // VALIDATION
+        // ------------------------------------------------------------
+        if ($post_cash < 0) {
+            throw new Exception('Cash balance cannot be negative.');
+        }
+        if (strtotime($post_date) > strtotime(date('Y-m-d'))) {
+            throw new Exception('Report date cannot be in the future.');
         }
 
-        // Load source evening stock
-        $stmt = $db->prepare("SELECT * FROM evening_stocks WHERE id = ? AND branch_id = ?");
-        $stmt->execute([$post_source_id, $post_branch_id]);
-        $src = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$src) throw new Exception('Source evening stock not found.');
+        // Re-check lock
+        $stmt = $db->prepare("SELECT is_locked FROM morning_reports WHERE id = ?");
+        $stmt->execute([$report_id]);
+        $lock_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$lock_check || intval($lock_check['is_locked']) === 1) {
+            throw new Exception('Cannot edit a locked morning report.');
+        }
 
-        // Generate report number
-        $report_number = 'MR-' . date('Ymd', strtotime($post_date)) . '-' . 
-                         strtoupper(substr($branch_code, 0, 3)) . '-' . 
-                         str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
-
-        // Calculate total float from providers
+        // ------------------------------------------------------------
+        // Calculate total float
+        // ------------------------------------------------------------
         $total_float = 0;
         foreach ($post_providers as $pid => $float) {
-            $total_float += floatval($float);
+            $fv = floatval(str_replace(',', '', $float));
+            if ($fv < 0) {
+                throw new Exception('Provider float cannot be negative.');
+            }
+            $total_float += $fv;
         }
-
-        // Calculate cumm_total = total_float + cash_balance
         $cumm_total = $total_float + $post_cash;
 
-        // Insert morning report
+        if ($total_float <= 0 && $post_cash <= 0) {
+            throw new Exception('Report cannot be empty. Provide at least one float or cash balance.');
+        }
+
+        // Save old values for log
+        $old_report_number = $report['report_number'];
+        $old_cash = floatval($report['cash_balance']);
+        $old_total = floatval($report['cumm_total']);
+
+        // ------------------------------------------------------------
+        // 1) UPDATE morning_reports
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
-            INSERT INTO morning_reports 
-            (report_number, employee_id, branch, branch_id, report_date,
-             provider_data, cash_balance, cumm_total, submitted_at,
-             notes, source_type, source_evening_stock_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, 'auto_from_evening', ?)
+            UPDATE morning_reports 
+            SET report_date = ?,
+                cash_balance = ?,
+                cumm_total = ?,
+                notes = ?,
+                provider_data = ?,
+                updated_at = NOW()
+            WHERE id = ?
         ");
         $stmt->execute([
-            $report_number,
-            $user_id,
-            $branch_name,
-            $post_branch_id,
             $post_date,
-            json_encode($post_providers),
             $post_cash,
             $cumm_total,
             $post_notes,
-            $post_source_id
+            json_encode($post_providers),
+            $report_id
         ]);
 
-        $report_id = $db->lastInsertId();
+        // ------------------------------------------------------------
+        // 2) DELETE old morning_report_providers
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("DELETE FROM morning_report_providers WHERE report_id = ?");
+        $stmt->execute([$report_id]);
 
-        // Insert providers
+        // ------------------------------------------------------------
+        // 3) INSERT new morning_report_providers
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO morning_report_providers
-            (report_id, provider_id, provider_code, provider_name, float_balance, cash_balance, created_at)
+            (report_id, provider_id, provider_code, provider_name, 
+             float_balance, cash_balance, created_at)
             VALUES (?, ?, ?, ?, ?, 0, NOW())
         ");
 
+        // Provider map
+        $provider_map = [];
+        $stmt2 = $db->prepare("
+            SELECT p.id, p.provider_name, bp.provider_code
+            FROM providers p
+            INNER JOIN branch_providers bp ON bp.provider_id = p.id
+            WHERE bp.branch_id = ? AND bp.is_active = 1
+        ");
+        $stmt2->execute([$branch_id]);
+        while ($row = $stmt2->fetch(PDO::FETCH_ASSOC)) {
+            $provider_map[intval($row['id'])] = $row;
+        }
+
         foreach ($post_providers as $pid => $float) {
             $pid = intval($pid);
-            if ($pid <= 0) continue;
+            $fv = floatval(str_replace(',', '', $float));
+            if ($pid <= 0 || $fv <= 0) continue;
 
-            // Get provider info
-            $stmt2 = $db->prepare("
-                SELECT p.provider_name, bp.provider_code
-                FROM providers p
-                INNER JOIN branch_providers bp ON bp.provider_id = p.id
-                WHERE p.id = ? AND bp.branch_id = ? AND bp.is_active = 1
-            ");
-            $stmt2->execute([$pid, $post_branch_id]);
-            $pinfo = $stmt2->fetch(PDO::FETCH_ASSOC);
+            $pinfo = $provider_map[$pid] ?? null;
             if (!$pinfo) continue;
 
             $stmt->execute([
-                $report_id,
-                $pid,
-                $pinfo['provider_code'],
-                $pinfo['provider_name'],
-                floatval($float)
+                $report_id, 
+                $pid, 
+                $pinfo['provider_code'], 
+                $pinfo['provider_name'], 
+                $fv
             ]);
         }
 
-        // Log activity
+        // ------------------------------------------------------------
+        // 4) UPDATE daily_reports
+        // ------------------------------------------------------------
+        $stmt_dr = $db->prepare("
+            UPDATE daily_reports 
+            SET report_date = ?,
+                morning_total = ?,
+                current_cash = ?,
+                current_float = ?,
+                total_business_income = ?,
+                current_capital = ?,
+                notes = ?,
+                updated_at = NOW()
+            WHERE morning_report_id = ?
+        ");
+        $stmt_dr->execute([
+            $post_date,
+            $cumm_total,
+            $post_cash,
+            $total_float,
+            $cumm_total,
+            $cumm_total,
+            $post_notes,
+            $report_id
+        ]);
+
+        // ------------------------------------------------------------
+        // 5) Get daily_report_id for updating providers
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("SELECT id FROM daily_reports WHERE morning_report_id = ? LIMIT 1");
+        $stmt->execute([$report_id]);
+        $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($dr) {
+            $daily_report_id = intval($dr['id']);
+
+            // Delete old daily_report_providers
+            $stmt = $db->prepare("DELETE FROM daily_report_providers WHERE daily_report_id = ?");
+            $stmt->execute([$daily_report_id]);
+
+            // Insert new daily_report_providers
+            $stmt_drp = $db->prepare("
+                INSERT INTO daily_report_providers 
+                (daily_report_id, provider_id, provider_code, provider_name,
+                 morning_float, morning_cash, current_float, current_cash,
+                 total_deposits, total_withdrawals, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, 0, 0, 0, NOW())
+            ");
+
+            foreach ($post_providers as $pid => $float) {
+                $pid = intval($pid);
+                $fv = floatval(str_replace(',', '', $float));
+                if ($pid <= 0 || $fv <= 0) continue;
+
+                $pinfo = $provider_map[$pid] ?? null;
+                if (!$pinfo) continue;
+
+                $stmt_drp->execute([
+                    $daily_report_id, 
+                    $pid, 
+                    $pinfo['provider_code'], 
+                    $pinfo['provider_name'],
+                    $fv, 
+                    $fv
+                ]);
+            }
+        }
+
+        // ------------------------------------------------------------
+        // LOG ACTIVITY
+        // ------------------------------------------------------------
         logActivity(
-            $user_id,
-            'Generate Morning Report',
-            'Morning Report',
-            $report_id,
-            '',
-            'Generated ' . $report_number . ' from evening stock ' . $src['stock_number'] . 
-            ' for ' . $branch_name
+            $user_id, 
+            'Edit Morning Report', 
+            'Morning Report', 
+            $report_id, 
+            $old_report_number,
+            'Updated ' . $old_report_number . 
+            ' - Cash: ' . number_format($old_cash) . ' → ' . number_format($post_cash) . 
+            ' | Total: ' . number_format($old_total) . ' → ' . number_format($cumm_total)
         );
 
         $db->commit();
 
-        $_SESSION['success_message'] = 'Morning Report ' . $report_number . ' generated successfully from ' . 
-                                        $src['stock_number'] . '!';
+        $_SESSION['success_message'] = 'Morning Report ' . $report['report_number'] . ' updated successfully!';
         header('Location: view.php?id=' . $report_id);
         exit();
 
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
-    }
-}
-
-// ============================================================
-// LOAD SOURCE PROVIDERS FOR THE FORM
-// ============================================================
-$source_providers = [];
-if ($source_stock) {
-    $stmt = $db->prepare("
-        SELECT 
-            esp.*,
-            p.icon_class, p.color_code, p.provider_type
-        FROM evening_stock_providers esp
-        LEFT JOIN providers p ON esp.provider_id = p.id
-        WHERE esp.evening_stock_id = ?
-        ORDER BY p.display_order, esp.provider_name
-    ");
-    $stmt->execute([$source_stock['id']]);
-    $source_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-
-// If no providers in evening_stock_providers, fallback to provider_data JSON
-if (empty($source_providers) && !empty($source_stock['provider_data'])) {
-    $decoded = json_decode($source_stock['provider_data'], true);
-    if (is_array($decoded)) {
-        foreach ($decoded as $pid => $float) {
-            $stmt = $db->prepare("
-                SELECT p.id, p.provider_name, p.icon_class, p.color_code, p.provider_type,
-                       bp.provider_code
-                FROM providers p
-                INNER JOIN branch_providers bp ON bp.provider_id = p.id
-                WHERE p.id = ? AND bp.branch_id = ?
-            ");
-            $stmt->execute([intval($pid), $branch_id]);
-            $pinfo = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($pinfo) {
-                $source_providers[] = [
-                    'provider_id' => $pinfo['id'],
-                    'provider_code' => $pinfo['provider_code'],
-                    'provider_name' => $pinfo['provider_name'],
-                    'closing_float' => floatval($float),
-                    'icon_class' => $pinfo['icon_class'],
-                    'color_code' => $pinfo['color_code'],
-                    'provider_type' => $pinfo['provider_type'],
-                ];
-            }
-        }
     }
 }
 
@@ -311,9 +408,9 @@ include_once '../../includes/admin_topbar.php';
                 <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn-back-card">
+                <a href="view.php?id=<?php echo $report_id; ?>" class="btn-back-card">
                     <i class="fas fa-arrow-left"></i>
-                    <span>Back to Reports</span>
+                    <span>Back to Report</span>
                 </a>
             </div>
         </div>
@@ -321,26 +418,15 @@ include_once '../../includes/admin_topbar.php';
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-magic" style="color:#F59E0B;"></i> Generate Morning Report</h2>
-                <p class="text-muted">Auto-generate from previous day's Evening Stock</p>
-            </div>
-        </div>
-
-        <!-- LOGIC EXPLANATION -->
-        <div class="logic-banner">
-            <div class="logic-icon"><i class="fas fa-lightbulb"></i></div>
-            <div class="logic-content">
-                <h4>Jinsi Inavyofanya Kazi</h4>
-                <p>
-                    Morning Report ya tarehe <strong><?php echo date('d M Y', strtotime($target_date)); ?></strong> 
-                    inachukua <strong>Evening Stock ya siku iliyopita</strong>.
-                    Kama siku iliyopita haikuwa na Evening Stock, mfumo unatafuta 
-                    <strong>Evening Stock ya karibu zaidi nyuma</strong>.
+                <h2><i class="fas fa-edit" style="color:#F59E0B;"></i> Edit Morning Report</h2>
+                <p class="text-muted">
+                    <i class="fas fa-hashtag"></i>
+                    <?php echo htmlspecialchars($report['report_number']); ?>
                 </p>
             </div>
         </div>
 
-        <!-- ERROR ALERT -->
+        <!-- ALERT -->
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-circle"></i>
@@ -349,201 +435,242 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <?php if (!$can_generate): ?>
-            <div class="alert alert-warning">
-                <i class="fas fa-exclamation-triangle"></i>
-                <span><?php echo htmlspecialchars($error_msg); ?></span>
+        <!-- INFO BANNER -->
+        <div class="info-banner">
+            <div class="info-icon">
+                <i class="fas fa-info-circle"></i>
             </div>
-            <div class="actions-bottom">
-                <a href="../evening_stock/index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-primary">
-                    <i class="fas fa-moon"></i> Go to Evening Stock
-                </a>
-                <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-secondary">
-                    <i class="fas fa-arrow-left"></i> Back
-                </a>
+            <div class="info-content">
+                <h4>Editing Existing Report</h4>
+                <p>
+                    You are editing the morning report for 
+                    <strong><?php echo date('d M Y', strtotime($report['report_date'])); ?></strong>.
+                    Original values are pre-loaded. Changes will sync to the linked daily report automatically.
+                </p>
             </div>
-        <?php else: ?>
+        </div>
 
-            <!-- SOURCE STOCK INFO -->
-            <div class="source-card">
-                <div class="source-card-header">
+        <!-- ============================================================ -->
+        <!-- SOURCE INFO CARD (Read-only) -->
+        <!-- ============================================================ -->
+        <div class="source-info-card <?php echo !empty($report['source_stock_number']) ? 'source-evening' : 'source-capital'; ?>">
+            <div class="source-info-header">
+                <?php if (!empty($report['source_stock_number'])): ?>
                     <i class="fas fa-moon"></i>
-                    <h3>Source: Evening Stock</h3>
-                    <span class="source-badge"><?php echo htmlspecialchars($source_stock['stock_number']); ?></span>
+                    <span>Original Source: Evening Stock</span>
+                <?php else: ?>
+                    <i class="fas fa-coins"></i>
+                    <span>Original Source: Opening Capital</span>
+                <?php endif; ?>
+            </div>
+            <div class="source-info-body">
+                <div class="source-detail">
+                    <span class="source-detail-label">Reference</span>
+                    <span class="source-detail-value">
+                        <?php echo htmlspecialchars($report['source_stock_number'] ?? 'OPENING-CAPITAL'); ?>
+                    </span>
                 </div>
-                <div class="source-card-body">
-                    <div class="source-info-grid">
-                        <div class="source-info-item">
-                            <span class="source-label">Stock Date</span>
-                            <span class="source-value">
-                                <?php echo date('d M Y', strtotime($source_stock['stock_date'])); ?>
-                            </span>
+                <div class="source-detail">
+                    <span class="source-detail-label">Date</span>
+                    <span class="source-detail-value">
+                        <?php echo !empty($report['source_stock_date']) 
+                            ? date('d M Y', strtotime($report['source_stock_date'])) 
+                            : date('d M Y', strtotime($report['report_date'])); ?>
+                    </span>
+                </div>
+                <div class="source-detail">
+                    <span class="source-detail-label">Submitted By</span>
+                    <span class="source-detail-value">
+                        <?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- FORM -->
+        <!-- ============================================================ -->
+        <form method="POST" action="" class="edit-form" id="editForm" onsubmit="return validateEdit()">
+            <input type="hidden" name="action" value="edit_morning_report">
+
+            <!-- CASH BALANCE -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <i class="fas fa-money-bill-wave"></i>
+                    <h3>Cash Balance</h3>
+                </div>
+                <div class="form-card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Report Date <span class="required">*</span></label>
+                            <input type="date" name="report_date" id="report_date" 
+                                   class="form-control" 
+                                   value="<?php echo htmlspecialchars($report['report_date']); ?>" 
+                                   required>
+                            <small class="form-hint">You can change the report date</small>
                         </div>
-                        <div class="source-info-item">
-                            <span class="source-label">Submitted By</span>
-                            <span class="source-value">
-                                <?php echo htmlspecialchars($source_stock['employee_name'] ?? 'N/A'); ?>
-                            </span>
-                        </div>
-                        <div class="source-info-item">
-                            <span class="source-label">Cash Balance</span>
-                            <span class="source-value mono">
-                                <?php echo formatCurrency($source_stock['cash_balance']); ?>
-                            </span>
-                        </div>
-                        <div class="source-info-item">
-                            <span class="source-label">Cumm. Total</span>
-                            <span class="source-value mono">
-                                <?php echo formatCurrency($source_stock['cumm_total']); ?>
-                            </span>
+                        <div class="form-group">
+                            <label>Cash Balance (TSh) <span class="required">*</span></label>
+                            <input type="text" name="cash_balance" id="cash_balance" 
+                                   class="form-control money-input" 
+                                   value="<?php echo number_format($current_cash); ?>" 
+                                   required
+                                   oninput="formatMoneyInput(this); recalcTotals();">
+                            <small class="form-hint">Editable field</small>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- GENERATE FORM -->
-            <form method="POST" action="" class="generate-form" id="generateForm" onsubmit="return validateGenerate()">
-                <input type="hidden" name="action" value="generate_morning_report">
-                <input type="hidden" name="branch_id" value="<?php echo $branch_id; ?>">
-                <input type="hidden" name="source_evening_stock_id" value="<?php echo $source_stock['id']; ?>">
-
-                <div class="form-card">
-                    <div class="form-card-header">
-                        <i class="fas fa-sun"></i>
-                        <h3>Morning Report Details</h3>
-                    </div>
-                    <div class="form-card-body">
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Report Date <span class="required">*</span></label>
-                                <input type="date" name="report_date" id="report_date" 
-                                       class="form-control" 
-                                       value="<?php echo htmlspecialchars($target_date); ?>" 
-                                       required>
-                                <small class="form-hint">Tarehe ya morning report hii</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Cash Balance (TSh) <span class="required">*</span></label>
-                                <input type="text" name="cash_balance" id="cash_balance" 
-                                       class="form-control money-input" 
-                                       value="<?php echo number_format(floatval($source_stock['cash_balance'])); ?>" 
-                                       required
-                                       oninput="formatMoneyInput(this); recalcTotals();">
-                                <small class="form-hint">Inachukuliwa kutoka evening stock</small>
-                            </div>
-                        </div>
-
-                    </div>
+            <!-- PROVIDERS -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <i class="fas fa-university"></i>
+                    <h3>Provider Floats</h3>
+                    <span class="providers-count"><?php echo count($form_providers); ?> providers</span>
                 </div>
-
-                <!-- PROVIDERS -->
-                <div class="form-card">
-                    <div class="form-card-header">
-                        <i class="fas fa-university"></i>
-                        <h3>Provider Floats</h3>
-                        <span class="providers-count"><?php echo count($source_providers); ?> providers</span>
-                    </div>
-                    <div class="form-card-body">
-                        <?php if (count($source_providers) > 0): ?>
-                            <div class="providers-grid">
-                                <?php foreach ($source_providers as $sp):
-                                    $pid = intval($sp['provider_id']);
-                                    $color = $sp['color_code'] ?? '#0B5ED7';
-                                    $icon = $sp['icon_class'] ?? 'fas fa-university';
-                                    $float_val = floatval($sp['closing_float'] ?? 0);
-                                ?>
-                                    <div class="provider-input-card">
-                                        <div class="provider-input-header">
-                                            <div class="provider-input-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
-                                                <i class="<?php echo htmlspecialchars($icon); ?>"></i>
-                                            </div>
-                                            <div class="provider-input-info">
-                                                <span class="provider-input-name">
-                                                    <?php echo htmlspecialchars($sp['provider_name']); ?>
-                                                </span>
-                                                <span class="provider-input-code">
-                                                    <?php echo htmlspecialchars($sp['provider_code']); ?>
-                                                </span>
-                                            </div>
+                <div class="form-card-body">
+                    <?php if (count($form_providers) > 0): ?>
+                        <div class="providers-grid">
+                            <?php foreach ($form_providers as $fp):
+                                $pid = intval($fp['provider_id']);
+                                $color = $fp['color_code'] ?? '#0B5ED7';
+                                $icon = $fp['icon_class'] ?? 'fas fa-university';
+                                $float_val = floatval($fp['float_balance']);
+                                $has_value = $float_val > 0;
+                            ?>
+                                <div class="provider-input-card <?php echo $has_value ? 'has-value' : ''; ?>">
+                                    <div class="provider-input-header">
+                                        <div class="provider-input-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
+                                            <i class="<?php echo htmlspecialchars($icon); ?>"></i>
                                         </div>
-                                        <div class="provider-input-body">
-                                            <label>Float Balance (TSh)</label>
-                                            <input type="text" 
-                                                   name="providers[<?php echo $pid; ?>]" 
-                                                   class="form-control money-input provider-float-input" 
-                                                   value="<?php echo number_format($float_val); ?>"
-                                                   data-provider-id="<?php echo $pid; ?>"
-                                                   oninput="formatMoneyInput(this); recalcTotals();">
+                                        <div class="provider-input-info">
+                                            <span class="provider-input-name">
+                                                <?php echo htmlspecialchars($fp['provider_name']); ?>
+                                            </span>
+                                            <span class="provider-input-code">
+                                                <?php echo htmlspecialchars($fp['provider_code']); ?>
+                                            </span>
                                         </div>
+                                        <?php if ($has_value): ?>
+                                            <span class="active-badge">
+                                                <i class="fas fa-check-circle"></i>
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php else: ?>
-                            <div class="empty-providers">
-                                <i class="fas fa-info-circle"></i>
-                                <p>Hakuna providers kwenye evening stock hii.</p>
-                            </div>
-                        <?php endif; ?>
+                                    <div class="provider-input-body">
+                                        <label>Float Balance (TSh)</label>
+                                        <input type="text" 
+                                               name="providers[<?php echo $pid; ?>]" 
+                                               class="form-control money-input provider-float-input" 
+                                               value="<?php echo $has_value ? number_format($float_val) : ''; ?>"
+                                               placeholder="0"
+                                               data-provider-id="<?php echo $pid; ?>"
+                                               oninput="formatMoneyInput(this); recalcTotals();">
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <div class="empty-providers">
+                            <i class="fas fa-info-circle"></i>
+                            <p>No providers found for this branch.</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- NOTES -->
+            <div class="form-card">
+                <div class="form-card-header">
+                    <i class="fas fa-sticky-note"></i>
+                    <h3>Notes</h3>
+                </div>
+                <div class="form-card-body">
+                    <div class="form-group">
+                        <label>Notes (Optional)</label>
+                        <textarea name="notes" class="form-control" rows="3" 
+                                  placeholder="Additional notes..."><?php echo htmlspecialchars($report['notes'] ?? ''); ?></textarea>
                     </div>
                 </div>
+            </div>
 
-                <!-- NOTES -->
-                <div class="form-card">
-                    <div class="form-card-header">
-                        <i class="fas fa-sticky-note"></i>
-                        <h3>Notes</h3>
+            <!-- SUMMARY -->
+            <div class="summary-panel">
+                <div class="summary-panel-header">
+                    <i class="fas fa-calculator"></i>
+                    <span>Summary</span>
+                </div>
+                <div class="summary-panel-body">
+                    <div class="summary-line">
+                        <span>Total Float:</span>
+                        <span class="summary-value" id="sum_float">TSh 0</span>
                     </div>
-                    <div class="form-card-body">
-                        <div class="form-group">
-                            <label>Notes (Optional)</label>
-                            <textarea name="notes" class="form-control" rows="3" 
-                                      placeholder="Maelezo ya ziada..."><?php echo htmlspecialchars($source_stock['notes'] ?? ''); ?></textarea>
+                    <div class="summary-line">
+                        <span>Cash Balance:</span>
+                        <span class="summary-value" id="sum_cash">TSh 0</span>
+                    </div>
+                    <div class="summary-line summary-line-total">
+                        <span>Cumm. Total:</span>
+                        <span class="summary-value" id="sum_total">TSh 0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- COMPARISON CARD -->
+            <div class="comparison-card">
+                <div class="comparison-header">
+                    <i class="fas fa-exchange-alt"></i>
+                    <span>Comparison (Original vs New)</span>
+                </div>
+                <div class="comparison-body">
+                    <div class="comparison-row">
+                        <div class="comparison-label">Cash Balance</div>
+                        <div class="comparison-values">
+                            <span class="comparison-old"><?php echo formatCurrency($current_cash); ?></span>
+                            <i class="fas fa-arrow-right"></i>
+                            <span class="comparison-new" id="comp_cash"><?php echo formatCurrency($current_cash); ?></span>
+                        </div>
+                    </div>
+                    <div class="comparison-row">
+                        <div class="comparison-label">Total Float</div>
+                        <div class="comparison-values">
+                            <span class="comparison-old"><?php echo formatCurrency($current_total_float); ?></span>
+                            <i class="fas fa-arrow-right"></i>
+                            <span class="comparison-new" id="comp_float"><?php echo formatCurrency($current_total_float); ?></span>
+                        </div>
+                    </div>
+                    <div class="comparison-row comparison-row-total">
+                        <div class="comparison-label">Grand Total</div>
+                        <div class="comparison-values">
+                            <span class="comparison-old"><?php echo formatCurrency($current_cumm); ?></span>
+                            <i class="fas fa-arrow-right"></i>
+                            <span class="comparison-new" id="comp_total"><?php echo formatCurrency($current_cumm); ?></span>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- SUMMARY -->
-                <div class="summary-panel">
-                    <div class="summary-panel-header">
-                        <i class="fas fa-calculator"></i>
-                        <span>Summary</span>
-                    </div>
-                    <div class="summary-panel-body">
-                        <div class="summary-line">
-                            <span>Total Float:</span>
-                            <span class="summary-value" id="sum_float">TSh 0</span>
-                        </div>
-                        <div class="summary-line">
-                            <span>Cash Balance:</span>
-                            <span class="summary-value" id="sum_cash">TSh 0</span>
-                        </div>
-                        <div class="summary-line summary-line-total">
-                            <span>Cumm. Total:</span>
-                            <span class="summary-value" id="sum_total">TSh 0</span>
-                        </div>
-                    </div>
-                </div>
+            <!-- ACTIONS -->
+            <div class="actions-bottom">
+                <a href="view.php?id=<?php echo $report_id; ?>" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="submit" class="btn btn-primary" id="submitBtn">
+                    <i class="fas fa-save"></i> Save Changes
+                </button>
+            </div>
 
-                <!-- ACTIONS -->
-                <div class="actions-bottom">
-                    <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-secondary">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
-                    <button type="submit" class="btn btn-primary" id="submitBtn">
-                        <i class="fas fa-check-circle"></i> Generate Morning Report
-                    </button>
-                </div>
-
-            </form>
-
-        <?php endif; ?>
+        </form>
 
     </div>
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
 <style>
+/* ============================================================
+   VARIABLES
+   ============================================================ */
 :root {
     --bg-body: #f0f4f8;
     --bg-card: #ffffff;
@@ -574,7 +701,9 @@ html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* BRANCH INDICATOR */
+/* ============================================================
+   BRANCH INDICATOR
+   ============================================================ */
 .branch-indicator {
     background: linear-gradient(135deg, #F59E0B 0%, #D97706 50%, #B45309 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -599,14 +728,28 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
 
-/* PAGE HEADER */
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
 .page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
 .page-header .header-left h2 i { margin-right: 8px; }
-.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 4px 0 0 0; }
+.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 6px 0 0 0; display: flex; align-items: center; gap: 6px; font-family: 'Courier New', monospace; font-weight: 600; }
 
-/* LOGIC BANNER */
-.logic-banner {
+/* ============================================================
+   ALERT
+   ============================================================ */
+.alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); }
+.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
+.alert i { font-size: 20px; flex-shrink: 0; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
+
+/* ============================================================
+   INFO BANNER
+   ============================================================ */
+.info-banner {
     background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
     border: 1.5px solid #93C5FD;
     border-left: 5px solid #1E40AF;
@@ -615,72 +758,82 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     margin-bottom: 18px;
     display: flex; align-items: flex-start; gap: 14px;
 }
-html.dark-mode .logic-banner { background: linear-gradient(135deg, #1E3A5F, #1E40AF); border-color: #3B82F6; border-left-color: #60A5FA; }
-.logic-icon {
+html.dark-mode .info-banner { background: linear-gradient(135deg, #1E3A5F, #1E40AF); border-color: #3B82F6; border-left-color: #60A5FA; }
+.info-icon {
     width: 44px; height: 44px; border-radius: 50%;
     background: #1E40AF; color: #FFF;
     display: flex; align-items: center; justify-content: center;
     font-size: 20px; flex-shrink: 0;
     box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3);
 }
-html.dark-mode .logic-icon { background: #3B82F6; }
-.logic-content h4 { font-size: 14px; font-weight: 800; color: #1E40AF; margin: 0 0 6px 0; }
-html.dark-mode .logic-content h4 { color: #93C5FD; }
-.logic-content p { font-size: 13px; color: #1E3A8A; margin: 0; line-height: 1.6; }
-html.dark-mode .logic-content p { color: #DBEAFE; }
+html.dark-mode .info-icon { background: #3B82F6; }
+.info-content h4 { font-size: 14px; font-weight: 800; color: #1E40AF; margin: 0 0 6px 0; }
+html.dark-mode .info-content h4 { color: #93C5FD; }
+.info-content p { font-size: 13px; color: #1E3A8A; margin: 0; line-height: 1.6; }
+html.dark-mode .info-content p { color: #DBEAFE; }
+.info-content strong { background: rgba(255,255,255,0.4); padding: 1px 6px; border-radius: 4px; font-weight: 800; }
+html.dark-mode .info-content strong { background: rgba(0,0,0,0.25); color: #93C5FD; }
 
-/* ALERTS */
-.alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); }
-.alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
-.alert-warning { background: #FEF3C7; color: #78350F; border: 1px solid #FDE68A; }
-html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
-html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
-html.dark-mode .alert-warning { background: #5F3A1E; color: #FDE68A; border-color: #92400E; }
-.alert i { font-size: 20px; flex-shrink: 0; }
-.alert span { flex: 1; font-size: 13px; font-weight: 500; }
-.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
-
-/* SOURCE CARD */
-.source-card {
+/* ============================================================
+   SOURCE INFO CARD
+   ============================================================ */
+.source-info-card {
     background: var(--bg-card);
     border-radius: 12px;
-    border: 1.5px solid #C4B5FD;
+    border: 2px solid;
     overflow: hidden;
-    margin-bottom: 18px;
-    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.1);
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px var(--shadow-color);
 }
-.source-card-header {
-    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-    padding: 14px 20px;
+.source-evening { border-color: #7C3AED; }
+.source-capital { border-color: #F59E0B; }
+.source-info-header {
+    padding: 12px 20px;
     display: flex; align-items: center; gap: 10px;
-    color: #FFF;
+    font-size: 13px; font-weight: 800;
+    color: #FFFFFF;
+    text-transform: uppercase; letter-spacing: 1px;
 }
-.source-card-header i { font-size: 18px; }
-.source-card-header h3 { font-size: 15px; font-weight: 800; margin: 0; flex: 1; }
-.source-badge {
+.source-evening .source-info-header {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+}
+.source-capital .source-info-header {
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+}
+.source-info-body {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+}
+.source-detail {
+    padding: 14px 20px;
+    display: flex; flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid var(--border-color);
+    min-width: 0;
+}
+.source-detail:last-child { border-right: none; }
+.source-detail-label {
+    font-size: 10px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+}
+.source-detail-value {
+    font-size: 13px; font-weight: 800;
+    color: var(--text-primary);
     font-family: 'Courier New', monospace;
-    font-size: 11px; font-weight: 700;
-    padding: 4px 12px;
-    background: rgba(255,255,255,0.2);
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.3);
+    word-break: break-word;
 }
-.source-card-body { padding: 18px 20px; }
-.source-info-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-.source-info-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; background: var(--bg-input); border-radius: 10px; border: 1px solid var(--border-color); min-width: 0; }
-.source-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
-.source-value { font-size: 13px; font-weight: 800; color: var(--text-primary); word-break: break-word; }
-.source-value.mono { font-family: 'Courier New', monospace; color: #7C3AED; }
-html.dark-mode .source-value.mono { color: #C4B5FD; }
 
-/* FORM CARD */
+/* ============================================================
+   FORM CARDS
+   ============================================================ */
 .form-card {
     background: var(--bg-card);
     border-radius: 12px;
     border: 1.5px solid var(--border-color);
     overflow: hidden;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .form-card-header {
@@ -699,10 +852,13 @@ html.dark-mode .source-value.mono { color: #C4B5FD; }
     border: 1px solid rgba(255,255,255,0.3);
 }
 .form-card-body { padding: 20px; }
-
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
-.form-group label { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.form-group label {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
 .form-group label .required { color: #DC2626; }
 .form-control {
     padding: 11px 14px;
@@ -715,10 +871,14 @@ html.dark-mode .source-value.mono { color: #C4B5FD; }
     transition: all 0.3s ease;
     width: 100%;
 }
-.form-control:focus { outline: none; border-color: #F59E0B; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15); background: var(--bg-card); }
+.form-control:focus {
+    outline: none;
+    border-color: #F59E0B;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+    background: var(--bg-card);
+}
 .form-hint { font-size: 10px; color: var(--text-muted); font-weight: 500; }
 textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter', sans-serif; }
-
 .money-input {
     font-size: 18px !important;
     font-weight: 800 !important;
@@ -727,7 +887,9 @@ textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter'
     text-align: right;
 }
 
-/* PROVIDERS GRID */
+/* ============================================================
+   PROVIDERS GRID
+   ============================================================ */
 .providers-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .provider-input-card {
     background: var(--bg-input);
@@ -735,14 +897,20 @@ textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter'
     border-radius: 12px;
     overflow: hidden;
     transition: all 0.3s ease;
+    position: relative;
 }
 .provider-input-card:hover { border-color: #F59E0B; box-shadow: 0 4px 12px rgba(245, 158, 11, 0.15); }
+.provider-input-card.has-value { border-color: #10B981; background: #F0FDF4; }
+html.dark-mode .provider-input-card.has-value { background: #064E3B; border-color: #10B981; }
+
 .provider-input-header {
     padding: 12px 14px;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border-color);
     display: flex; align-items: center; gap: 10px;
+    position: relative;
 }
+html.dark-mode .provider-input-card.has-value .provider-input-header { background: rgba(16, 185, 129, 0.1); }
 .provider-input-icon {
     width: 36px; height: 36px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
@@ -753,6 +921,20 @@ textarea.form-control { resize: vertical; min-height: 80px; font-family: 'Inter'
 .provider-input-name { font-size: 12px; font-weight: 800; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .provider-input-code { font-size: 9px; font-weight: 700; color: #D97706; background: #FEF3C7; padding: 1px 6px; border-radius: 5px; align-self: flex-start; font-family: 'Courier New', monospace; }
 html.dark-mode .provider-input-code { background: #5F3A1E; color: #FBBF24; }
+
+.active-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px; height: 22px;
+    background: #10B981;
+    color: #FFF;
+    border-radius: 50%;
+    font-size: 11px;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+}
+
 .provider-input-body { padding: 12px 14px; }
 .provider-input-body label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 6px; }
 .provider-input-body .form-control { font-size: 14px; padding: 9px 12px; text-align: right; font-family: 'Courier New', monospace; font-weight: 700; }
@@ -761,13 +943,15 @@ html.dark-mode .provider-input-code { background: #5F3A1E; color: #FBBF24; }
 .empty-providers i { font-size: 36px; color: var(--text-light); opacity: 0.5; display: block; margin-bottom: 10px; }
 .empty-providers p { margin: 0; font-size: 13px; }
 
-/* SUMMARY PANEL */
+/* ============================================================
+   SUMMARY PANEL
+   ============================================================ */
 .summary-panel {
     background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
     border: 2px solid #FCD34D;
     border-radius: 12px;
     overflow: hidden;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
 }
 html.dark-mode .summary-panel { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #D97706; }
 .summary-panel-header {
@@ -791,16 +975,93 @@ html.dark-mode .summary-value { color: #FBBF24; }
 .summary-line-total .summary-value { font-size: 20px; color: #78350F; }
 html.dark-mode .summary-line-total .summary-value { color: #FCD34D; }
 
-/* ACTIONS */
+/* ============================================================
+   COMPARISON CARD
+   ============================================================ */
+.comparison-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    border: 1.5px solid #C4B5FD;
+    overflow: hidden;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.1);
+}
+.comparison-header {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    padding: 12px 20px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 800; color: #FFF;
+    text-transform: uppercase; letter-spacing: 1px;
+}
+.comparison-header i { font-size: 16px; }
+.comparison-body { padding: 16px 20px; }
+.comparison-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px dashed var(--border-color);
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.comparison-row:last-child { border-bottom: none; }
+.comparison-row-total {
+    padding-top: 14px;
+    margin-top: 6px;
+    border-top: 2px solid #7C3AED !important;
+}
+.comparison-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.comparison-values {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.comparison-old {
+    font-family: 'Courier New', monospace;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text-muted);
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+.comparison-values i {
+    color: #7C3AED;
+    font-size: 14px;
+}
+.comparison-new {
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    font-size: 15px;
+    color: #7C3AED;
+}
+.comparison-row-total .comparison-new { font-size: 18px; color: #6D28D9; }
+html.dark-mode .comparison-new { color: #C4B5FD; }
+html.dark-mode .comparison-row-total .comparison-new { color: #DDD6FE; }
+
+/* ============================================================
+   ACTIONS
+   ============================================================ */
 .actions-bottom {
-    display: flex; gap: 12px; justify-content: flex-end;
-    padding: 20px 0; flex-wrap: wrap;
+    display: flex; gap: 12px;
+    justify-content: flex-end;
+    padding: 20px 0;
+    flex-wrap: wrap;
 }
 .btn {
-    padding: 12px 26px; border: none; border-radius: 10px;
+    padding: 12px 26px;
+    border: none; border-radius: 10px;
     font-weight: 700; font-size: 13px;
-    cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
-    transition: all 0.3s ease; font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
     text-decoration: none; white-space: nowrap;
 }
 .btn-primary {
@@ -808,18 +1069,25 @@ html.dark-mode .summary-line-total .summary-value { color: #FCD34D; }
     color: #FFF;
     box-shadow: 0 4px 14px rgba(217, 119, 6, 0.35);
 }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(217, 119, 6, 0.5); color: #FFF; }
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 22px rgba(217, 119, 6, 0.5);
+    color: #FFF;
+}
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 .btn-secondary {
-    background: var(--bg-card); color: var(--text-secondary);
+    background: var(--bg-card);
+    color: var(--text-secondary);
     border: 1.5px solid var(--border-color);
 }
-.btn-secondary:hover { background: var(--bg-table-even); color: var(--text-primary); }
+.btn-secondary:hover { background: var(--bg-input); color: var(--text-primary); }
 
-/* RESPONSIVE */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .providers-grid { grid-template-columns: repeat(2, 1fr); }
-    .source-info-grid { grid-template-columns: repeat(2, 1fr); }
+    .source-info-body { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
@@ -827,10 +1095,14 @@ html.dark-mode .summary-line-total .summary-value { color: #FCD34D; }
     .btn-back-card { width: 100%; justify-content: center; }
     .form-row { grid-template-columns: 1fr; }
     .providers-grid { grid-template-columns: 1fr; }
-    .source-info-grid { grid-template-columns: 1fr; }
+    .source-info-body { grid-template-columns: 1fr; }
+    .source-detail { border-right: none; border-bottom: 1px solid var(--border-color); }
+    .source-detail:last-child { border-bottom: none; }
     .actions-bottom { flex-direction: column-reverse; }
     .actions-bottom .btn { width: 100%; justify-content: center; }
-    .logic-banner { flex-direction: column; }
+    .info-banner { flex-direction: column; }
+    .comparison-values { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .comparison-values i { transform: rotate(90deg); }
 }
 </style>
 
@@ -881,15 +1153,27 @@ function recalcTotals() {
     document.getElementById('sum_float').textContent = formatMoney(totalFloat);
     document.getElementById('sum_cash').textContent = formatMoney(cash);
     document.getElementById('sum_total').textContent = formatMoney(total);
+
+    // Update comparison
+    document.getElementById('comp_cash').textContent = formatMoney(cash);
+    document.getElementById('comp_float').textContent = formatMoney(totalFloat);
+    document.getElementById('comp_total').textContent = formatMoney(total);
 }
 
 // ============================================================
 // VALIDATE
 // ============================================================
-function validateGenerate() {
+function validateEdit() {
     const reportDate = document.getElementById('report_date').value;
     if (!reportDate) {
         alert('Please select report date.');
+        return false;
+    }
+
+    // Check date not in future
+    const today = new Date().toISOString().split('T')[0];
+    if (reportDate > today) {
+        alert('Report date cannot be in the future.');
         return false;
     }
 
@@ -899,10 +1183,12 @@ function validateGenerate() {
         return false;
     }
 
-    // Validate all provider floats
+    // Validate provider floats
     let invalid = false;
+    let totalFloat = 0;
     document.querySelectorAll('.provider-float-input').forEach(function(input) {
         const val = parseMoney(input.value);
+        totalFloat += val;
         if (val < 0) {
             invalid = true;
             input.style.borderColor = '#DC2626';
@@ -916,9 +1202,14 @@ function validateGenerate() {
         return false;
     }
 
+    if (totalFloat <= 0 && cash <= 0) {
+        alert('Report cannot be empty. Provide at least one float or cash balance.');
+        return false;
+    }
+
     const btn = document.getElementById('submitBtn');
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     return true;
 }
 
@@ -927,8 +1218,16 @@ function validateGenerate() {
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     recalcTotals();
+
+    function syncDarkMode() {
+        var html = document.documentElement;
+        var isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) html.classList.add('dark-mode');
+        else html.classList.remove('dark-mode');
+    }
+    syncDarkMode();
+    document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
 });
 </script>
-
 </body>
 </html>

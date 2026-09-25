@@ -1,12 +1,17 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/add.php
-// WAKALA FINANCIAL SYSTEM - ADD EVENING STOCK (ADMIN) - FINAL
+// WAKALA FINANCIAL SYSTEM - ADD EVENING STOCK (ADMIN) - FINAL FIXED
+// 
+// ✅ FIX: Check duplicate KABLA ya form (inaonyesha nani aliyeunda)
+// ✅ FIX: Check duplicate kwenye POST (better error message)
+// ✅ FIX: Catch SQL error 1062 → friendly message
 // ✅ GREEN THEME
-// ✅ AUTO-FILL from daily_reports
-// ✅ Cash inachukuliwa kutoka daily_reports.current_cash
-// ✅ READONLY ONLY - No edit/delete
-// ✅ Cash JUU, Providers CHINI (3 kwa row)
+// ✅ AUTO-FILL from daily_reports (SAME DATE as stock_date)
+// ✅ Cash taken from daily_reports.current_cash (BRANCH CASH)
+// ✅ Float taken from daily_report_providers.current_float
+// ✅ cumm_total = FLOAT ONLY
+// ✅ Saves daily_report_id, opening_float, opening_cash
 // ================================================================
 
 error_reporting(E_ALL);
@@ -44,6 +49,9 @@ if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['bran
 }
 
 $selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $selected_date)) {
+    $selected_date = date('Y-m-d');
+}
 
 // ============================================================
 // GET BRANCHES
@@ -65,14 +73,23 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// CHECK EXISTING STOCK
+// ✅ CHECK DUPLICATE #1: EVENING STOCK (KABLA YA FORM)
+// Inaonyesha jina la aliyeunda + muda
 // ============================================================
 $existing_stock = null;
 if ($selected_branch > 0) {
     $stmt = $db->prepare("
-        SELECT id, stock_number 
-        FROM evening_stocks 
-        WHERE branch_id = ? AND stock_date = ?
+        SELECT 
+            es.id, 
+            es.stock_number,
+            es.stock_date,
+            es.submitted_at,
+            es.employee_id,
+            e.full_name AS created_by_name,
+            e.employee_id AS created_by_code
+        FROM evening_stocks es
+        LEFT JOIN employees e ON es.employee_id = e.id
+        WHERE es.branch_id = ? AND es.stock_date = ?
         LIMIT 1
     ");
     $stmt->execute([$selected_branch, $selected_date]);
@@ -111,15 +128,12 @@ if ($selected_branch > 0 && !$existing_stock) {
 
 // ============================================================
 // CALCULATE TOTALS
-// ✅ Float inachukuliwa kutoka daily_report_providers
-// ✅ Cash inachukuliwa kutoka daily_reports.current_cash
 // ============================================================
 $total_float = 0;
 foreach ($daily_report_providers as $drp) {
     $total_float += floatval(str_replace(',', '', $drp['current_float'] ?? 0));
 }
 
-// ✅ Cash kutoka daily_reports (SIO providers)
 $total_cash = $daily_report ? floatval(str_replace(',', '', $daily_report['current_cash'] ?? 0)) : 0;
 $grand_total = $total_float + $total_cash;
 
@@ -138,14 +152,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Please select a branch.');
         }
 
-        // Check duplicate
-        $stmt = $db->prepare("SELECT id FROM evening_stocks WHERE branch_id = ? AND stock_date = ?");
+        // ------------------------------------------------------------
+        // ✅ CHECK #1: Evening Stock ipo tayari?
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            SELECT 
+                es.id, 
+                es.stock_number, 
+                e.full_name AS created_by,
+                e.employee_id AS created_by_code
+            FROM evening_stocks es
+            LEFT JOIN employees e ON es.employee_id = e.id
+            WHERE es.branch_id = ? AND es.stock_date = ?
+            LIMIT 1
+        ");
         $stmt->execute([$branch_id, $stock_date]);
-        if ($stmt->fetch()) {
-            throw new Exception('Evening stock already exists for this branch and date.');
+        $existing_es = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing_es) {
+            $created_by = $existing_es['created_by'] ?? 'another user';
+            $created_by_code = $existing_es['created_by_code'] ?? '';
+            
+            throw new Exception(
+                '❌ Evening Stock for ' . date('d M Y', strtotime($stock_date)) . 
+                ' already exists (' . $existing_es['stock_number'] . ') ' .
+                'added by ' . $created_by . 
+                ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+                'Each branch can only have ONE evening stock per day.'
+            );
         }
 
-        // Get daily report
+        // ------------------------------------------------------------
+        // Get Daily Report for the SAME DATE
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT * FROM daily_reports 
             WHERE branch_id = ? AND report_date = ?
@@ -155,7 +194,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $dr = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$dr) {
-            throw new Exception('No daily report found for this branch and date.');
+            throw new Exception('No daily report found for this branch and date. Please create a Daily Report for ' . date('d M Y', strtotime($stock_date)) . ' first.');
         }
 
         // Get providers
@@ -171,13 +210,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('No providers found in daily report.');
         }
 
+        // ------------------------------------------------------------
+        // ✅ BEGIN TRANSACTION
+        // ------------------------------------------------------------
         $db->beginTransaction();
 
         $stock_number = 'ES-' . date('Ymd', strtotime($stock_date)) . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
 
-        // ====================================================
-        // CALCULATE TOTALS - FIXED
-        // ====================================================
+        // Calculate totals
         $total_float_new = 0;
         $provider_data_array = [];
 
@@ -200,11 +240,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ];
         }
 
-        // ✅ Cash inachukuliwa kutoka daily_reports (SIO providers)
         $total_cash_new = floatval(str_replace(',', '', $dr['current_cash'] ?? 0));
-        $grand_total_new = $total_float_new + $total_cash_new;
 
-        // Get branch name
         $branch_name = '';
         foreach ($all_branches as $b) {
             if ($b['id'] == $branch_id) {
@@ -213,28 +250,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
-        // Insert evening stock
+        // ------------------------------------------------------------
+        // ✅ INSERT EVENING STOCK
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO evening_stocks 
-            (stock_number, employee_id, branch, branch_id, stock_date,
-             provider_data, cash_balance, cumm_total, status, submitted_at, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NOW(), ?)
+            (stock_number, employee_id, branch, branch_id, daily_report_id, stock_date,
+             provider_data, cash_balance, opening_float, opening_cash,
+             cumm_total, status, submitted_at, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NOW(), ?)
         ");
         $stmt->execute([
             $stock_number,
             $user_id,
             $branch_name,
             $branch_id,
+            $dr['id'],
             $stock_date,
             json_encode($provider_data_array),
             $total_cash_new,
-            $grand_total_new,
+            floatval(str_replace(',', '', $dr['current_float'] ?? 0)),
+            floatval(str_replace(',', '', $dr['current_cash'] ?? 0)),
+            $total_float_new,
             $notes
         ]);
 
         $stock_id = $db->lastInsertId();
 
-        // Insert providers
+        // ------------------------------------------------------------
+        // ✅ INSERT PROVIDERS
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO evening_stock_providers 
             (evening_stock_id, provider_id, provider_code, provider_name,
@@ -278,7 +323,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
-        $error_message = $e->getMessage();
+        
+        $error_msg = $e->getMessage();
+        
+        // ============================================================
+        // ✅ CATCH SQL ERROR 1062 - Duplicate entry
+        // ============================================================
+        if (strpos($error_msg, '1062') !== false || 
+            strpos($error_msg, 'Duplicate entry') !== false ||
+            strpos($error_msg, 'Integrity constraint') !== false) {
+            
+            $stock_date_safe = $_POST['stock_date'] ?? date('Y-m-d');
+            $branch_id_safe = intval($_POST['branch_id'] ?? 0);
+            
+            $stmt = $db->prepare("
+                SELECT 
+                    es.stock_number,
+                    e.full_name AS created_by,
+                    e.employee_id AS created_by_code
+                FROM evening_stocks es
+                LEFT JOIN employees e ON es.employee_id = e.id
+                WHERE es.branch_id = ? AND es.stock_date = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$branch_id_safe, $stock_date_safe]);
+            $dup = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($dup) {
+                $error_msg = 
+                    '❌ Evening Stock for ' . date('d M Y', strtotime($stock_date_safe)) . 
+                    ' already exists (' . $dup['stock_number'] . ') ' .
+                    'added by ' . ($dup['created_by'] ?? 'another user') . 
+                    (!empty($dup['created_by_code']) ? ' (' . $dup['created_by_code'] . ')' : '') . '. ' .
+                    'Each branch can only have ONE evening stock per day.';
+            } else {
+                $error_msg = 
+                    '❌ An Evening Stock for ' . date('d M Y', strtotime($stock_date_safe)) . 
+                    ' already exists. Each branch can only have ONE evening stock per day.';
+            }
+        }
+        
+        $error_message = $error_msg;
     }
 }
 
@@ -354,7 +439,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
                 <h3 class="waiting-title">Please Select a Branch</h3>
                 <p class="waiting-text">
-                    Chagua branch ili kuongeza evening stock.
+                    Select a branch to add an evening stock entry.
                 </p>
                 <div class="branch-picker-grid">
                     <?php foreach ($all_branches as $b): ?>
@@ -376,7 +461,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
 
         <?php elseif ($existing_stock): ?>
-            <!-- EXISTING STOCK -->
+            <!-- ✅ EXISTING STOCK - With creator info -->
             <div class="waiting-card">
                 <div class="waiting-icon waiting-warning">
                     <i class="fas fa-info-circle"></i>
@@ -385,6 +470,22 @@ include_once '../../includes/admin_topbar.php';
                 <p class="waiting-text">
                     Evening stock <strong><?php echo htmlspecialchars($existing_stock['stock_number']); ?></strong> 
                     already exists for this branch on <?php echo date('d M Y', strtotime($selected_date)); ?>.
+                    <?php if (!empty($existing_stock['created_by_name'])): ?>
+                        <br><br>
+                        <span class="creator-info">
+                            <i class="fas fa-user-circle"></i>
+                            Added by <strong><?php echo htmlspecialchars($existing_stock['created_by_name']); ?></strong>
+                            <?php if (!empty($existing_stock['created_by_code'])): ?>
+                                (<?php echo htmlspecialchars($existing_stock['created_by_code']); ?>)
+                            <?php endif; ?>
+                            <?php if (!empty($existing_stock['submitted_at'])): ?>
+                                · <i class="fas fa-clock"></i>
+                                <?php echo date('d M Y H:i', strtotime($existing_stock['submitted_at'])); ?>
+                            <?php endif; ?>
+                        </span>
+                    <?php endif; ?>
+                    <br><br>
+                    Each branch can only have <strong>ONE</strong> evening stock per day.
                 </p>
                 <div class="waiting-actions">
                     <a href="view.php?id=<?php echo $existing_stock['id']; ?>" class="btn btn-primary">
@@ -406,7 +507,7 @@ include_once '../../includes/admin_topbar.php';
                 <p class="waiting-text">
                     No Daily Report found for <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong> 
                     at <strong><?php echo htmlspecialchars($selected_branch_name); ?></strong>.
-                    Please create a Daily Report first.
+                    Please create a Daily Report for this date first.
                 </p>
                 <div class="waiting-actions">
                     <a href="../daily_report/add.php?branch=<?php echo $selected_branch; ?>&date=<?php echo $selected_date; ?>" class="btn btn-primary">
@@ -452,7 +553,7 @@ include_once '../../includes/admin_topbar.php';
                 <div class="form-card">
                     <div class="form-card-header">
                         <i class="fas fa-money-bill-wave"></i>
-                        <h3>Cash Balance</h3>
+                        <h3>Branch Cash Balance</h3>
                     </div>
                     <div class="form-card-body">
                         <div class="form-row">
@@ -474,7 +575,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
 
-                <!-- PROVIDERS SECTION - 3 KWA ROW -->
+                <!-- PROVIDERS SECTION - 3 PER ROW -->
                 <div class="form-card">
                     <div class="form-card-header">
                         <i class="fas fa-university"></i>
@@ -485,11 +586,11 @@ include_once '../../includes/admin_topbar.php';
                         <?php if (count($daily_report_providers) > 0): ?>
                             <div class="providers-grid-3">
                                 <?php foreach ($daily_report_providers as $drp):
-                                    $color = $drp['color_code'] ?? '#0B5ED7';
+                                    $color = $drp['color_code'] ?? '#059669';
                                     $icon = $drp['icon_class'] ?? 'fas fa-university';
                                     $closing_float = floatval(str_replace(',', '', $drp['current_float'] ?? 0));
                                 ?>
-                                    <div class="provider-input-card">
+                                    <div class="provider-input-card provider-input-green">
                                         <div class="provider-input-header">
                                             <div class="provider-input-icon" style="background: <?php echo htmlspecialchars($color); ?>;">
                                                 <i class="<?php echo htmlspecialchars($icon); ?>"></i>
@@ -549,7 +650,7 @@ include_once '../../includes/admin_topbar.php';
                             <span class="summary-value"><?php echo formatCurrency($total_cash); ?></span>
                         </div>
                         <div class="summary-line summary-line-total">
-                            <span>Cumm. Total:</span>
+                            <span>Grand Total:</span>
                             <span class="summary-value"><?php echo formatCurrency($grand_total); ?></span>
                         </div>
                     </div>
@@ -733,6 +834,29 @@ html.dark-mode .waiting-icon.waiting-warning {
     font-weight: 800;
 }
 html.dark-mode .waiting-text strong { background: #065F46; color: #6EE7B7; }
+
+/* ✅ CREATOR INFO */
+.creator-info {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 14px;
+    background: var(--green-light);
+    border-radius: 8px;
+    border: 1px solid #A7F3D0;
+    margin-top: 8px;
+}
+.creator-info i { color: var(--green-primary); font-size: 14px; }
+.creator-info strong { color: var(--green-darker); }
+html.dark-mode .creator-info {
+    background: #065F46;
+    border-color: #10B981;
+    color: #D1FAE5;
+}
+html.dark-mode .creator-info strong { color: #6EE7B7; }
+
 .waiting-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
 .branch-picker-grid {
@@ -896,60 +1020,119 @@ html.dark-mode .readonly-input {
     color: #6EE7B7 !important;
 }
 
-.providers-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.provider-input-card {
-    background: var(--bg-input);
-    border: 1.5px solid var(--border-color);
-    border-radius: 12px;
+/* ✅ PROVIDERS GRID - GREEN THEME */
+.providers-grid-3 { 
+    display: grid; 
+    grid-template-columns: repeat(3, 1fr); 
+    gap: 14px; 
+}
+.provider-input-card.provider-input-green {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 14px;
     overflow: hidden;
     transition: all 0.3s ease;
+    position: relative;
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.12);
 }
-.provider-input-card:hover {
+.provider-input-card.provider-input-green::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    right: -40px;
+    width: 120px;
+    height: 120px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+}
+html.dark-mode .provider-input-card.provider-input-green {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+}
+.provider-input-card.provider-input-green:hover {
     border-color: #059669;
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.25);
+    transform: translateY(-3px);
 }
+html.dark-mode .provider-input-card.provider-input-green:hover {
+    border-color: #34D399;
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+}
+
 .provider-input-header {
     padding: 12px 14px;
-    background: var(--bg-card);
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
     display: flex; align-items: center; gap: 10px;
+    position: relative;
+    z-index: 1;
+}
+html.dark-mode .provider-input-header {
+    background: rgba(15, 23, 42, 0.3);
+    border-bottom-color: rgba(16, 185, 129, 0.3);
 }
 .provider-input-icon {
-    width: 36px; height: 36px;
+    width: 38px; height: 38px;
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     color: #FFF; font-size: 15px; flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
 }
-.provider-input-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.provider-input-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .provider-input-name {
-    font-size: 12px; font-weight: 800;
-    color: var(--text-primary);
+    font-size: 13px; font-weight: 800;
+    color: #065F46;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    letter-spacing: -0.2px;
 }
+html.dark-mode .provider-input-name { color: #D1FAE5; }
 .provider-input-code {
-    font-size: 9px; font-weight: 700;
-    color: #059669;
-    background: #D1FAE5;
-    padding: 1px 6px;
-    border-radius: 5px;
+    font-size: 10px; font-weight: 700;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 2px 8px;
+    border-radius: 6px;
     align-self: flex-start;
     font-family: 'Courier New', monospace;
+    border: 1px solid rgba(5, 150, 105, 0.3);
 }
-html.dark-mode .provider-input-code { background: #065F46; color: #6EE7B7; }
-.provider-input-body { padding: 12px 14px; }
+html.dark-mode .provider-input-code {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+.provider-input-body { 
+    padding: 12px 14px; 
+    position: relative;
+    z-index: 1;
+}
 .provider-input-body label {
-    font-size: 10px; font-weight: 700;
-    color: var(--text-muted);
+    font-size: 10px; font-weight: 800;
+    color: #047857;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
     display: block; margin-bottom: 6px;
 }
+html.dark-mode .provider-input-body label { color: #6EE7B7; }
 .provider-input-body .form-control {
     font-size: 14px;
     padding: 9px 12px;
     text-align: right;
     font-family: 'Courier New', monospace;
-    font-weight: 700;
+    font-weight: 900;
+    color: #065F46;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+html.dark-mode .provider-input-body .form-control {
+    background: rgba(15, 23, 42, 0.4);
+    color: #A7F3D0;
+    border-color: rgba(16, 185, 129, 0.4);
 }
 
 .empty-providers {
@@ -1092,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', function() {
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
 
-    // Zuia readonly inputs kabisa
+    // Completely block readonly inputs
     document.querySelectorAll('.readonly-input').forEach(function(input) {
         input.addEventListener('keydown', function(e) { e.preventDefault(); return false; });
         input.addEventListener('paste', function(e) { e.preventDefault(); return false; });

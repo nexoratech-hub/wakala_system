@@ -2,9 +2,12 @@
 // ================================================================
 // FILE: modules/evening_stock/edit.php
 // EVENING STOCK - EDIT (ADMIN)
-// ✅ Edit closing balances
+// ✅ Edit closing balances (FLOAT ONLY)
 // ✅ Update status
 // ✅ Edit notes
+// ✅ cumm_total = FLOAT ONLY (not float + cash)
+// ✅ cash_balance unchanged (from daily_reports.current_cash)
+// ✅ ALL INSTRUCTIONS IN ENGLISH
 // ================================================================
 
 error_reporting(E_ALL);
@@ -50,10 +53,12 @@ try {
             e.full_name as employee_name,
             b.branch_name as branch_name,
             b.branch_code as branch_code,
-            b.location as branch_location
+            b.location as branch_location,
+            dr.report_number as daily_report_number
             FROM evening_stocks es
             LEFT JOIN employees e ON es.employee_id = e.id
             LEFT JOIN branches b ON es.branch_id = b.id
+            LEFT JOIN daily_reports dr ON es.daily_report_id = dr.id
             WHERE es.id = ?";
     
     $stmt = $db->prepare($sql);
@@ -87,6 +92,18 @@ $stmt->execute([$stock_id]);
 $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
+// CALCULATE CURRENT TOTALS (for display)
+// ✅ Float = jumla ya providers.closing_float
+// ✅ Cash = evening_stocks.cash_balance (BRANCH CASH — HAIBAKI)
+// ============================================================
+$current_total_float = 0;
+foreach ($providers as $p) {
+    $current_total_float += floatval($p['closing_float'] ?? 0);
+}
+$current_total_cash = floatval($stock['cash_balance'] ?? 0);
+$current_grand_total = $current_total_float + $current_total_cash;
+
+// ============================================================
 // HANDLE FORM SUBMISSION
 // ============================================================
 $error_message = '';
@@ -107,28 +124,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $db->beginTransaction();
         
         $total_float = 0;
-        $total_cash = 0;
         $provider_data_array = [];
         
-        // Update each provider
+        // ====================================================
+        // ✅ UPDATE EACH PROVIDER
+        // ✅ Use provider_id (not row id) for POST key
+        // ✅ Remove commas BEFORE floatval
+        // ====================================================
         foreach ($providers as $p) {
-            $pid = $p['id'];
-            $provider_id = $p['provider_id'];
+            $pid = $p['provider_id'];  // ✅ Use provider_id for POST key
+            $row_id = $p['id'];        // ✅ Use row id for UPDATE
             
-            $closing_float = floatval($_POST['closing_float'][$pid] ?? $p['closing_float']);
-            $closing_cash = floatval($_POST['closing_cash'][$pid] ?? $p['closing_cash']);
+            // ✅ Remove commas BEFORE floatval
+            $closing_float = floatval(str_replace(',', '', $_POST['closing_float'][$pid] ?? $p['closing_float']));
+            $closing_cash  = floatval(str_replace(',', '', $_POST['closing_cash'][$pid]  ?? $p['closing_cash']));
             
+            // ✅ ONLY FLOAT contributes to cumm_total
             $total_float += $closing_float;
-            $total_cash += $closing_cash;
             
-            $provider_data_array[$provider_id] = [
-                'provider_name' => $p['provider_name'],
-                'provider_code' => $p['provider_code'],
-                'opening_float' => floatval($p['opening_float']),
-                'opening_cash' => floatval($p['opening_cash']),
-                'closing_float' => $closing_float,
-                'closing_cash' => $closing_cash,
-                'total_deposits' => floatval($p['total_deposits']),
+            $provider_data_array[$pid] = [
+                'provider_name'     => $p['provider_name'],
+                'provider_code'     => $p['provider_code'],
+                'opening_float'     => floatval($p['opening_float']),
+                'opening_cash'      => floatval($p['opening_cash']),
+                'closing_float'     => $closing_float,
+                'closing_cash'      => $closing_cash,
+                'total_deposits'    => floatval($p['total_deposits']),
                 'total_withdrawals' => floatval($p['total_withdrawals'])
             ];
             
@@ -137,14 +158,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 SET closing_float = ?, closing_cash = ?, updated_at = NOW() 
                 WHERE id = ?
             ");
-            $stmt->execute([$closing_float, $closing_cash, $pid]);
+            $stmt->execute([$closing_float, $closing_cash, $row_id]);
         }
         
-        // Update evening stock
+        // ====================================================
+        // ✅ UPDATE EVENING STOCK
+        // ✅ cumm_total = FLOAT ONLY
+        // ✅ cash_balance UNCHANGED (from original daily_reports.current_cash)
+        // ====================================================
         $stmt = $db->prepare("
             UPDATE evening_stocks 
             SET provider_data = ?,
-                cash_balance = ?,
                 cumm_total = ?,
                 status = ?,
                 notes = ?,
@@ -153,8 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         ");
         $stmt->execute([
             json_encode($provider_data_array),
-            $total_cash,
-            $total_float,
+            $total_float,          // ✅ cumm_total = FLOAT ONLY
             $status,
             $notes,
             $stock_id
@@ -231,6 +254,9 @@ include_once '../../includes/admin_topbar.php';
                 <h2><i class="fas fa-edit" style="color:#F59E0B;"></i> Edit Evening Stock</h2>
                 <p class="text-muted">
                     Reference: <strong><?php echo htmlspecialchars($stock['stock_number']); ?></strong>
+                    <?php if (!empty($stock['daily_report_number'])): ?>
+                        • From Daily Report: <strong><?php echo htmlspecialchars($stock['daily_report_number']); ?></strong>
+                    <?php endif; ?>
                 </p>
             </div>
         </div>
@@ -255,6 +281,30 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
+        CURRENT SUMMARY CARD (READ-ONLY)
+        ============================================================ -->
+        <div class="summary-info-card">
+            <div class="sic-header">
+                <i class="fas fa-info-circle"></i>
+                <span>Current Values (Before Editing)</span>
+            </div>
+            <div class="sic-body">
+                <div class="sic-item">
+                    <span class="sic-label">Current Float</span>
+                    <span class="sic-value"><?php echo formatCurrency($current_total_float); ?></span>
+                </div>
+                <div class="sic-item">
+                    <span class="sic-label">Branch Cash (Locked)</span>
+                    <span class="sic-value locked"><?php echo formatCurrency($current_total_cash); ?></span>
+                </div>
+                <div class="sic-item sic-total">
+                    <span class="sic-label">Grand Total</span>
+                    <span class="sic-value"><?php echo formatCurrency($current_grand_total); ?></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
         EDIT FORM
         ============================================================ -->
         <div class="form-container">
@@ -270,7 +320,7 @@ include_once '../../includes/admin_topbar.php';
                     
                     <p class="section-hint">
                         <i class="fas fa-info-circle"></i>
-                        Edit closing float and cash balances. Opening balances hazibadiliki.
+                        Edit closing float and cash balances. Opening balances cannot be changed.
                     </p>
                     
                     <div class="providers-table-wrapper">
@@ -316,16 +366,18 @@ include_once '../../includes/admin_topbar.php';
                                         </td>
                                         <td class="text-right">
                                             <input type="text" 
-                                                   name="closing_float[<?php echo $p['id']; ?>]" 
+                                                   name="closing_float[<?php echo $p['provider_id']; ?>]" 
                                                    class="money-input-table"
                                                    value="<?php echo number_format($p['closing_float'], 0, '.', ''); ?>"
+                                                   data-provider-id="<?php echo $p['provider_id']; ?>"
                                                    oninput="formatMoneyInput(this); updateTotals();">
                                         </td>
                                         <td class="text-right">
                                             <input type="text" 
-                                                   name="closing_cash[<?php echo $p['id']; ?>]" 
+                                                   name="closing_cash[<?php echo $p['provider_id']; ?>]" 
                                                    class="money-input-table"
                                                    value="<?php echo number_format($p['closing_cash'], 0, '.', ''); ?>"
+                                                   data-provider-id="<?php echo $p['provider_id']; ?>"
                                                    oninput="formatMoneyInput(this); updateTotals();">
                                         </td>
                                     </tr>
@@ -333,7 +385,7 @@ include_once '../../includes/admin_topbar.php';
                             </tbody>
                             <tfoot>
                                 <tr class="totals-row">
-                                    <td colspan="6" class="text-right"><strong>TOTALS</strong></td>
+                                    <td colspan="6" class="text-right"><strong>PROVIDER FLOAT TOTAL</strong></td>
                                     <td class="text-right"><span class="total-value" id="totalFloat">TSh 0</span></td>
                                     <td class="text-right"><span class="total-value" id="totalCash">TSh 0</span></td>
                                 </tr>
@@ -351,7 +403,7 @@ include_once '../../includes/admin_topbar.php';
                 <!-- ===== STATUS & NOTES ===== -->
                 <div class="form-section">
                     <div class="section-header">
-                        <h3><i class="fas fa-tasks"></i> Status & Notes</h3>
+                        <h3><i class="fas fa-tasks"></i> Status &amp; Notes</h3>
                     </div>
                     
                     <div class="form-row">
@@ -400,7 +452,9 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <style>
-/* ===== Same CSS base as add.php but adapted ===== */
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
 :root {
     --ee-bg: #F3F4F6;
     --ee-text: #1F2937;
@@ -430,6 +484,9 @@ body { background: var(--ee-bg) !important; color: var(--ee-text); }
 .main-wrapper { background: var(--ee-bg) !important; }
 .main-content { background: var(--ee-bg) !important; padding: 16px 20px !important; }
 
+/* ============================================================
+   BRANCH STATUS CARD — AMBER
+   ============================================================ */
 .branch-status-card {
     display: flex;
     align-items: center;
@@ -526,6 +583,9 @@ body { background: var(--ee-bg) !important; color: var(--ee-text); }
 }
 .btn-back-card:hover { background: rgba(255, 255, 255, 0.25); color: #FFFFFF; transform: translateX(-3px); }
 
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -546,6 +606,9 @@ body { background: var(--ee-bg) !important; color: var(--ee-text); }
 .header-left .text-muted { font-size: 13px; color: var(--ee-text-secondary); margin: 4px 0 0 0; }
 .header-left .text-muted strong { color: #F59E0B; font-family: 'Courier New', monospace; font-weight: 800; }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 14px 18px;
     border-radius: 10px;
@@ -558,10 +621,83 @@ body { background: var(--ee-bg) !important; color: var(--ee-text); }
 }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
+html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 .alert i { font-size: 20px; flex-shrink: 0; }
 .alert span { flex: 1; }
 .alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; padding: 0 4px; opacity: 0.6; }
+.alert-close:hover { opacity: 1; }
 
+/* ============================================================
+   SUMMARY INFO CARD (READ-ONLY)
+   ============================================================ */
+.summary-info-card {
+    background: var(--ee-card-bg);
+    border-radius: 12px;
+    border: 2px solid #FCD34D;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px var(--ee-shadow);
+}
+.sic-header {
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #92400E;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #FCD34D;
+}
+html.dark-mode .sic-header {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    color: #FCD34D;
+    border-bottom-color: #F59E0B;
+}
+.sic-header i { font-size: 16px; }
+.sic-body {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+}
+.sic-item {
+    padding: 14px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid var(--ee-border);
+    min-width: 0;
+}
+.sic-item:last-child { border-right: none; }
+.sic-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ee-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.sic-value {
+    font-size: 16px;
+    font-weight: 900;
+    color: var(--ee-text);
+    font-family: 'Inter', 'Courier New', monospace;
+    word-break: break-word;
+}
+.sic-value.locked {
+    color: #F59E0B;
+}
+.sic-total .sic-value {
+    color: #D97706;
+    font-size: 18px;
+}
+html.dark-mode .sic-total .sic-value { color: #FCD34D; }
+
+/* ============================================================
+   FORM CONTAINER
+   ============================================================ */
 .form-container {
     background: var(--ee-card-bg);
     border-radius: 14px;
@@ -614,6 +750,9 @@ body { background: var(--ee-bg) !important; color: var(--ee-text); }
 }
 .section-hint i { color: #F59E0B; }
 
+/* ============================================================
+   PROVIDERS TABLE
+   ============================================================ */
 .providers-table-wrapper {
     overflow-x: auto;
     border-radius: 10px;
@@ -702,6 +841,7 @@ html.dark-mode .provider-code { background: #1E3A5F; color: #60A5FA; }
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
     background: var(--ee-card-bg);
 }
+html.dark-mode .money-input-table { color: #FCD34D; }
 
 .providers-table tfoot { background: var(--ee-hover); }
 .providers-table tfoot td {
@@ -734,6 +874,9 @@ html.dark-mode .total-value { color: #FCD34D; }
     text-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
+/* ============================================================
+   FORM CONTROLS
+   ============================================================ */
 .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -775,6 +918,9 @@ html.dark-mode .total-value { color: #FCD34D; }
 }
 .form-control.textarea-control { min-height: 80px; resize: vertical; line-height: 1.6; }
 
+/* ============================================================
+   FORM ACTIONS
+   ============================================================ */
 .form-actions {
     display: flex;
     gap: 12px;
@@ -807,6 +953,7 @@ html.dark-mode .total-value { color: #FCD34D; }
     box-shadow: 0 6px 20px rgba(245, 158, 11, 0.45);
     color: white;
 }
+.btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 .btn-reset, .btn-cancel {
     background: var(--ee-card-bg);
     color: var(--ee-text-secondary);
@@ -815,6 +962,9 @@ html.dark-mode .total-value { color: #FCD34D; }
 .btn-reset:hover { background: var(--ee-border); color: var(--ee-text); }
 .btn-cancel:hover { background: #FEE2E2; color: #991B1B; }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
     .branch-status-card { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -825,6 +975,10 @@ html.dark-mode .total-value { color: #FCD34D; }
     .form-actions { flex-direction: column; }
     .form-actions .btn { width: 100%; justify-content: center; }
     .money-input-table { width: 110px; font-size: 12px; }
+
+    .sic-body { grid-template-columns: 1fr; }
+    .sic-item { border-right: none; border-bottom: 1px solid var(--ee-border); }
+    .sic-item:last-child { border-bottom: none; }
 }
 @media (max-width: 480px) {
     .money-input-table { width: 90px; font-size: 11px; }
@@ -832,6 +986,9 @@ html.dark-mode .total-value { color: #FCD34D; }
 </style>
 
 <script>
+// ============================================================
+// FORMAT MONEY INPUT
+// ============================================================
 function formatMoneyInput(input) {
     var value = input.value.replace(/[^0-9]/g, '');
     if (value === '') { input.value = ''; return; }
@@ -848,6 +1005,12 @@ function formatMoneyInput(input) {
     updateTotals();
 }
 
+// ============================================================
+// UPDATE TOTALS (JS live preview)
+// ✅ Float = jumla ya providers.closing_float
+// ✅ Cash = jumla ya providers.closing_cash (preview only)
+// ✅ Grand Total = float + cash (preview)
+// ============================================================
 function updateTotals() {
     var totalFloat = 0;
     var totalCash = 0;
@@ -883,6 +1046,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
+
+    // Auto-hide alerts
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() {
+            successAlert.style.transition = 'opacity 0.4s ease';
+            successAlert.style.opacity = '0';
+            setTimeout(function() { if (successAlert.parentElement) successAlert.remove(); }, 400);
+        }, 5000);
+    }
 });
 </script>
 

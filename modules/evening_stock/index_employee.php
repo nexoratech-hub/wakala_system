@@ -1,13 +1,14 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/index_employee.php
-// EVENING STOCK - EMPLOYEE VIEW ONLY
-// ✅ Inafanana na admin index.php
-// ✅ Cards ni BLUE (sio purple)
-// ✅ Button ya Add Evening Stock imewekwa
-// ✅ Employee anaona branch yake pekee
-// ✅ Content haifichwi na sidebar wala topbar
-// ✅ Footer inakaa CHINI kabisa
+// EVENING STOCK - EMPLOYEE VIEW (BLUE THEME)
+// ✅ Employee sees OWN BRANCH only
+// ✅ Blue theme with distinct semi-transparent summary cards
+// ✅ ADD + EXPORT buttons in page header (right side)
+// ✅ Export dropdown: PDF, CSV, Word (with proper links)
+// ✅ Employee can ADD but not EDIT/DELETE
+// ✅ Content not hidden by sidebar/topbar
+// ✅ FIXED: Export button redirects to correct export.php
 // ================================================================
 
 error_reporting(E_ALL);
@@ -46,11 +47,10 @@ $from_date     = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01')
 $to_date       = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
 $status_filter = isset($_GET['status'])    ? $_GET['status']    : '';
 
-// Employee anaona branch yake pekee
 $selected_branch = $employee_branch_id;
 
 // ============================================================
-// GET BRANCH INFO (for filter card display)
+// GET BRANCH INFO
 // ============================================================
 $filter_branch_name     = $employee_branch;
 $filter_branch_code     = '';
@@ -72,7 +72,7 @@ try {
 }
 
 // ============================================================
-// BUILD QUERY (employee = branch yake pekee)
+// BUILD QUERY
 // ============================================================
 try {
     $sql = "SELECT es.*,
@@ -135,15 +135,19 @@ foreach ($all_stocks as $s) {
     $b_id = $s['branch_id'] ?? 0;
     $is_new_branch = ($previous_branch_id !== null && $previous_branch_id != $b_id);
 
+    $float = floatval($s['cumm_total'] ?? 0);
+    $cash  = floatval($s['cash_balance'] ?? 0);
+    $total = $float + $cash;
+
     if (!in_array($b_id, $branch_ids_seen)) {
         $branch_ids_seen[] = $b_id;
     }
 
     $grand_totals['count']++;
     $grand_totals[$s['status']] = ($grand_totals[$s['status']] ?? 0) + 1;
-    $grand_totals['total_float'] += floatval($s['cumm_total']   ?? 0);
-    $grand_totals['total_cash']  += floatval($s['cash_balance'] ?? 0);
-    $grand_totals['grand_total'] += floatval($s['cumm_total'] ?? 0) + floatval($s['cash_balance'] ?? 0);
+    $grand_totals['total_float'] += $float;
+    $grand_totals['total_cash']  += $cash;
+    $grand_totals['grand_total'] += $total;
 
     $flat_stocks[] = [
         'stock'         => $s,
@@ -155,7 +159,6 @@ foreach ($all_stocks as $s) {
 
 $grand_totals['branches_count'] = count($branch_ids_seen);
 
-// Status labels
 $status_labels = [
     'waiting'  => ['label' => 'Waiting',  'icon' => 'fa-clock',        'color' => 'orange'],
     'approved' => ['label' => 'Approved', 'icon' => 'fa-check-circle', 'color' => 'green'],
@@ -163,7 +166,6 @@ $status_labels = [
     'rejected' => ['label' => 'Rejected', 'icon' => 'fa-times-circle', 'color' => 'red']
 ];
 
-// Success/error messages
 $success_message = '';
 $error_message   = '';
 if (isset($_SESSION['success_message'])) {
@@ -195,18 +197,13 @@ include_once '../../includes/employee_topbar.php';
                     <span class="filter-code">(<?php echo htmlspecialchars($filter_branch_code); ?>)</span>
                 <?php endif; ?>
                 <span class="filter-view-only">
-                    <i class="fas fa-eye"></i> View Only
+                    <i class="fas fa-lock"></i> Locked to Your Branch
                 </span>
-            </div>
-            <div class="filter-right">
-                <a href="add_employee.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn btn-add">
-                    <i class="fas fa-plus"></i> New Evening Stock
-                </a>
             </div>
         </div>
 
         <!-- ============================================================
-        PAGE HEADER
+        PAGE HEADER WITH ADD + EXPORT BUTTONS
         ============================================================ -->
         <div class="page-header">
             <div class="header-left">
@@ -214,6 +211,51 @@ include_once '../../includes/employee_topbar.php';
                 <p class="text-muted">
                     Evening stock reports for <strong><?php echo htmlspecialchars($filter_branch_name); ?></strong>
                 </p>
+            </div>
+            <div class="header-right">
+                <!-- ✅ ADD EVENING REPORT BUTTON -->
+                <a href="add_employee.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn-action-big btn-action-add">
+                    <i class="fas fa-plus-circle"></i>
+                    <span>Add Evening Report</span>
+                </a>
+                
+                <!-- ✅ EXPORT DROPDOWN - FIXED -->
+                <div class="dropdown export-dropdown">
+                    <button type="button" class="btn-action-big btn-action-export dropdown-toggle" onclick="toggleExportDropdown(event)">
+                        <i class="fas fa-file-export"></i>
+                        <span>Export</span>
+                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                    </button>
+                    <div class="dropdown-menu" id="exportDropdownMenu">
+                        <a href="export.php?format=pdf&branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&status=<?php echo urlencode($status_filter); ?>" 
+                           class="dropdown-item" 
+                           onclick="return confirmExport(event, 'PDF');">
+                            <i class="fas fa-file-pdf" style="color:#DC2626;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as PDF</span>
+                                <span class="dropdown-item-desc">Print-ready document</span>
+                            </div>
+                        </a>
+                        <a href="export.php?format=csv&branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&status=<?php echo urlencode($status_filter); ?>" 
+                           class="dropdown-item" 
+                           onclick="return confirmExport(event, 'CSV');">
+                            <i class="fas fa-file-csv" style="color:#059669;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as CSV</span>
+                                <span class="dropdown-item-desc">Excel compatible</span>
+                            </div>
+                        </a>
+                        <a href="export.php?format=word&branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&status=<?php echo urlencode($status_filter); ?>" 
+                           class="dropdown-item" 
+                           onclick="return confirmExport(event, 'Word');">
+                            <i class="fas fa-file-word" style="color:#2563EB;"></i>
+                            <div>
+                                <span class="dropdown-item-title">Export as Word</span>
+                                <span class="dropdown-item-desc">Microsoft Word document</span>
+                            </div>
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -237,7 +279,7 @@ include_once '../../includes/employee_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-        STATS CARDS - BLUE THEME
+        STATS CARDS
         ============================================================ -->
         <div class="stats-wrapper">
             <div class="stats-header">
@@ -260,7 +302,6 @@ include_once '../../includes/employee_topbar.php';
             </div>
 
             <div class="stats-grid">
-                <!-- TOTAL RECORDS -->
                 <div class="stat-card card-total">
                     <div class="sc-icon sc-icon-blue">
                         <i class="fas fa-clipboard-list"></i>
@@ -272,7 +313,6 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
-                <!-- WAITING -->
                 <div class="stat-card card-waiting">
                     <div class="sc-icon sc-icon-orange">
                         <i class="fas fa-clock"></i>
@@ -284,7 +324,6 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
-                <!-- APPROVED -->
                 <div class="stat-card card-approved">
                     <div class="sc-icon sc-icon-green">
                         <i class="fas fa-check-circle"></i>
@@ -296,7 +335,6 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
-                <!-- TOTAL FLOAT -->
                 <div class="stat-card card-float">
                     <div class="sc-icon sc-icon-sky">
                         <i class="fas fa-university"></i>
@@ -308,7 +346,6 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
-                <!-- TOTAL CASH -->
                 <div class="stat-card card-cash">
                     <div class="sc-icon sc-icon-teal">
                         <i class="fas fa-money-bill-wave"></i>
@@ -320,7 +357,6 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                 </div>
 
-                <!-- GRAND TOTAL -->
                 <div class="stat-card card-grand">
                     <div class="sc-icon sc-icon-cyan">
                         <i class="fas fa-coins"></i>
@@ -372,9 +408,7 @@ include_once '../../includes/employee_topbar.php';
 
             <div class="table-container-main">
 
-                <!-- RED HEADER (Blue for employee) -->
                 <div class="table-header-blue">
-
                     <div class="thb-left">
                         <i class="fas fa-list"></i>
                         <h3>Evening Stock Reports</h3>
@@ -405,13 +439,12 @@ include_once '../../includes/employee_topbar.php';
 
                     <div class="thb-right">
                         <span class="thb-branches-badge">
-                            <i class="fas fa-eye"></i>
+                            <i class="fas fa-lock"></i>
                             View Only
                         </span>
                     </div>
                 </div>
 
-                <!-- TABLE -->
                 <div class="table-responsive-main" id="tableWrapperMain">
                     <table class="data-table-main" id="stockTable">
                         <thead>
@@ -437,7 +470,9 @@ include_once '../../includes/employee_topbar.php';
                                 $is_new_branch = $item['is_new_branch'];
 
                                 $status_info = $status_labels[$s['status']] ?? ['label' => $s['status'], 'icon' => 'fa-circle', 'color' => 'gray'];
-                                $total = floatval($s['cumm_total'] ?? 0) + floatval($s['cash_balance'] ?? 0);
+                                $float = floatval($s['cumm_total'] ?? 0);
+                                $cash  = floatval($s['cash_balance'] ?? 0);
+                                $total = $float + $cash;
 
                                 $search_data = strtolower(
                                     $s['stock_number'] . ' ' .
@@ -490,19 +525,13 @@ include_once '../../includes/employee_topbar.php';
                                         </span>
                                     </td>
                                     <td class="text-right">
-                                        <span class="amount-display">
-                                            <?php echo formatCurrency($s['cumm_total']); ?>
-                                        </span>
+                                        <span class="amount-display"><?php echo formatCurrency($float); ?></span>
                                     </td>
                                     <td class="text-right">
-                                        <span class="amount-display">
-                                            <?php echo formatCurrency($s['cash_balance']); ?>
-                                        </span>
+                                        <span class="amount-display"><?php echo formatCurrency($cash); ?></span>
                                     </td>
                                     <td class="text-right">
-                                        <span class="amount-total-display">
-                                            <?php echo formatCurrency($total); ?>
-                                        </span>
+                                        <span class="amount-total-display"><?php echo formatCurrency($total); ?></span>
                                     </td>
                                     <td>
                                         <span class="type-badge type-<?php echo $status_info['color']; ?>">
@@ -544,11 +573,9 @@ include_once '../../includes/employee_topbar.php';
             </div>
         <?php endif; ?>
 
-    </div><!-- /.main-content -->
-
+    </div>
     <?php include_once '../../includes/employee_footer.php'; ?>
-
-</div><!-- /.main-wrapper -->
+</div>
 
 <style>
 /* ============================================================
@@ -566,7 +593,6 @@ include_once '../../includes/employee_topbar.php';
     --es-shadow: rgba(0,0,0,0.06);
     --es-shadow-md: rgba(0,0,0,0.1);
 
-    /* Blue theme colors */
     --es-blue-900: #1E3A8A;
     --es-blue-700: #1D4ED8;
     --es-blue-600: #2563EB;
@@ -591,7 +617,6 @@ html.dark-mode {
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-
 html, body {
     overflow-x: hidden !important;
     max-width: 100vw !important;
@@ -609,9 +634,6 @@ body {
     flex-direction: column;
 }
 
-/* ============================================================
-   MAIN WRAPPER
-   ============================================================ */
 .main-wrapper {
     background: var(--es-bg) !important;
     margin-left: var(--sidebar-width) !important;
@@ -665,7 +687,7 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
 .employee-footer .footer-version { font-weight: 600; color: #bb0404; }
 
 /* ============================================================
-   BRANCH FILTER CARD — BLUE
+   BRANCH FILTER CARD
    ============================================================ */
 .branch-filter-card {
     border-radius: 12px;
@@ -692,9 +714,6 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
 }
 .branch-filter-card.filter-active {
     background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
-}
-.branch-filter-card.filter-all {
-    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
 }
 .filter-left {
     display: flex;
@@ -731,10 +750,9 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
     text-transform: uppercase;
     letter-spacing: 0.6px;
 }
-.filter-right { display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 1; }
 
 /* ============================================================
-   PAGE HEADER
+   PAGE HEADER WITH BUTTONS
    ============================================================ */
 .page-header {
     display: flex;
@@ -742,7 +760,7 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
     align-items: center;
     margin-bottom: 20px;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 16px;
 }
 .page-header .header-left h2 {
     font-size: 22px;
@@ -761,6 +779,156 @@ html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
 .page-header .header-left .text-muted strong {
     color: var(--es-blue-600);
     font-weight: 800;
+}
+.page-header .header-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ============================================================
+   BIG ACTION BUTTONS
+   ============================================================ */
+.btn-action-big {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 22px;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    position: relative;
+    overflow: hidden;
+}
+.btn-action-big i:first-child { font-size: 15px; }
+.btn-action-big::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 0; height: 0;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.6s ease, height 0.6s ease;
+}
+.btn-action-big:hover::before { width: 300px; height: 300px; }
+.btn-action-big:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25); }
+.btn-action-big > * { position: relative; z-index: 1; }
+
+.btn-action-add {
+    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
+    color: #FFFFFF;
+}
+.btn-action-add:hover {
+    background: linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%);
+    color: #FFFFFF;
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45);
+}
+
+.btn-action-export {
+    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+    color: #FFFFFF;
+}
+.btn-action-export:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #FFFFFF;
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.45);
+}
+.btn-action-export .dropdown-arrow {
+    font-size: 11px;
+    transition: transform 0.3s ease;
+    margin-left: 2px;
+}
+
+/* ============================================================
+   EXPORT DROPDOWN
+   ============================================================ */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+.export-dropdown.open .dropdown-arrow {
+    transform: rotate(180deg);
+}
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    min-width: 260px;
+    background: var(--es-card-bg);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    border: 1.5px solid var(--es-border);
+    overflow: hidden;
+    z-index: 1000;
+    animation: dropdownFadeIn 0.2s ease forwards;
+}
+.export-dropdown.open .dropdown-menu { display: block; }
+@keyframes dropdownFadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.dropdown-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    text-decoration: none;
+    color: var(--es-text);
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    border-bottom: 1px solid var(--es-border);
+    position: relative;
+    cursor: pointer;
+}
+.dropdown-menu .dropdown-item:last-child { border-bottom: none; }
+.dropdown-menu .dropdown-item:hover {
+    background: var(--es-hover);
+    padding-left: 22px;
+}
+.dropdown-menu .dropdown-item::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0;
+    width: 0; height: 100%;
+    background: linear-gradient(90deg, #2563EB, #1D4ED8);
+    transition: width 0.2s ease;
+}
+.dropdown-menu .dropdown-item:hover::before { width: 4px; }
+.dropdown-menu .dropdown-item > i {
+    font-size: 24px;
+    width: 30px;
+    text-align: center;
+    flex-shrink: 0;
+}
+.dropdown-menu .dropdown-item > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+.dropdown-item-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--es-text);
+}
+.dropdown-item-desc {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--es-text-secondary);
 }
 
 /* ============================================================
@@ -799,15 +967,15 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 
 /* ============================================================
-   STATS WRAPPER — BLUE THEME
+   STATS WRAPPER
    ============================================================ */
 .stats-wrapper {
-    background: linear-gradient(135deg, #2563EB 0%, #1E40AF 100%);
+    background: linear-gradient(135deg, #1E3A8A 0%, #1E40AF 100%);
     border-radius: 16px;
     padding: 0;
     margin-bottom: 20px;
     overflow: hidden;
-    box-shadow: 0 8px 32px rgba(37, 99, 235, 0.35);
+    box-shadow: 0 8px 32px rgba(30, 58, 138, 0.35);
     position: relative;
 }
 .stats-wrapper::before {
@@ -821,7 +989,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 .stats-header {
     padding: 18px 24px;
-    background: rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.06);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -882,36 +1050,44 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 
 .stat-card {
-    background: rgba(255,255,255,0.1);
     border-radius: 14px;
     padding: 16px 18px;
     display: flex;
     align-items: center;
     gap: 12px;
-    border: 1.5px solid rgba(255,255,255,0.15);
+    border: 1.5px solid rgba(255,255,255,0.25);
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
     min-width: 0;
     position: relative;
     overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 .stat-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0;
-    width: 4px; height: 100%;
+    width: 5px; height: 100%;
+    border-radius: 14px 0 0 14px;
 }
 .stat-card:hover {
-    background: rgba(255,255,255,0.18);
     transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    border-color: rgba(255,255,255,0.45);
 }
-.card-total::before { background: #93C5FD; }
+.card-total   { background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(37, 99, 235, 0.25)); }
+.card-waiting { background: linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(217, 119, 6, 0.25)); }
+.card-approved{ background: linear-gradient(135deg, rgba(16, 185, 129, 0.35), rgba(5, 150, 105, 0.25)); }
+.card-float   { background: linear-gradient(135deg, rgba(14, 165, 233, 0.35), rgba(2, 132, 199, 0.25)); }
+.card-cash    { background: linear-gradient(135deg, rgba(20, 184, 166, 0.35), rgba(13, 148, 136, 0.25)); }
+.card-grand   { background: linear-gradient(135deg, rgba(6, 182, 212, 0.40), rgba(8, 145, 178, 0.30)); }
+
+.card-total::before   { background: #60A5FA; }
 .card-waiting::before { background: #FCD34D; }
-.card-approved::before { background: #86EFAC; }
-.card-float::before { background: #60A5FA; }
-.card-cash::before { background: #5EEAD4; }
-.card-grand::before { background: #67E8F9; }
+.card-approved::before{ background: #86EFAC; }
+.card-float::before   { background: #7DD3FC; }
+.card-cash::before    { background: #5EEAD4; }
+.card-grand::before   { background: #67E8F9; }
 
 .sc-icon {
     width: 44px;
@@ -923,28 +1099,21 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     font-size: 18px;
     flex-shrink: 0;
     color: #FFFFFF;
-    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
-/* ⭐ Blue theme icons */
-.sc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); }
-.sc-icon-sky  { background: linear-gradient(135deg, #0EA5E9, #0284C7); }
-.sc-icon-cyan { background: linear-gradient(135deg, #06B6D4, #0891B2); }
+.sc-icon-blue   { background: linear-gradient(135deg, #3B82F6, #2563EB); }
+.sc-icon-sky    { background: linear-gradient(135deg, #0EA5E9, #0284C7); }
+.sc-icon-cyan   { background: linear-gradient(135deg, #06B6D4, #0891B2); }
 .sc-icon-orange { background: linear-gradient(135deg, #F59E0B, #D97706); }
 .sc-icon-green  { background: linear-gradient(135deg, #10B981, #059669); }
 .sc-icon-teal   { background: linear-gradient(135deg, #14B8A6, #0D9488); }
 
-.sc-content {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-    flex: 1;
-}
+.sc-content { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .sc-label {
     font-size: 10px;
     font-weight: 700;
-    color: rgba(255, 255, 255, 0.85);
+    color: rgba(255, 255, 255, 0.95);
     text-transform: uppercase;
     letter-spacing: 1px;
     white-space: nowrap;
@@ -959,12 +1128,12 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     letter-spacing: -0.3px;
     line-height: 1.15;
     word-break: break-word;
-    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .sc-sub {
     font-size: 9px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 0.75);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     white-space: nowrap;
@@ -983,12 +1152,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     margin-bottom: 20px;
     box-shadow: 0 1px 3px var(--es-shadow);
 }
-.filters-form {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-}
+.filters-form { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 4px; }
 .filter-group label {
     font-size: 11px;
@@ -1036,19 +1200,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 .btn-primary { background: #2563EB; color: white; }
 .btn-primary:hover { background: #1D4ED8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.3); color: white; }
-.btn-add {
-    background: #FFFFFF;
-    color: #2563EB;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-.btn-add:hover {
-    background: #FCD34D;
-    color: #78350F;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(252, 211, 77, 0.45);
-}
-.btn-info { background: #3B82F6; color: white; }
-.btn-info:hover { background: #2563EB; transform: translateY(-1px); color: white; }
 .btn-filter { background: #2563EB; color: white; }
 .btn-filter:hover { background: #1D4ED8; color: white; }
 .btn-reset {
@@ -1077,7 +1228,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     max-width: 100%;
 }
 
-/* ⭐ Blue table header (badala ya purple) */
 .table-header-blue {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -1136,7 +1286,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     border: 1px solid rgba(252, 211, 77, 0.35);
     white-space: nowrap;
 }
-
 .thb-center {
     display: flex;
     align-items: center;
@@ -1145,7 +1294,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     position: relative;
     z-index: 1;
 }
-
 .scroll-btn-header {
     width: 42px;
     height: 42px;
@@ -1170,15 +1318,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
 }
-.scroll-btn-header:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
-}
-.scroll-btn-header i {
-    font-size: 15px;
-    display: block;
-    line-height: 1;
-}
+.scroll-btn-header i { font-size: 15px; display: block; line-height: 1; }
 
 .search-wrapper-main {
     display: flex;
@@ -1198,11 +1338,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
     background: #FFFFFF;
 }
-.search-wrapper-main > i {
-    color: #2563EB;
-    font-size: 13px;
-    flex-shrink: 0;
-}
+.search-wrapper-main > i { color: #2563EB; font-size: 13px; flex-shrink: 0; }
 .search-wrapper-main input {
     flex: 1;
     border: none;
@@ -1212,15 +1348,10 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     color: #1F2937;
     outline: none;
     min-width: 0;
-    font-family: 'Inter', sans-serif;
 }
-.search-wrapper-main input::placeholder {
-    color: #9CA3AF;
-    font-size: 11px;
-}
+.search-wrapper-main input::placeholder { color: #9CA3AF; font-size: 11px; }
 .search-wrapper-main button {
-    width: 22px;
-    height: 22px;
+    width: 22px; height: 22px;
     border-radius: 50%;
     background: #DBEAFE;
     color: #2563EB;
@@ -1233,10 +1364,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     transition: all 0.2s ease;
     flex-shrink: 0;
 }
-.search-wrapper-main button:hover {
-    background: #2563EB;
-    color: #FFFFFF;
-}
+.search-wrapper-main button:hover { background: #2563EB; color: #FFFFFF; }
 .search-count-main {
     font-size: 10px;
     font-weight: 800;
@@ -1245,13 +1373,12 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     color: #78350F;
     border-radius: 8px;
     flex-shrink: 0;
-    white-space: nowrap;
 }
-
 .thb-right {
     display: flex;
     align-items: center;
     justify-content: flex-end;
+    gap: 10px;
     position: relative;
     z-index: 1;
 }
@@ -1268,10 +1395,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     border: 1px solid rgba(255, 255, 255, 0.2);
     white-space: nowrap;
 }
-.thb-branches-badge i {
-    font-size: 11px;
-    color: #FCD34D;
-}
+.thb-branches-badge i { font-size: 11px; color: #FCD34D; }
 
 .table-responsive-main {
     overflow-x: auto;
@@ -1280,14 +1404,8 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     scroll-behavior: smooth;
 }
 .table-responsive-main::-webkit-scrollbar { height: 8px; }
-.table-responsive-main::-webkit-scrollbar-track {
-    background: var(--es-hover);
-    border-radius: 4px;
-}
-.table-responsive-main::-webkit-scrollbar-thumb {
-    background: #2563EB;
-    border-radius: 4px;
-}
+.table-responsive-main::-webkit-scrollbar-track { background: var(--es-hover); border-radius: 4px; }
+.table-responsive-main::-webkit-scrollbar-thumb { background: #2563EB; border-radius: 4px; }
 .table-responsive-main::-webkit-scrollbar-thumb:hover { background: #1D4ED8; }
 
 .data-table-main {
@@ -1326,9 +1444,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 .data-table-main tbody td.text-right { text-align: right; }
 
-/* ============================================================
-   BRANCH SEPARATOR
-   ============================================================ */
 .branch-separator-row {
     background: transparent !important;
     border: none !important;
@@ -1347,20 +1462,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     border-radius: 3px;
     margin: 10px 0;
     position: relative;
-}
-.branch-separator-line::before {
-    content: '';
-    position: absolute;
-    top: -3px; left: 0; right: 0;
-    height: 1px;
-    background: rgba(37, 99, 235, 0.4);
-}
-.branch-separator-line::after {
-    content: '';
-    position: absolute;
-    bottom: -3px; left: 0; right: 0;
-    height: 1px;
-    background: rgba(37, 99, 235, 0.4);
 }
 
 .stock-row.hidden-by-search { display: none !important; }
@@ -1395,16 +1496,12 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     border: 1.5px solid #93C5FD;
     box-shadow: 0 2px 4px rgba(37, 99, 235, 0.1);
 }
-.branch-cell-badge i {
-    color: #2563EB;
-    font-size: 10px;
-}
+.branch-cell-badge i { color: #2563EB; font-size: 10px; }
 html.dark-mode .branch-cell-badge {
     background: linear-gradient(135deg, #1E3A5F, #1E40AF);
     color: #93C5FD;
     border-color: #3B82F6;
 }
-html.dark-mode .branch-cell-badge i { color: #60A5FA; }
 
 .stock-link {
     font-weight: 700;
@@ -1427,10 +1524,7 @@ html.dark-mode .stock-link { color: #60A5FA; }
     color: var(--es-text-secondary);
     white-space: nowrap;
 }
-.date-display i {
-    color: #2563EB;
-    font-size: 11px;
-}
+.date-display i { color: #2563EB; font-size: 11px; }
 
 .employee-display {
     display: inline-flex;
@@ -1441,10 +1535,7 @@ html.dark-mode .stock-link { color: #60A5FA; }
     color: var(--es-text-secondary);
     white-space: nowrap;
 }
-.employee-display i {
-    color: #2563EB;
-    font-size: 11px;
-}
+.employee-display i { color: #2563EB; font-size: 11px; }
 
 .providers-count {
     display: inline-flex;
@@ -1459,10 +1550,7 @@ html.dark-mode .stock-link { color: #60A5FA; }
     white-space: nowrap;
     border: 1.5px solid #93C5FD;
 }
-.providers-count i {
-    color: #2563EB;
-    font-size: 10px;
-}
+.providers-count i { color: #2563EB; font-size: 10px; }
 html.dark-mode .providers-count {
     background: linear-gradient(135deg, #1E3A5F, #1E40AF);
     color: #93C5FD;
@@ -1510,11 +1598,7 @@ html.dark-mode .type-badge.type-red { background: #7F1D1D; color: #FCA5A5; }
 html.dark-mode .type-badge.type-orange { background: #5F3A1E; color: #FBBF24; }
 html.dark-mode .type-badge.type-gray { background: #374151; color: #9CA3AF; }
 
-.action-buttons {
-    display: flex;
-    gap: 5px;
-    justify-content: center;
-}
+.action-buttons { display: flex; gap: 5px; justify-content: center; }
 .btn-action {
     width: 34px;
     height: 34px;
@@ -1634,8 +1718,19 @@ html.dark-mode .btn-view { background: linear-gradient(135deg, #1E3A5F, #1E40AF)
     }
 
     .branch-filter-card { flex-direction: column; align-items: flex-start; padding: 14px 18px; }
-    .filter-right { width: 100%; }
-    .filter-right .btn { flex: 1; justify-content: center; }
+
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .page-header .header-right { width: 100%; flex-wrap: wrap; }
+    .page-header .header-right .btn-action-big {
+        flex: 1;
+        justify-content: center;
+        min-width: 140px;
+    }
+    .export-dropdown { flex: 1; }
+    .export-dropdown .btn-action-export {
+        width: 100%;
+        justify-content: center;
+    }
 
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .stats-header { flex-direction: column; align-items: flex-start; }
@@ -1672,12 +1767,73 @@ html.dark-mode .btn-view { background: linear-gradient(135deg, #1E3A5F, #1E40AF)
     .thb-center { gap: 8px; }
     .scroll-btn-header { width: 34px; height: 34px; font-size: 13px; }
     .scroll-btn-header i { font-size: 12px; }
+
+    .btn-action-big {
+        padding: 10px 16px;
+        font-size: 11px;
+    }
+    .btn-action-big span { font-size: 10px; }
 }
 </style>
 
 <script>
 // ============================================================
-// SCROLL TABLE MAIN (Horizontal)
+// TOGGLE EXPORT DROPDOWN
+// ============================================================
+function toggleExportDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.querySelector('.export-dropdown');
+    dropdown.classList.toggle('open');
+}
+
+document.addEventListener('click', function(e) {
+    const dropdown = document.querySelector('.export-dropdown');
+    if (dropdown && !dropdown.contains(e.target)) {
+        dropdown.classList.remove('open');
+    }
+});
+
+// ============================================================
+// CONFIRM BEFORE EXPORT
+// ============================================================
+function confirmExport(event, formatLabel) {
+    const fromDate = '<?php echo $from_date; ?>';
+    const toDate = '<?php echo $to_date; ?>';
+    const branchName = '<?php echo htmlspecialchars($filter_branch_name); ?>';
+    const recordCount = '<?php echo $grand_totals['count']; ?>';
+    
+    const msg = 'Export Evening Stock as ' + formatLabel + '?\n\n' +
+                'Period: ' + fromDate + ' to ' + toDate + '\n' +
+                'Branch: ' + branchName + '\n' +
+                'Records: ' + recordCount;
+    
+    if (!confirm(msg)) {
+        event.preventDefault();
+        return false;
+    }
+    
+    // Show loading state briefly
+    const exportBtn = document.querySelector('.btn-action-export');
+    if (exportBtn) {
+        const originalHTML = exportBtn.innerHTML;
+        exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Exporting...</span>';
+        exportBtn.disabled = true;
+        
+        setTimeout(function() {
+            exportBtn.innerHTML = originalHTML;
+            exportBtn.disabled = false;
+        }, 2000);
+    }
+    
+    // Close dropdown
+    const dropdown = document.querySelector('.export-dropdown');
+    if (dropdown) dropdown.classList.remove('open');
+    
+    return true;
+}
+
+// ============================================================
+// SCROLL TABLE MAIN
 // ============================================================
 function scrollTableMain(direction) {
     const wrapper = document.getElementById('tableWrapperMain');
@@ -1741,7 +1897,6 @@ function onGlobalSearch(input) {
         countBadge.style.display = 'inline-block';
         countBadge.textContent = matchCount;
     }
-
     if (noResults) {
         noResults.style.display = matchCount === 0 ? 'block' : 'none';
     }
@@ -1766,6 +1921,11 @@ document.addEventListener('keydown', function(e) {
         if (input) { input.focus(); input.select(); }
     }
     if (e.key === 'Escape') {
+        const dropdown = document.querySelector('.export-dropdown');
+        if (dropdown && dropdown.classList.contains('open')) {
+            dropdown.classList.remove('open');
+            return;
+        }
         const input = document.getElementById('globalSearchInput');
         if (input && input.value.length > 0 && document.activeElement === input) {
             clearGlobalSearch();
@@ -1794,7 +1954,6 @@ document.addEventListener('DOMContentLoaded', function() {
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
 
-    // Auto-hide alerts
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {
         setTimeout(function() {

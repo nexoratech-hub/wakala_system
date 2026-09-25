@@ -2,6 +2,12 @@
 // ================================================================
 // FILE: modules/morning_report/export.php
 // WAKALA FINANCIAL SYSTEM - EXPORT MORNING REPORTS TO CSV
+// 
+// ✅ CSV export with UTF-8 BOM (Excel compatible)
+// ✅ Filter by single ID or date range
+// ✅ Employee can only export own branch
+// ✅ Full English UI
+// ✅ Includes summary + provider rows
 // ================================================================
 
 require_once '../../config/config.php';
@@ -28,12 +34,28 @@ $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
 $to_date   = isset($_GET['to_date']) ? $_GET['to_date'] : date('Y-m-d');
 $single_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
-// Employee: force own branch
+// Validate dates
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from_date)) {
+    $from_date = date('Y-m-01');
+}
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to_date)) {
+    $to_date = date('Y-m-d');
+}
+
+// ============================================================
+// EMPLOYEE: FORCE OWN BRANCH
+// ============================================================
 if ($role !== 'admin' && $role !== 'super_admin') {
     $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
     $stmt->execute([$user_id]);
     $emp = $stmt->fetch(PDO::FETCH_ASSOC);
     $selected_branch = intval($emp['branch_id'] ?? 0);
+
+    if ($selected_branch <= 0) {
+        $_SESSION['error_message'] = 'You are not assigned to any branch.';
+        header('Location: index_employee.php');
+        exit();
+    }
 }
 
 // ============================================================
@@ -45,6 +67,12 @@ $params = [];
 if ($single_id > 0) {
     $where[] = "mr.id = ?";
     $params[] = $single_id;
+    
+    // Employee can only export own branch
+    if ($role !== 'admin' && $role !== 'super_admin') {
+        $where[] = "mr.branch_id = ?";
+        $params[] = $selected_branch;
+    }
 } else {
     $where[] = "mr.report_date BETWEEN ? AND ?";
     $params[] = $from_date;
@@ -103,11 +131,12 @@ if (!empty($report_ids)) {
             mrp.provider_name,
             mrp.provider_code,
             mrp.float_balance,
-            p.provider_type
+            p.provider_type,
+            p.display_order
         FROM morning_report_providers mrp
         LEFT JOIN providers p ON mrp.provider_id = p.id
         WHERE mrp.report_id IN ($placeholders)
-        ORDER BY mrp.report_id, p.display_order, mrp.provider_name
+        ORDER BY mrp.report_id, COALESCE(p.display_order, 999), mrp.provider_name
     ");
     $stmt->execute($report_ids);
     $all_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -132,12 +161,26 @@ try {
 } catch (Exception $e) {}
 
 // ============================================================
+// GET BRANCH NAME FOR FILENAME
+// ============================================================
+$branch_label = 'all_branches';
+if ($selected_branch > 0) {
+    $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
+    $stmt->execute([$selected_branch]);
+    $bname = $stmt->fetchColumn();
+    if ($bname) {
+        $branch_label = strtolower(str_replace([' ', '/', '\\'], '_', $bname));
+    }
+}
+
+// ============================================================
 // GENERATE FILENAME
 // ============================================================
 $filename = 'morning_reports_';
 if ($single_id > 0 && !empty($reports)) {
     $filename .= str_replace(['/', '\\', ' '], '_', $reports[0]['report_number']);
 } else {
+    $filename .= $branch_label . '_';
     $filename .= date('Y-m-d', strtotime($from_date)) . '_to_' . date('Y-m-d', strtotime($to_date));
 }
 $filename .= '_' . date('His') . '.csv';
@@ -160,7 +203,25 @@ fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
 // ============================================================
 fputcsv($output, ['MORNING REPORTS EXPORT']);
 fputcsv($output, ['Company', $company_name]);
-fputcsv($output, ['Period', $from_date . ' to ' . $to_date]);
+fputcsv($output, ['Exported By', ($role === 'admin' || $role === 'super_admin') ? 'Admin' : 'Employee #' . $user_id]);
+
+if ($single_id > 0 && !empty($reports)) {
+    fputcsv($output, ['Report Number', $reports[0]['report_number']]);
+    fputcsv($output, ['Report Date', $reports[0]['report_date']]);
+} else {
+    fputcsv($output, ['Period', $from_date . ' to ' . $to_date]);
+    if ($selected_branch > 0) {
+        $stmt = $db->prepare("SELECT branch_name, branch_code FROM branches WHERE id = ?");
+        $stmt->execute([$selected_branch]);
+        $binfo = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($binfo) {
+            fputcsv($output, ['Branch', $binfo['branch_name'] . ' (' . $binfo['branch_code'] . ')']);
+        }
+    } else {
+        fputcsv($output, ['Branch', 'All Branches']);
+    }
+}
+
 fputcsv($output, ['Generated', date('d M Y H:i:s')]);
 fputcsv($output, ['Total Reports', count($reports)]);
 fputcsv($output, []);
@@ -222,6 +283,8 @@ $i = 1;
 foreach ($reports as $r) {
     $rid = intval($r['id']);
     $rep_providers = $providers_by_report[$rid] ?? [];
+    $status = intval($r['is_locked']) === 1 ? 'Locked' : 'Open';
+    $notes = str_replace(["\r", "\n"], ' ', $r['notes'] ?? '');
 
     if (empty($rep_providers)) {
         // Report with no providers
@@ -241,8 +304,8 @@ foreach ($reports as $r) {
             number_format($r['cumm_total'], 2, '.', ''),
             $r['source_stock_number'] ?? '',
             $r['source_stock_date'] ?? '',
-            intval($r['is_locked']) === 1 ? 'Locked' : 'Open',
-            str_replace(["\r", "\n"], ' ', $r['notes'] ?? ''),
+            $status,
+            $notes,
             $r['submitted_at']
         ]);
     } else {
@@ -263,8 +326,8 @@ foreach ($reports as $r) {
                 number_format($r['cumm_total'], 2, '.', ''),
                 $r['source_stock_number'] ?? '',
                 $r['source_stock_date'] ?? '',
-                intval($r['is_locked']) === 1 ? 'Locked' : 'Open',
-                str_replace(["\r", "\n"], ' ', $r['notes'] ?? ''),
+                $status,
+                $notes,
                 $r['submitted_at']
             ]);
         }
@@ -276,20 +339,32 @@ foreach ($reports as $r) {
 // ============================================================
 fputcsv($output, []);
 fputcsv($output, ['--- END OF REPORT ---']);
-fputcsv($output, ['Generated by', $user_id]);
+fputcsv($output, ['Generated by User ID', $user_id]);
 fputcsv($output, ['System', 'Wakala Financial System']);
 
 fclose($output);
 
-// Log activity
+// ============================================================
+// LOG ACTIVITY
+// ============================================================
 try {
+    $log_message = 'Exported ' . count($reports) . ' morning report(s)';
+    if ($single_id > 0) {
+        $log_message .= ' (Report ID: ' . $single_id . ')';
+    } else {
+        $log_message .= ' (' . $from_date . ' to ' . $to_date . ')';
+        if ($selected_branch > 0) {
+            $log_message .= ' - Branch ID: ' . $selected_branch;
+        }
+    }
+    
     logActivity(
         $user_id,
         'Export Morning Reports',
         'Morning Report',
-        null,
+        $single_id > 0 ? $single_id : null,
         '',
-        'Exported ' . count($reports) . ' morning reports (' . $from_date . ' to ' . $to_date . ')'
+        $log_message
     );
 } catch (Exception $e) {}
 

@@ -1,9 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/view_employee.php
-// EVENING STOCK - VIEW (EMPLOYEE)
-// ✅ Employee can only VIEW
+// EVENING STOCK - VIEW (EMPLOYEE) - BLUE THEME
+// ✅ Employee can only VIEW (own branch)
 // ✅ No edit/delete/status update
+// ✅ BLUE THEME (consistent with index_employee.php)
+// ✅ Branch Cash sourced from evening_stocks.cash_balance
+// ✅ ALL INSTRUCTIONS IN ENGLISH
 // ================================================================
 
 error_reporting(E_ALL);
@@ -45,7 +48,8 @@ try {
             b.branch_name as branch_name,
             b.branch_code as branch_code,
             b.location as branch_location,
-            dr.report_number as daily_report_number
+            dr.report_number as daily_report_number,
+            dr.report_date as daily_report_date
             FROM evening_stocks es
             LEFT JOIN employees e ON es.employee_id = e.id
             LEFT JOIN branches b ON es.branch_id = b.id
@@ -82,11 +86,16 @@ $stmt = $db->prepare("
 $stmt->execute([$stock_id]);
 $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Calculate totals
+// ============================================================
+// CALCULATE TOTALS
+// ✅ Float from providers
+// ✅ Cash from evening_stocks.cash_balance (BRANCH CASH)
+// ✅ Grand Total = float + branch cash
+// ============================================================
 $total_opening_float = 0;
 $total_opening_cash = 0;
 $total_closing_float = 0;
-$total_closing_cash = 0;
+$total_provider_cash = 0;  // Provider cash (display only)
 $total_deposits = 0;
 $total_withdrawals = 0;
 
@@ -94,11 +103,15 @@ foreach ($providers as $p) {
     $total_opening_float += floatval($p['opening_float']);
     $total_opening_cash += floatval($p['opening_cash']);
     $total_closing_float += floatval($p['closing_float']);
-    $total_closing_cash += floatval($p['closing_cash']);
+    $total_provider_cash += floatval($p['closing_cash']);
     $total_deposits += floatval($p['total_deposits']);
     $total_withdrawals += floatval($p['total_withdrawals']);
 }
 
+// ✅ Branch cash from evening_stocks.cash_balance
+$total_closing_cash = floatval($stock['cash_balance'] ?? 0);
+
+// ✅ Grand Total = float + branch cash
 $grand_total = $total_closing_float + $total_closing_cash;
 
 $status_labels = [
@@ -124,7 +137,7 @@ include_once '../../includes/employee_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Branch Card -->
+        <!-- Branch Card — BLUE -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
                 <i class="fas fa-moon"></i>
@@ -149,7 +162,7 @@ include_once '../../includes/employee_topbar.php';
         <!-- Page Header -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-file-invoice" style="color:#7C3AED;"></i> Evening Stock Details</h2>
+                <h2><i class="fas fa-file-invoice" style="color:#2563EB;"></i> Evening Stock Details</h2>
                 <p class="text-muted">Reference: <strong><?php echo htmlspecialchars($stock['stock_number']); ?></strong></p>
             </div>
             <div class="header-right">
@@ -183,11 +196,11 @@ include_once '../../includes/employee_topbar.php';
             </div>
             <div class="hero-meta">
                 <div class="hero-meta-item">
-                    <span class="hmi-label">Float</span>
+                    <span class="hmi-label">Total Float</span>
                     <span class="hmi-value"><i class="fas fa-university"></i> <?php echo formatCurrency($total_closing_float); ?></span>
                 </div>
                 <div class="hero-meta-item">
-                    <span class="hmi-label">Cash</span>
+                    <span class="hmi-label">Branch Cash</span>
                     <span class="hmi-value"><i class="fas fa-money-bill-wave"></i> <?php echo formatCurrency($total_closing_cash); ?></span>
                 </div>
                 <div class="hero-meta-item">
@@ -197,34 +210,38 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
-        <!-- Summary Cards -->
+        <!-- Summary Cards — Semi-Transparent Colors -->
         <div class="summary-grid">
-            <div class="summary-card">
+            <div class="summary-card sc-total-float">
                 <div class="sc-icon sc-icon-blue"><i class="fas fa-university"></i></div>
                 <div class="sc-content">
                     <span class="sc-label">Total Float</span>
                     <span class="sc-value"><?php echo formatCurrency($total_closing_float); ?></span>
+                    <span class="sc-sub">Provider float</span>
                 </div>
             </div>
-            <div class="summary-card">
-                <div class="sc-icon sc-icon-green"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="summary-card sc-cash">
+                <div class="sc-icon sc-icon-teal"><i class="fas fa-money-bill-wave"></i></div>
                 <div class="sc-content">
-                    <span class="sc-label">Total Cash</span>
+                    <span class="sc-label">Branch Cash</span>
                     <span class="sc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+                    <span class="sc-sub">From Daily Report</span>
                 </div>
             </div>
-            <div class="summary-card">
-                <div class="sc-icon sc-icon-teal"><i class="fas fa-arrow-down"></i></div>
+            <div class="summary-card sc-deposits">
+                <div class="sc-icon sc-icon-green"><i class="fas fa-arrow-down"></i></div>
                 <div class="sc-content">
                     <span class="sc-label">Deposits</span>
                     <span class="sc-value text-success">+<?php echo formatCurrency($total_deposits); ?></span>
+                    <span class="sc-sub">Provider deposits</span>
                 </div>
             </div>
-            <div class="summary-card">
+            <div class="summary-card sc-withdrawals">
                 <div class="sc-icon sc-icon-red"><i class="fas fa-arrow-up"></i></div>
                 <div class="sc-content">
                     <span class="sc-label">Withdrawals</span>
                     <span class="sc-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span>
+                    <span class="sc-sub">Provider withdrawals</span>
                 </div>
             </div>
         </div>
@@ -282,7 +299,7 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
-        <!-- Providers -->
+        <!-- Providers Breakdown -->
         <div class="details-card">
             <div class="section-header">
                 <h3><i class="fas fa-university"></i> Provider Breakdown</h3>
@@ -311,7 +328,7 @@ include_once '../../includes/employee_topbar.php';
                                 <td><?php echo $i++; ?></td>
                                 <td>
                                     <div class="provider-cell">
-                                        <div class="provider-icon-sm" style="background: <?php echo htmlspecialchars($p['provider_color'] ?? '#7C3AED'); ?>;">
+                                        <div class="provider-icon-sm" style="background: <?php echo htmlspecialchars($p['provider_color'] ?? '#2563EB'); ?>;">
                                             <i class="<?php echo htmlspecialchars($p['provider_icon'] ?? 'fas fa-university'); ?>"></i>
                                         </div>
                                         <div class="provider-info-cell">
@@ -338,11 +355,29 @@ include_once '../../includes/employee_topbar.php';
                             <td class="text-right"><span class="total-value text-success">+<?php echo formatCurrency($total_deposits); ?></span></td>
                             <td class="text-right"><span class="total-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span></td>
                             <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_cash); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($grand_total); ?></span></td>
+                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_provider_cash); ?></span></td>
+                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float + $total_provider_cash); ?></span></td>
                         </tr>
                     </tfoot>
                 </table>
+            </div>
+        </div>
+
+        <!-- Branch Cash Summary (Locked) -->
+        <div class="cash-summary-card">
+            <div class="csc-header">
+                <i class="fas fa-lock"></i>
+                <span>Branch Cash (Locked from Daily Report)</span>
+            </div>
+            <div class="csc-body">
+                <div class="csc-item">
+                    <span class="csc-label">Branch Cash Balance</span>
+                    <span class="csc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+                </div>
+                <div class="csc-note">
+                    <i class="fas fa-info-circle"></i>
+                    Branch cash is locked from the Daily Report and cannot be edited.
+                </div>
             </div>
         </div>
 
@@ -375,7 +410,9 @@ include_once '../../includes/employee_topbar.php';
 </div>
 
 <style>
-/* ===== Same base CSS as view.php but adapted for employee ===== */
+/* ============================================================
+   CSS VARIABLES — BLUE THEME
+   ============================================================ */
 :root {
     --ev-bg: #F3F4F6;
     --ev-text: #1F2937;
@@ -386,6 +423,7 @@ include_once '../../includes/employee_topbar.php';
     --ev-input-bg: #F9FAFB;
     --ev-hover: #F3F4F6;
     --ev-shadow: rgba(0,0,0,0.06);
+    --ev-shadow-md: rgba(0,0,0,0.1);
 }
 html.dark-mode {
     --ev-bg: #0F172A;
@@ -397,6 +435,7 @@ html.dark-mode {
     --ev-input-bg: #334155;
     --ev-hover: #334155;
     --ev-shadow: rgba(0,0,0,0.3);
+    --ev-shadow-md: rgba(0,0,0,0.5);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -405,16 +444,18 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 .main-wrapper { background: var(--ev-bg) !important; }
 .main-content { background: var(--ev-bg) !important; padding: 16px 20px !important; }
 
-/* Reuse all the CSS from view.php */
+/* ============================================================
+   BRANCH STATUS CARD — BLUE
+   ============================================================ */
 .branch-status-card {
     display: flex;
     align-items: center;
     gap: 18px;
     padding: 16px 22px;
-    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
     border-radius: 12px;
     margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35);
+    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.35);
     flex-wrap: wrap;
     color: #FFFFFF;
     position: relative;
@@ -498,6 +539,9 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
 }
 .btn-back-card:hover { background: rgba(255, 255, 255, 0.25); color: #FFFFFF; transform: translateX(-3px); }
 
+/* ============================================================
+   PAGE HEADER
+   ============================================================ */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -516,28 +560,31 @@ body { background: var(--ev-bg) !important; color: var(--ev-text); }
     gap: 10px;
 }
 .header-left .text-muted { font-size: 13px; color: var(--ev-text-secondary); margin: 4px 0 0 0; }
-.header-left .text-muted strong { color: #7C3AED; font-family: 'Courier New', monospace; font-weight: 800; }
+.header-left .text-muted strong { color: #2563EB; font-family: 'Courier New', monospace; font-weight: 800; }
 
 .view-only-badge {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     padding: 8px 16px;
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #6D28D9;
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1D4ED8;
     border-radius: 20px;
     font-size: 12px;
     font-weight: 800;
-    border: 1.5px solid #C4B5FD;
+    border: 1.5px solid #93C5FD;
     text-transform: uppercase;
     letter-spacing: 0.8px;
 }
 html.dark-mode .view-only-badge {
-    background: linear-gradient(135deg, #2D1B5F, #3B1D6E);
-    color: #A78BFA;
-    border-color: #7C3AED;
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+    color: #60A5FA;
+    border-color: #3B82F6;
 }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert {
     padding: 14px 18px;
     border-radius: 10px;
@@ -548,8 +595,12 @@ html.dark-mode .view-only-badge {
     font-size: 13px;
 }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
+html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
 .alert i { font-size: 20px; }
 
+/* ============================================================
+   HERO CARD
+   ============================================================ */
 .hero-card {
     border-radius: 16px;
     padding: 28px 32px;
@@ -663,6 +714,9 @@ html.dark-mode .view-only-badge {
 }
 .hmi-value i { font-size: 12px; color: #FCD34D; }
 
+/* ============================================================
+   SUMMARY GRID — SEMI-TRANSPARENT COLORS
+   ============================================================ */
 .summary-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -670,7 +724,6 @@ html.dark-mode .view-only-badge {
     margin-bottom: 20px;
 }
 .summary-card {
-    background: var(--ev-card-bg);
     border-radius: 14px;
     padding: 18px 20px;
     border: 1.5px solid var(--ev-border);
@@ -680,7 +733,14 @@ html.dark-mode .view-only-badge {
     box-shadow: 0 2px 8px var(--ev-shadow);
     transition: all 0.3s ease;
 }
-.summary-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0,0,0,0.1); }
+.summary-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px var(--ev-shadow-md); }
+
+/* ✅ Semi-transparent colors */
+.sc-total-float { background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(37, 99, 235, 0.08)); }
+.sc-cash        { background: linear-gradient(135deg, rgba(20, 184, 166, 0.15), rgba(13, 148, 136, 0.08)); }
+.sc-deposits    { background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.08)); }
+.sc-withdrawals { background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.08)); }
+
 .sc-icon {
     width: 48px;
     height: 48px;
@@ -696,7 +756,7 @@ html.dark-mode .view-only-badge {
 .sc-icon-green { background: linear-gradient(135deg, #10B981, #059669); }
 .sc-icon-teal { background: linear-gradient(135deg, #14B8A6, #0D9488); }
 .sc-icon-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-.sc-content { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.sc-content { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .sc-label {
     font-size: 10px;
     font-weight: 700;
@@ -709,11 +769,22 @@ html.dark-mode .view-only-badge {
     font-weight: 900;
     color: var(--ev-text);
     font-family: 'Inter', 'Courier New', monospace;
+    word-break: break-word;
+}
+.sc-sub {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ev-text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 .text-success { color: #10B981; }
 .text-danger { color: #DC2626; }
 .text-muted { color: var(--ev-text-light); }
 
+/* ============================================================
+   DETAILS CARD
+   ============================================================ */
 .details-card {
     background: var(--ev-card-bg);
     border-radius: 14px;
@@ -743,7 +814,7 @@ html.dark-mode .view-only-badge {
     text-transform: uppercase;
     letter-spacing: 0.8px;
 }
-.section-header h3 i { color: #7C3AED; font-size: 15px; }
+.section-header h3 i { color: #2563EB; font-size: 15px; }
 .section-badge {
     font-size: 10px;
     font-weight: 700;
@@ -754,6 +825,9 @@ html.dark-mode .view-only-badge {
     border: 1px solid var(--ev-border);
 }
 
+/* ============================================================
+   DETAILS GRID
+   ============================================================ */
 .details-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -779,7 +853,7 @@ html.dark-mode .view-only-badge {
     align-items: center;
     gap: 6px;
 }
-.detail-label i { color: #7C3AED; font-size: 12px; }
+.detail-label i { color: #2563EB; font-size: 12px; }
 .detail-value {
     font-size: 15px;
     font-weight: 700;
@@ -791,7 +865,7 @@ html.dark-mode .view-only-badge {
 }
 .detail-code {
     font-family: 'Courier New', monospace;
-    color: #7C3AED;
+    color: #2563EB;
     font-size: 14px;
 }
 .code-pill {
@@ -803,6 +877,7 @@ html.dark-mode .view-only-badge {
     border-radius: 8px;
     font-family: 'Courier New', monospace;
 }
+html.dark-mode .code-pill { background: #1E3A5F; color: #60A5FA; }
 .status-pill {
     display: inline-flex;
     align-items: center;
@@ -817,14 +892,21 @@ html.dark-mode .view-only-badge {
 .status-green { background: #D1FAE5; color: #065F46; }
 .status-blue { background: #DBEAFE; color: #1D4ED8; }
 .status-red { background: #FEE2E2; color: #991B1B; }
+html.dark-mode .status-orange { background: #5F3A1E; color: #FBBF24; }
+html.dark-mode .status-green { background: #065F46; color: #34D399; }
+html.dark-mode .status-blue { background: #1E3A5F; color: #60A5FA; }
+html.dark-mode .status-red { background: #7F1D1D; color: #FCA5A5; }
 
+/* ============================================================
+   PROVIDERS TABLE — BLUE HEADER
+   ============================================================ */
 .providers-table-wrapper { overflow-x: auto; background: var(--ev-card-bg); }
 .providers-table {
     width: 100%;
     border-collapse: collapse;
     min-width: 1100px;
 }
-.providers-table thead { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+.providers-table thead { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
 .providers-table thead th {
     padding: 12px 14px;
     text-align: left;
@@ -871,6 +953,7 @@ html.dark-mode .view-only-badge {
     font-family: 'Courier New', monospace;
     align-self: flex-start;
 }
+html.dark-mode .provider-code { background: #1E3A5F; color: #60A5FA; }
 
 .amount-readonly {
     font-size: 12px;
@@ -883,15 +966,17 @@ html.dark-mode .view-only-badge {
 .amount-highlight {
     font-size: 13px;
     font-weight: 800;
-    color: #7C3AED;
+    color: #2563EB;
     font-family: 'Courier New', monospace;
 }
+html.dark-mode .amount-highlight { color: #60A5FA; }
 .amount-total {
     font-size: 14px;
     font-weight: 900;
     color: #059669;
     font-family: 'Courier New', monospace;
 }
+html.dark-mode .amount-total { color: #34D399; }
 .providers-table tfoot { background: var(--ev-hover); }
 .providers-table tfoot td {
     padding: 14px;
@@ -900,23 +985,98 @@ html.dark-mode .view-only-badge {
 .totals-row strong {
     font-size: 12px;
     letter-spacing: 1px;
-    color: #7C3AED;
+    color: #2563EB;
     text-transform: uppercase;
 }
+html.dark-mode .totals-row strong { color: #60A5FA; }
 .total-value {
     font-size: 14px;
     font-weight: 900;
     font-family: 'Courier New', monospace;
-    color: #7C3AED;
+    color: #2563EB;
 }
+html.dark-mode .total-value { color: #60A5FA; }
 .total-value.text-success { color: #10B981; }
 .total-value.text-danger { color: #DC2626; }
 
+/* ============================================================
+   BRANCH CASH SUMMARY CARD (LOCKED)
+   ============================================================ */
+.cash-summary-card {
+    background: var(--ev-card-bg);
+    border-radius: 12px;
+    border: 2px solid #FCD34D;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px var(--ev-shadow);
+}
+.csc-header {
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #92400E;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #FCD34D;
+}
+html.dark-mode .csc-header {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    color: #FCD34D;
+    border-bottom-color: #F59E0B;
+}
+.csc-header i { font-size: 16px; }
+.csc-body {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.csc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.csc-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ev-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.csc-value {
+    font-size: 20px;
+    font-weight: 900;
+    color: #D97706;
+    font-family: 'Inter', 'Courier New', monospace;
+}
+html.dark-mode .csc-value { color: #FCD34D; }
+.csc-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--ev-text-secondary);
+    background: var(--ev-hover);
+    padding: 10px 14px;
+    border-radius: 8px;
+    border-left: 3px solid #FCD34D;
+}
+.csc-note i { color: #F59E0B; }
+
+/* ============================================================
+   NOTES
+   ============================================================ */
 .notes-section { padding: 20px 24px; }
 .note-block {
     background: var(--ev-hover);
     border-radius: 10px;
-    border-left: 4px solid #7C3AED;
+    border-left: 4px solid #2563EB;
     padding: 14px 18px;
 }
 .note-content {
@@ -926,6 +1086,9 @@ html.dark-mode .view-only-badge {
     font-weight: 500;
 }
 
+/* ============================================================
+   BOTTOM ACTIONS
+   ============================================================ */
 .bottom-actions {
     display: flex;
     gap: 12px;
@@ -959,8 +1122,11 @@ html.dark-mode .view-only-badge {
 }
 .btn-secondary:hover { background: var(--ev-hover); color: var(--ev-text); }
 .btn-print { background: #3B82F6; color: white; }
-.btn-print:hover { background: #2563EB; transform: translateY(-2px); color: white; }
+.btn-print:hover { background: #2563EB; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1200px) {
     .summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -984,6 +1150,7 @@ html.dark-mode .view-only-badge {
 @media (max-width: 480px) {
     .hero-icon { width: 56px; height: 56px; font-size: 24px; }
     .hero-amount { font-size: clamp(22px, 7vw, 32px); }
+    .csc-value { font-size: 16px; }
 }
 </style>
 
@@ -997,6 +1164,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
+
+    // Auto-hide alerts
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() {
+            successAlert.style.transition = 'opacity 0.4s ease';
+            successAlert.style.opacity = '0';
+            setTimeout(function() { if (successAlert.parentElement) successAlert.remove(); }, 400);
+        }, 5000);
+    }
 });
 </script>
 

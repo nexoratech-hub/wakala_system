@@ -1,11 +1,18 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/add_employee.php
-// EVENING STOCK - ADD (EMPLOYEE)
-// ✅ Auto-filter kutoka daily_report
-// ✅ Employee anaongeza kwa branch yake pekee
-// ✅ Rangi ni BLUE (sio purple)
-// ✅ Baada ya save → view_employee.php
+// EVENING STOCK - ADD (EMPLOYEE) - FINAL FIXED
+// 
+// ✅ FIX: Check duplicate KABLA ya form (inaonyesha nani aliyeunda)
+// ✅ FIX: Check duplicate kwenye POST (better error message)
+// ✅ FIX: Catch SQL error 1062 → friendly message
+// ✅ Auto-filter from daily_report (SAME DATE as stock_date)
+// ✅ Employee adds to OWN BRANCH only
+// ✅ Float taken from daily_report_providers.current_float
+// ✅ Cash taken from daily_reports.current_cash (BRANCH CASH)
+// ✅ cumm_total = FLOAT ONLY
+// ✅ Saves daily_report_id, opening_float, opening_cash
+// ✅ Blue theme
 // ================================================================
 
 error_reporting(E_ALL);
@@ -28,7 +35,7 @@ $user_id = $_SESSION['user_id'];
 $role    = $_SESSION['role'] ?? 'employee';
 
 // ============================================================
-// GET EMPLOYEE BRANCH (employee anaongeza kwa branch yake pekee)
+// GET EMPLOYEE BRANCH
 // ============================================================
 $stmt = $db->prepare("SELECT branch_id, branch, full_name FROM employees WHERE id = ?");
 $stmt->execute([$user_id]);
@@ -36,7 +43,6 @@ $emp = $stmt->fetch(PDO::FETCH_ASSOC);
 $employee_branch_id = $emp['branch_id'] ?? 0;
 $employee_branch    = $emp['branch'] ?? 'Main';
 
-// Employee LAZIMA awe na branch_id
 if ($employee_branch_id <= 0) {
     $_SESSION['error_message'] = 'You are not assigned to any branch. Please contact admin.';
     header('Location: index_employee.php');
@@ -44,10 +50,13 @@ if ($employee_branch_id <= 0) {
 }
 
 // ============================================================
-// GET BRANCH & DATE FROM URL (AUTO FILTER)
+// GET BRANCH & DATE FROM URL
 // ============================================================
-$selected_branch = $employee_branch_id;   // ⭐ locked kwa branch yake
+$selected_branch = $employee_branch_id;
 $selected_date   = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $selected_date)) {
+    $selected_date = date('Y-m-d');
+}
 
 // ============================================================
 // GET BRANCH INFO
@@ -60,20 +69,29 @@ $selected_branch_name = $branch_info['branch_name'] ?? $employee_branch;
 $selected_branch_code = $branch_info['branch_code'] ?? '';
 
 // ============================================================
-// CHECK IF EVENING STOCK ALREADY EXISTS FOR THIS DATE+BRANCH
+// ✅ CHECK DUPLICATE #1: EVENING STOCK (KABLA YA FORM)
+// Inaonyesha jina la aliyeunda + muda
 // ============================================================
 $existing_stock = null;
 $stmt = $db->prepare("
-    SELECT id, stock_number 
-    FROM evening_stocks 
-    WHERE branch_id = ? AND stock_date = ?
+    SELECT 
+        es.id, 
+        es.stock_number,
+        es.stock_date,
+        es.submitted_at,
+        es.employee_id,
+        e.full_name AS created_by_name,
+        e.employee_id AS created_by_code
+    FROM evening_stocks es
+    LEFT JOIN employees e ON es.employee_id = e.id
+    WHERE es.branch_id = ? AND es.stock_date = ?
     LIMIT 1
 ");
 $stmt->execute([$selected_branch, $selected_date]);
 $existing_stock = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // ============================================================
-// GET DAILY REPORT FOR THIS DATE+BRANCH (AUTO FILTER SOURCE)
+// GET DAILY REPORT FOR THIS DATE+BRANCH
 // ============================================================
 $daily_report = null;
 $daily_report_providers = [];
@@ -102,6 +120,15 @@ if (!$existing_stock) {
 }
 
 // ============================================================
+// CALCULATE TOTALS
+// ============================================================
+$display_total_float = 0;
+foreach ($daily_report_providers as $drp) {
+    $display_total_float += floatval(str_replace(',', '', $drp['current_float'] ?? 0));
+}
+$display_total_cash = $daily_report ? floatval(str_replace(',', '', $daily_report['current_cash'] ?? 0)) : 0;
+
+// ============================================================
 // HANDLE FORM SUBMISSION
 // ============================================================
 $error_message   = '';
@@ -109,19 +136,43 @@ $success_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_stock') {
     try {
-        // Employee HAWEZI kubadilisha branch — tunatumia yake
         $branch_id  = $employee_branch_id;
         $stock_date = $_POST['stock_date'] ?? date('Y-m-d');
         $notes      = trim($_POST['notes'] ?? '');
 
-        // Check if stock already exists
-        $stmt = $db->prepare("SELECT id FROM evening_stocks WHERE branch_id = ? AND stock_date = ?");
+        // ------------------------------------------------------------
+        // ✅ CHECK #1: Evening Stock ipo tayari?
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            SELECT 
+                es.id, 
+                es.stock_number, 
+                e.full_name AS created_by,
+                e.employee_id AS created_by_code
+            FROM evening_stocks es
+            LEFT JOIN employees e ON es.employee_id = e.id
+            WHERE es.branch_id = ? AND es.stock_date = ?
+            LIMIT 1
+        ");
         $stmt->execute([$branch_id, $stock_date]);
-        if ($stmt->fetch()) {
-            throw new Exception('Evening stock already exists for this branch and date.');
+        $existing_es = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing_es) {
+            $created_by = $existing_es['created_by'] ?? 'another user';
+            $created_by_code = $existing_es['created_by_code'] ?? '';
+            
+            throw new Exception(
+                '❌ Evening Stock for ' . date('d M Y', strtotime($stock_date)) . 
+                ' already exists (' . $existing_es['stock_number'] . ') ' .
+                'added by ' . $created_by . 
+                ($created_by_code ? ' (' . $created_by_code . ')' : '') . '. ' .
+                'Each branch can only have ONE evening stock per day.'
+            );
         }
 
-        // Get daily report
+        // ------------------------------------------------------------
+        // Get Daily Report
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT * FROM daily_reports 
             WHERE branch_id = ? AND report_date = ?
@@ -131,10 +182,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $dr = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$dr) {
-            throw new Exception('No daily report found for this branch and date. Please create a daily report first.');
+            throw new Exception('No daily report found for this branch and date. Please contact admin to create a Daily Report first.');
         }
 
-        // Get providers from daily report
         $stmt = $db->prepare("
             SELECT * FROM daily_report_providers 
             WHERE daily_report_id = ?
@@ -147,49 +197,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('No providers found in daily report for this date.');
         }
 
-        // ====================================================
-        // START TRANSACTION
-        // ====================================================
+        // ------------------------------------------------------------
+        // ✅ BEGIN TRANSACTION
+        // ------------------------------------------------------------
         $db->beginTransaction();
 
-        // Generate stock number
         $stock_number = 'ES-' . date('Ymd', strtotime($stock_date)) . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
 
         // Calculate totals
         $total_float = 0;
-        $total_cash  = 0;
         $provider_data_array = [];
 
         foreach ($dr_providers as $drp) {
             $pid = $drp['provider_id'];
-            $closing_float = floatval($_POST['closing_float'][$pid] ?? $drp['current_float']);
-            $closing_cash  = floatval($_POST['closing_cash'][$pid]  ?? $drp['current_cash']);
+            
+            $closing_float = floatval(str_replace(',', '', $_POST['closing_float'][$pid] ?? $drp['current_float']));
+            $closing_cash  = floatval(str_replace(',', '', $_POST['closing_cash'][$pid]  ?? $drp['current_cash']));
 
             $total_float += $closing_float;
-            $total_cash  += $closing_cash;
 
             $provider_data_array[$pid] = [
                 'provider_name'     => $drp['provider_name'],
                 'provider_code'     => $drp['provider_code'],
-                'opening_float'     => floatval($drp['morning_float']),
-                'opening_cash'      => floatval($drp['morning_cash']),
+                'opening_float'     => floatval(str_replace(',', '', $drp['morning_float'] ?? 0)),
+                'opening_cash'      => floatval(str_replace(',', '', $drp['morning_cash'] ?? 0)),
                 'closing_float'     => $closing_float,
                 'closing_cash'      => $closing_cash,
-                'total_deposits'    => floatval($drp['total_deposits']),
-                'total_withdrawals' => floatval($drp['total_withdrawals'])
+                'total_deposits'    => floatval(str_replace(',', '', $drp['total_deposits'] ?? 0)),
+                'total_withdrawals' => floatval(str_replace(',', '', $drp['total_withdrawals'] ?? 0))
             ];
         }
 
-        // Get branch name
+        $total_cash = floatval(str_replace(',', '', $dr['current_cash'] ?? 0));
         $branch_name = $selected_branch_name;
 
-        // Insert evening stock
+        // ------------------------------------------------------------
+        // ✅ INSERT EVENING STOCK
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO evening_stocks 
             (stock_number, employee_id, branch, branch_id, daily_report_id, stock_date,
              provider_data, cash_balance, opening_float, opening_cash,
-             cumm_total, status, submitted_at, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NOW(), ?, NOW())
+             cumm_total, status, submitted_at, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NOW(), ?)
         ");
         $stmt->execute([
             $stock_number,
@@ -200,42 +250,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stock_date,
             json_encode($provider_data_array),
             $total_cash,
-            floatval($dr['current_float'] ?? 0),
-            floatval($dr['current_cash'] ?? 0),
+            floatval(str_replace(',', '', $dr['current_float'] ?? 0)),
+            floatval(str_replace(',', '', $dr['current_cash'] ?? 0)),
             $total_float,
             $notes
         ]);
 
         $stock_id = $db->lastInsertId();
 
-        // Insert evening_stock_providers
+        // ------------------------------------------------------------
+        // ✅ INSERT evening_stock_providers
+        // ------------------------------------------------------------
+        $stmt = $db->prepare("
+            INSERT INTO evening_stock_providers 
+            (evening_stock_id, provider_id, provider_code, provider_name,
+             opening_float, opening_cash, closing_float, closing_cash,
+             total_deposits, total_withdrawals, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+
         foreach ($dr_providers as $drp) {
             $pid = $drp['provider_id'];
-            $closing_float = floatval($_POST['closing_float'][$pid] ?? $drp['current_float']);
-            $closing_cash  = floatval($_POST['closing_cash'][$pid]  ?? $drp['current_cash']);
+            
+            $closing_float = floatval(str_replace(',', '', $_POST['closing_float'][$pid] ?? $drp['current_float']));
+            $closing_cash  = floatval(str_replace(',', '', $_POST['closing_cash'][$pid]  ?? $drp['current_cash']));
 
-            $stmt = $db->prepare("
-                INSERT INTO evening_stock_providers 
-                (evening_stock_id, provider_id, provider_code, provider_name,
-                 opening_float, opening_cash, closing_float, closing_cash,
-                 total_deposits, total_withdrawals, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
             $stmt->execute([
                 $stock_id,
                 $pid,
                 $drp['provider_code'],
                 $drp['provider_name'],
-                floatval($drp['morning_float']),
-                floatval($drp['morning_cash']),
+                floatval(str_replace(',', '', $drp['morning_float'] ?? 0)),
+                floatval(str_replace(',', '', $drp['morning_cash'] ?? 0)),
                 $closing_float,
                 $closing_cash,
-                floatval($drp['total_deposits']),
-                floatval($drp['total_withdrawals'])
+                floatval(str_replace(',', '', $drp['total_deposits'] ?? 0)),
+                floatval(str_replace(',', '', $drp['total_withdrawals'] ?? 0))
             ]);
         }
 
-        // Log activity
         logActivity(
             $user_id,
             'Add Evening Stock',
@@ -248,7 +301,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $db->commit();
 
         $_SESSION['success_message'] = 'Evening stock ' . $stock_number . ' created successfully!';
-        // ⭐ Employee anarudishwa kwenye view_employee.php
         header('Location: view_employee.php?id=' . $stock_id);
         exit();
 
@@ -256,11 +308,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($db->inTransaction()) {
             $db->rollBack();
         }
-        $error_message = $e->getMessage();
+        
+        $error_msg = $e->getMessage();
+        
+        // ============================================================
+        // ✅ CATCH SQL ERROR 1062 - Duplicate entry
+        // ============================================================
+        if (strpos($error_msg, '1062') !== false || 
+            strpos($error_msg, 'Duplicate entry') !== false ||
+            strpos($error_msg, 'Integrity constraint') !== false) {
+            
+            $stock_date_safe = $_POST['stock_date'] ?? date('Y-m-d');
+            
+            $stmt = $db->prepare("
+                SELECT 
+                    es.stock_number,
+                    e.full_name AS created_by,
+                    e.employee_id AS created_by_code
+                FROM evening_stocks es
+                LEFT JOIN employees e ON es.employee_id = e.id
+                WHERE es.branch_id = ? AND es.stock_date = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$employee_branch_id, $stock_date_safe]);
+            $dup = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($dup) {
+                $error_msg = 
+                    '❌ Evening Stock for ' . date('d M Y', strtotime($stock_date_safe)) . 
+                    ' already exists (' . $dup['stock_number'] . ') ' .
+                    'added by ' . ($dup['created_by'] ?? 'another user') . 
+                    (!empty($dup['created_by_code']) ? ' (' . $dup['created_by_code'] . ')' : '') . '. ' .
+                    'Each branch can only have ONE evening stock per day.';
+            } else {
+                $error_msg = 
+                    '❌ An Evening Stock for ' . date('d M Y', strtotime($stock_date_safe)) . 
+                    ' already exists. Each branch can only have ONE evening stock per day.';
+            }
+        }
+        
+        $error_message = $error_msg;
     }
 }
 
-// Success/error messages
 $success_message_session = '';
 if (isset($_SESSION['success_message'])) {
     $success_message_session = $_SESSION['success_message'];
@@ -275,9 +365,7 @@ include_once '../../includes/employee_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
 
-        <!-- ============================================================
-        BRANCH CARD — BLUE
-        ============================================================ -->
+        <!-- BRANCH CARD — BLUE -->
         <div class="branch-status-card">
             <div class="branch-status-icon">
                 <i class="fas fa-store-alt"></i>
@@ -293,7 +381,7 @@ include_once '../../includes/employee_topbar.php';
                     <?php echo date('d M Y', strtotime($selected_date)); ?>
                 </span>
                 <span class="branch-status-viewonly">
-                    <i class="fas fa-eye"></i> View Only Branch
+                    <i class="fas fa-lock"></i> Locked to Your Branch
                 </span>
             </div>
             <a href="index_employee.php" class="btn-back-card">
@@ -302,9 +390,7 @@ include_once '../../includes/employee_topbar.php';
             </a>
         </div>
 
-        <!-- ============================================================
-        PAGE HEADER
-        ============================================================ -->
+        <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-plus-circle" style="color:#2563EB;"></i> Add Evening Stock</h2>
@@ -312,9 +398,7 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        ALERTS
-        ============================================================ -->
+        <!-- ALERTS -->
         <?php if (!empty($success_message_session)): ?>
             <div class="alert alert-success">
                 <i class="fas fa-check-circle"></i>
@@ -331,15 +415,36 @@ include_once '../../includes/employee_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        IF EVENING STOCK ALREADY EXISTS
-        ============================================================ -->
+        <!-- ============================================================ -->
+        <!-- EXISTING STOCK - With creator info -->
+        <!-- ============================================================ -->
         <?php if ($existing_stock): ?>
             <div class="existing-stock-warning">
                 <i class="fas fa-info-circle"></i>
                 <div>
                     <strong>Evening Stock Already Exists!</strong>
-                    <p>Evening stock <strong><?php echo htmlspecialchars($existing_stock['stock_number']); ?></strong> already exists for this branch on <?php echo date('d M Y', strtotime($selected_date)); ?>.</p>
+                    <p>
+                        Evening stock <strong><?php echo htmlspecialchars($existing_stock['stock_number']); ?></strong> 
+                        already exists for this branch on <?php echo date('d M Y', strtotime($selected_date)); ?>.
+                    </p>
+                    <?php if (!empty($existing_stock['created_by_name'])): ?>
+                        <div class="creator-info">
+                            <i class="fas fa-user-circle"></i>
+                            <span>
+                                Added by <strong><?php echo htmlspecialchars($existing_stock['created_by_name']); ?></strong>
+                                <?php if (!empty($existing_stock['created_by_code'])): ?>
+                                    (<?php echo htmlspecialchars($existing_stock['created_by_code']); ?>)
+                                <?php endif; ?>
+                                <?php if (!empty($existing_stock['submitted_at'])): ?>
+                                    · <i class="fas fa-clock"></i>
+                                    <?php echo date('d M Y H:i', strtotime($existing_stock['submitted_at'])); ?>
+                                <?php endif; ?>
+                            </span>
+                        </div>
+                    <?php endif; ?>
+                    <p class="creator-note">
+                        Each branch can only have <strong>ONE</strong> evening stock per day.
+                    </p>
                     <div class="warning-actions">
                         <a href="view_employee.php?id=<?php echo $existing_stock['id']; ?>" class="btn btn-primary">
                             <i class="fas fa-eye"></i> View Existing Stock
@@ -351,16 +456,16 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
-        <!-- ============================================================
-        IF NO DAILY REPORT
-        ============================================================ -->
+        <!-- ============================================================ -->
+        <!-- NO DAILY REPORT -->
+        <!-- ============================================================ -->
         <?php elseif (!$daily_report): ?>
             <div class="no-daily-report-warning">
                 <i class="fas fa-exclamation-triangle"></i>
                 <div>
                     <strong>No Daily Report Found</strong>
-                    <p>Hakuna Daily Report ya tarehe <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong> kwa branch <strong><?php echo htmlspecialchars($selected_branch_name); ?></strong>.</p>
-                    <p>Evening stock inahitaji Daily Report kwanza. Tafadhali wasiliana na admin kuunda Daily Report kwa tarehe hii.</p>
+                    <p>There is no Daily Report for <strong><?php echo date('d M Y', strtotime($selected_date)); ?></strong> at branch <strong><?php echo htmlspecialchars($selected_branch_name); ?></strong>.</p>
+                    <p>Evening stock requires a Daily Report first. Please contact your admin to create a Daily Report for this date.</p>
                     <div class="warning-actions">
                         <a href="index_employee.php" class="btn btn-cancel">
                             <i class="fas fa-arrow-left"></i> Back
@@ -369,9 +474,9 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
-        <!-- ============================================================
-        MAIN FORM - AUTO FILTERED FROM DAILY REPORT
-        ============================================================ -->
+        <!-- ============================================================ -->
+        <!-- MAIN FORM -->
+        <!-- ============================================================ -->
         <?php else: ?>
 
             <!-- Daily Report Info -->
@@ -390,11 +495,11 @@ include_once '../../includes/employee_topbar.php';
                 <div class="dric-totals">
                     <div class="dric-total-item">
                         <span class="dric-total-label">Float</span>
-                        <span class="dric-total-value"><?php echo formatCurrency($daily_report['current_float'] ?? 0); ?></span>
+                        <span class="dric-total-value"><?php echo formatCurrency($display_total_float); ?></span>
                     </div>
                     <div class="dric-total-item">
                         <span class="dric-total-label">Cash</span>
-                        <span class="dric-total-value"><?php echo formatCurrency($daily_report['current_cash'] ?? 0); ?></span>
+                        <span class="dric-total-value"><?php echo formatCurrency($display_total_cash); ?></span>
                     </div>
                 </div>
             </div>
@@ -405,7 +510,7 @@ include_once '../../includes/employee_topbar.php';
                     <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
                     <input type="hidden" name="stock_date" value="<?php echo $selected_date; ?>">
 
-                    <!-- ===== PROVIDERS FROM DAILY REPORT ===== -->
+                    <!-- PROVIDERS FROM DAILY REPORT -->
                     <div class="form-section">
                         <div class="section-header">
                             <h3><i class="fas fa-university"></i> Provider Closing Balances</h3>
@@ -414,7 +519,7 @@ include_once '../../includes/employee_topbar.php';
 
                         <p class="section-hint">
                             <i class="fas fa-info-circle"></i>
-                            Balances zimechukuliwa kutoka Daily Report. Unaweza kuedit kabla ya kusave.
+                            Balances are auto-filled from the Daily Report. You can adjust them before saving.
                         </p>
 
                         <div class="providers-table-wrapper">
@@ -475,7 +580,7 @@ include_once '../../includes/employee_topbar.php';
                                 <tfoot>
                                     <tr class="totals-row">
                                         <td colspan="6" class="text-right">
-                                            <strong>TOTAL</strong>
+                                            <strong>PROVIDER FLOAT TOTAL</strong>
                                         </td>
                                         <td class="text-right">
                                             <span class="total-float" id="totalFloat">TSh 0</span>
@@ -497,7 +602,7 @@ include_once '../../includes/employee_topbar.php';
                         </div>
                     </div>
 
-                    <!-- ===== NOTES ===== -->
+                    <!-- NOTES -->
                     <div class="form-section">
                         <div class="section-header">
                             <h3><i class="fas fa-sticky-note"></i> Notes</h3>
@@ -511,7 +616,7 @@ include_once '../../includes/employee_topbar.php';
                         </div>
                     </div>
 
-                    <!-- ===== ACTIONS ===== -->
+                    <!-- ACTIONS -->
                     <div class="form-actions">
                         <button type="submit" class="btn btn-submit" id="submitBtn">
                             <i class="fas fa-save"></i> Save Evening Stock
@@ -848,6 +953,35 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     margin-top: 12px;
 }
 
+/* ✅ CREATOR INFO */
+.creator-info {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #1E40AF;
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 10px;
+    border: 1.5px solid #93C5FD;
+    margin: 8px 0 12px 0;
+}
+.creator-info i { color: #2563EB; font-size: 15px; }
+.creator-info strong { color: #1E3A8A; font-weight: 800; }
+html.dark-mode .creator-info {
+    background: rgba(15, 23, 42, 0.5);
+    border-color: #3B82F6;
+    color: #93C5FD;
+}
+html.dark-mode .creator-info strong { color: #60A5FA; }
+
+.creator-note {
+    font-size: 12px;
+    color: #1E40AF;
+    margin: 4px 0 0 0;
+    font-weight: 500;
+}
+
 .no-daily-report-warning {
     background: #FEE2E2;
     border: 2px solid #FCA5A5;
@@ -1010,7 +1144,7 @@ html.dark-mode .dric-total-value { color: #DBEAFE; }
 .section-hint i { color: #2563EB; }
 
 /* ============================================================
-   PROVIDERS TABLE — BLUE HEADER
+   PROVIDERS TABLE
    ============================================================ */
 .providers-table-wrapper {
     overflow-x: auto;
@@ -1325,7 +1459,7 @@ function formatMoneyInput(input) {
 }
 
 // ============================================================
-// UPDATE TOTALS
+// UPDATE TOTALS (JS live preview)
 // ============================================================
 function updateTotals() {
     var totalFloat = 0;
