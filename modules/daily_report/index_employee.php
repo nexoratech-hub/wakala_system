@@ -2,14 +2,12 @@
 // ================================================================
 // FILE: modules/daily_report/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE DAILY REPORTS
-// ✅ View only (no Edit/Delete)
-// ✅ Sees ONLY own transactions
+// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
+// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
+// ✅ FIXED: current_capital = total_float + current_cash
+// ✅ Employee sees OWN transactions only
 // ✅ Sees BRANCH-wide float/cash
-// ✅ Time filters (All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom)
-// ✅ Summary cards with soft background
-// ✅ Bigger Add Deposit & Add Withdrawal buttons
-// ✅ NEW: Export button with dropdown (PDF, CSV, Word)
-// ✅ ALL INSTRUCTIONS IN ENGLISH
+// ✅ Export dropdown (PDF, CSV, Word)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -28,10 +26,45 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'employee';
 
-// Employee only
 if ($role !== 'employee') {
     header('Location: index.php');
     exit();
+}
+
+// ============================================================
+// ✅ HELPER: Get latest daily report
+// ============================================================
+function getLatestDailyReport($db, $branch_id) {
+    $stmt = $db->prepare("
+        SELECT * FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$branch_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ============================================================
+function calculateTotalFloat($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
 }
 
 // ============================================================
@@ -49,7 +82,7 @@ if (!$employee) {
 $employee_branch_id = $employee['branch_id'] ?? 0;
 
 // ============================================================
-// HANDLE AJAX REQUESTS (Deposit/Withdrawal)
+// HANDLE AJAX REQUESTS
 // ============================================================
 if (isset($_POST['ajax_action'])) {
     header('Content-Type: application/json');
@@ -70,28 +103,29 @@ if (isset($_POST['ajax_action'])) {
                 exit();
             }
             
-            $stmt = $db->prepare("
-                SELECT drp.current_float
-                FROM daily_report_providers drp
-                INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                WHERE dr.branch_id = ? 
-                AND drp.provider_id = ?
-                ORDER BY dr.report_date DESC, dr.id DESC 
-                LIMIT 1
-            ");
-            $stmt->execute([$branch_id, $provider_id]);
-            $drp = $stmt->fetch(PDO::FETCH_ASSOC);
-            $current_float = floatval($drp['current_float'] ?? 0);
+            $latest_dr = getLatestDailyReport($db, $branch_id);
+            
+            if (!$latest_dr) {
+                echo json_encode([
+                    'success' => true,
+                    'float' => 0,
+                    'cash' => 0,
+                    'formatted_float' => formatCurrency(0),
+                    'formatted_cash' => formatCurrency(0)
+                ]);
+                exit();
+            }
             
             $stmt = $db->prepare("
-                SELECT current_cash FROM daily_reports 
-                WHERE branch_id = ? 
-                ORDER BY report_date DESC, id DESC 
-                LIMIT 1
+                SELECT current_float 
+                FROM daily_report_providers 
+                WHERE daily_report_id = ? AND provider_id = ?
+                ORDER BY id DESC LIMIT 1
             ");
-            $stmt->execute([$branch_id]);
-            $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
-            $current_cash = floatval($dr_cash['current_cash'] ?? 0);
+            $stmt->execute([$latest_dr['id'], $provider_id]);
+            $drp = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_float = floatval($drp['current_float'] ?? 0);
+            $current_cash = floatval($latest_dr['current_cash'] ?? 0);
             
             echo json_encode([
                 'success' => true,
@@ -136,17 +170,9 @@ if (isset($_POST['ajax_action'])) {
             $stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
             $stmt->execute([$branch_id]);
             $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-            $branch_name = $branch['branch_name'] ?? 'Main';
+            $branch_name_db = $branch['branch_name'] ?? 'Main';
             
-            $stmt = $db->prepare("
-                SELECT * FROM daily_reports 
-                WHERE branch_id = ? 
-                ORDER BY report_date DESC, id DESC 
-                LIMIT 1
-            ");
-            $stmt->execute([$branch_id]);
-            $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+            $latest_dr = getLatestDailyReport($db, $branch_id);
             if (!$latest_dr) {
                 throw new Exception('No daily report found. Please create a morning report first.');
             }
@@ -165,7 +191,17 @@ if (isset($_POST['ajax_action'])) {
             if ($dr_provider) {
                 $current_float = floatval($dr_provider['current_float'] ?? 0);
             } else {
-                throw new Exception('No provider float found. Please create a morning report first.');
+                $stmt = $db->prepare("
+                    SELECT mrp.float_balance 
+                    FROM morning_report_providers mrp
+                    INNER JOIN morning_reports mr ON mrp.report_id = mr.id
+                    WHERE mr.branch_id = ? AND mrp.provider_id = ?
+                    ORDER BY mr.report_date DESC, mr.id DESC LIMIT 1
+                ");
+                $stmt->execute([$branch_id, $provider_id]);
+                $mr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$mr_provider) throw new Exception('No provider float found.');
+                $current_float = floatval($mr_provider['float_balance'] ?? 0);
             }
             
             if ($transaction_type === 'withdrawal') {
@@ -176,18 +212,13 @@ if (isset($_POST['ajax_action'])) {
                 $new_cash = $current_cash - $amount;
             }
             
-            if ($new_float < 0) {
-                throw new Exception('Insufficient float. Current float: TSh ' . number_format($current_float, 0));
-            }
-            if ($new_cash < 0) {
-                throw new Exception('Insufficient cash. Current cash: TSh ' . number_format($current_cash, 0));
-            }
-            
-            $new_capital = $new_float + $new_cash;
+            if ($new_float < 0) throw new Exception('Insufficient float. Current: TSh ' . number_format($current_float, 0));
+            if ($new_cash < 0) throw new Exception('Insufficient cash. Current: TSh ' . number_format($current_cash, 0));
             
             $prefix = $transaction_type === 'deposit' ? 'DEP' : 'WTH';
             $transaction_number = $prefix . '-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
+            // STEP 1: INSERT TRANSACTION
             $stmt = $db->prepare("
                 INSERT INTO transactions 
                 (transaction_number, transaction_type, employee_id, branch_id, branch,
@@ -196,55 +227,84 @@ if (isset($_POST['ajax_action'])) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, NOW())
             ");
             $stmt->execute([
-                $transaction_number,
-                $transaction_type,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $provider_id,
-                $branch_provider['provider_code'],
-                $amount,
-                $reference_number,
-                $transaction_date,
-                date('H:i:s'),
-                $description,
+                $transaction_number, $transaction_type, $user_id, $branch_id, $branch_name_db,
+                $provider_id, $branch_provider['provider_code'], $amount, $reference_number,
+                $transaction_date, date('H:i:s'), $description,
                 "Float: " . number_format($current_float, 0) . " → " . number_format($new_float, 0)
             ]);
             
             $transaction_id = $db->lastInsertId();
             
+            // STEP 2: UPDATE/INSERT daily_report_providers
+            if ($dr_provider) {
+                $stmt = $db->prepare("
+                    UPDATE daily_report_providers 
+                    SET current_float = ?, 
+                        total_deposits = total_deposits + ?, 
+                        total_withdrawals = total_withdrawals + ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([
+                    $new_float,
+                    $transaction_type === 'deposit' ? $amount : 0,
+                    $transaction_type === 'withdrawal' ? $amount : 0,
+                    $dr_provider['id']
+                ]);
+            } else {
+                $stmt = $db->prepare("
+                    INSERT INTO daily_report_providers 
+                    (daily_report_id, provider_id, provider_code, provider_name,
+                     morning_float, morning_cash, current_float, current_cash,
+                     total_deposits, total_withdrawals, created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $daily_report_id, $provider_id, $branch_provider['provider_code'], $provider['provider_name'],
+                    $current_float, $new_float,
+                    $transaction_type === 'deposit' ? $amount : 0,
+                    $transaction_type === 'withdrawal' ? $amount : 0
+                ]);
+            }
+            
+            // STEP 3: UPDATE daily_reports.current_cash
+            $stmt = $db->prepare("UPDATE daily_reports SET current_cash = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$new_cash, $daily_report_id]);
+            
+            // STEP 4: SYNC TOTALS - recalculate from LATEST record per provider
             $stmt = $db->prepare("
-                UPDATE daily_report_providers 
-                SET current_float = ?,
-                    total_deposits = total_deposits + ?,
-                    total_withdrawals = total_withdrawals + ?,
-                    updated_at = NOW()
-                WHERE id = ?
+                SELECT COALESCE(SUM(latest.current_float), 0) as tf,
+                       COALESCE(SUM(latest.total_deposits), 0) as td,
+                       COALESCE(SUM(latest.total_withdrawals), 0) as tw
+                FROM (
+                    SELECT drp1.provider_id, drp1.current_float, drp1.total_deposits, drp1.total_withdrawals
+                    FROM daily_report_providers drp1
+                    INNER JOIN (
+                        SELECT provider_id, MAX(id) as max_id
+                        FROM daily_report_providers
+                        WHERE daily_report_id = ?
+                        GROUP BY provider_id
+                    ) drp2 ON drp1.id = drp2.max_id
+                ) latest
             ");
-            $stmt->execute([
-                $new_float,
-                $transaction_type === 'deposit' ? $amount : 0,
-                $transaction_type === 'withdrawal' ? $amount : 0,
-                $dr_provider['id']
-            ]);
+            $stmt->execute([$daily_report_id]);
+            $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $total_float = floatval($totals['tf'] ?? 0);
+            $total_deposits = floatval($totals['td'] ?? 0);
+            $total_withdrawals = floatval($totals['tw'] ?? 0);
+            $new_capital = $total_float + $new_cash;
             
             $stmt = $db->prepare("
                 UPDATE daily_reports 
-                SET current_cash = ?,
-                    current_capital = ?,
-                    total_deposits = total_deposits + ?,
-                    total_withdrawals = total_withdrawals + ?,
+                SET current_float = ?, current_capital = ?,
+                    total_deposits = ?, total_withdrawals = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ");
-            $stmt->execute([
-                $new_cash,
-                $new_capital,
-                $transaction_type === 'deposit' ? $amount : 0,
-                $transaction_type === 'withdrawal' ? $amount : 0,
-                $daily_report_id
-            ]);
+            $stmt->execute([$total_float, $new_capital, $total_deposits, $total_withdrawals, $daily_report_id]);
             
+            // STEP 5: LOG
             $stmt = $db->prepare("
                 INSERT INTO daily_report_transactions 
                 (daily_report_id, provider_id, provider_code, transaction_type,
@@ -253,26 +313,19 @@ if (isset($_POST['ajax_action'])) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
             ");
             $stmt->execute([
-                $daily_report_id,
-                $provider_id,
-                $branch_provider['provider_code'],
-                $transaction_type,
-                $amount,
-                $reference_number,
-                $description,
-                $transaction_date,
-                date('H:i:s'),
-                $user_id
+                $daily_report_id, $provider_id, $branch_provider['provider_code'],
+                $transaction_type, $amount, $reference_number, $description,
+                $transaction_date, date('H:i:s'), $user_id
             ]);
             
             logActivity($user_id, 'Add ' . ucfirst($transaction_type), 'Transactions', $transaction_id, '', 
-                ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' from ' . $provider['provider_name']);
+                ucfirst($transaction_type) . ' of TSh ' . number_format($amount));
             
             $db->commit();
             
             echo json_encode([
                 'success' => true,
-                'message' => ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' completed successfully!',
+                'message' => ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . ' completed!',
                 'transaction' => [
                     'id' => $transaction_id,
                     'new_float' => $new_float,
@@ -293,61 +346,33 @@ if (isset($_POST['ajax_action'])) {
 }
 
 // ============================================================
-// TIME FILTER LOGIC
+// TIME FILTER
 // ============================================================
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'today';
 $custom_from = isset($_GET['from_date']) ? $_GET['from_date'] : '';
 $custom_to = isset($_GET['to_date']) ? $_GET['to_date'] : '';
-
 $today = date('Y-m-d');
 
 switch ($filter) {
-    case 'all':
-        $from_date = '2000-01-01';
-        $to_date = date('Y-m-d');
-        break;
-    case 'today':
-        $from_date = $today;
-        $to_date = $today;
-        break;
-    case '1d':
-        $from_date = date('Y-m-d', strtotime('-1 day'));
-        $to_date = $today;
-        break;
-    case '1w':
-        $from_date = date('Y-m-d', strtotime('-7 days'));
-        $to_date = $today;
-        break;
-    case '1m':
-        $from_date = date('Y-m-d', strtotime('-1 month'));
-        $to_date = $today;
-        break;
-    case '3m':
-        $from_date = date('Y-m-d', strtotime('-3 months'));
-        $to_date = $today;
-        break;
-    case '6m':
-        $from_date = date('Y-m-d', strtotime('-6 months'));
-        $to_date = $today;
-        break;
-    case '1y':
-        $from_date = date('Y-m-d', strtotime('-1 year'));
-        $to_date = $today;
-        break;
+    case 'all': $from_date = '2000-01-01'; $to_date = date('Y-m-d'); break;
+    case 'today': $from_date = $today; $to_date = $today; break;
+    case '1d': $from_date = date('Y-m-d', strtotime('-1 day')); $to_date = $today; break;
+    case '1w': $from_date = date('Y-m-d', strtotime('-7 days')); $to_date = $today; break;
+    case '1m': $from_date = date('Y-m-d', strtotime('-1 month')); $to_date = $today; break;
+    case '3m': $from_date = date('Y-m-d', strtotime('-3 months')); $to_date = $today; break;
+    case '6m': $from_date = date('Y-m-d', strtotime('-6 months')); $to_date = $today; break;
+    case '1y': $from_date = date('Y-m-d', strtotime('-1 year')); $to_date = $today; break;
     case 'custom':
         $from_date = !empty($custom_from) ? $custom_from : date('Y-m-01');
         $to_date = !empty($custom_to) ? $custom_to : $today;
         break;
-    default:
-        $from_date = date('Y-m-01');
-        $to_date = $today;
+    default: $from_date = date('Y-m-01'); $to_date = $today;
 }
 
 // ============================================================
 // BRANCH INFO
 // ============================================================
 $selected_branch = $employee_branch_id;
-
 $branch_name = 'My Branch';
 $branch_code = '';
 $branch_location = '';
@@ -365,40 +390,22 @@ if ($selected_branch > 0) {
 try {
     // GET ALL REPORTS FOR MY BRANCH
     $sql = "SELECT 
-                dr.id as report_id,
-                dr.report_number,
-                dr.report_date,
-                dr.created_at,
-                dr.net_profit,
-                dr.current_capital,
-                dr.current_cash,
-                e.full_name as employee_name,
-                b.branch_name as branch_name,
-                b.branch_code as branch_code,
-                drp.id as provider_row_id,
-                drp.provider_id,
-                drp.provider_code,
-                drp.provider_name,
-                drp.morning_float,
-                drp.current_float,
-                drp.total_deposits as provider_deposits,
+                dr.id as report_id, dr.report_number, dr.report_date, dr.created_at,
+                dr.net_profit, dr.current_capital, dr.current_cash, dr.current_float,
+                e.full_name as employee_name, b.branch_name as branch_name, b.branch_code as branch_code,
+                drp.id as provider_row_id, drp.provider_id, drp.provider_code, drp.provider_name,
+                drp.morning_float, drp.current_float, drp.total_deposits as provider_deposits,
                 drp.total_withdrawals as provider_withdrawals,
-                p.icon_class,
-                p.color_code,
-                p.provider_type
+                p.icon_class, p.color_code, p.provider_type
             FROM daily_reports dr
             LEFT JOIN employees e ON dr.employee_id = e.id
             LEFT JOIN branches b ON dr.branch_id = b.id
             LEFT JOIN daily_report_providers drp ON dr.id = drp.daily_report_id
             LEFT JOIN providers p ON drp.provider_id = p.id
-            WHERE dr.report_date BETWEEN ? AND ?
-            AND dr.branch_id = ?";
-    $params = [$from_date, $to_date, $employee_branch_id];
-
-    $sql .= " ORDER BY dr.report_date DESC, dr.id DESC, drp.provider_name ASC";
-
+            WHERE dr.report_date BETWEEN ? AND ? AND dr.branch_id = ?
+            ORDER BY dr.report_date DESC, dr.id DESC, drp.provider_name ASC";
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    $stmt->execute([$from_date, $to_date, $employee_branch_id]);
     $report_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $reports = [];
@@ -406,29 +413,20 @@ try {
         $rid = $row['report_id'];
         if (!isset($reports[$rid])) {
             $reports[$rid] = [
-                'id' => $row['report_id'],
-                'report_number' => $row['report_number'],
-                'report_date' => $row['report_date'],
-                'branch_name' => $row['branch_name'],
-                'branch_code' => $row['branch_code'],
-                'employee_name' => $row['employee_name'],
-                'created_at' => $row['created_at'],
-                'net_profit' => $row['net_profit'],
-                'current_capital' => $row['current_capital'],
-                'current_cash' => $row['current_cash'],
-                'providers' => []
+                'id' => $row['report_id'], 'report_number' => $row['report_number'],
+                'report_date' => $row['report_date'], 'branch_name' => $row['branch_name'],
+                'branch_code' => $row['branch_code'], 'employee_name' => $row['employee_name'],
+                'created_at' => $row['created_at'], 'net_profit' => $row['net_profit'],
+                'current_capital' => $row['current_capital'], 'current_cash' => $row['current_cash'],
+                'current_float' => $row['current_float'], 'providers' => []
             ];
         }
         if (!empty($row['provider_id'])) {
             $reports[$rid]['providers'][] = [
-                'id' => $row['provider_row_id'],
-                'provider_id' => $row['provider_id'],
-                'provider_code' => $row['provider_code'],
-                'provider_name' => $row['provider_name'],
-                'morning_float' => $row['morning_float'],
-                'current_float' => $row['current_float'],
-                'total_deposits' => $row['provider_deposits'],
-                'total_withdrawals' => $row['provider_withdrawals'],
+                'id' => $row['provider_row_id'], 'provider_id' => $row['provider_id'],
+                'provider_code' => $row['provider_code'], 'provider_name' => $row['provider_name'],
+                'morning_float' => $row['morning_float'], 'current_float' => $row['current_float'],
+                'total_deposits' => $row['provider_deposits'], 'total_withdrawals' => $row['provider_withdrawals'],
                 'icon_class' => $row['icon_class'] ?? 'fas fa-university',
                 'color_code' => $row['color_code'] ?? '#3B82F6',
                 'provider_type' => $row['provider_type'] ?? 'bank'
@@ -438,21 +436,14 @@ try {
     $reports = array_values($reports);
 
     // MY TRANSACTIONS
-    $sql_transactions = "
-        SELECT 
-            t.*,
-            p.provider_name,
-            p.icon_class,
-            p.color_code
+    $stmt = $db->prepare("
+        SELECT t.*, p.provider_name, p.icon_class, p.color_code
         FROM transactions t
         LEFT JOIN providers p ON t.provider_id = p.id
-        WHERE t.branch_id = ?
-        AND t.employee_id = ?
+        WHERE t.branch_id = ? AND t.employee_id = ?
         AND DATE(t.transaction_date) BETWEEN ? AND ?
-        ORDER BY t.created_at DESC
-        LIMIT 200
-    ";
-    $stmt = $db->prepare($sql_transactions);
+        ORDER BY t.created_at DESC LIMIT 200
+    ");
     $stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
     $my_transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -471,45 +462,35 @@ try {
     }
     $my_transactions_count = count($my_transactions);
 
-    // BRANCH TOTAL FLOAT
-    $sql_float = "SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-                  FROM daily_report_providers drp
-                  INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                  WHERE dr.branch_id = ?
-                  AND dr.report_date BETWEEN ? AND ?";
-    $stmt = $db->prepare($sql_float);
-    $stmt->execute([$employee_branch_id, $from_date, $to_date]);
-    $float_result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_float = floatval($float_result['total_float'] ?? 0);
-
-    // BRANCH TOTAL CASH
-    $stmt = $db->prepare("
-        SELECT current_cash FROM daily_reports 
-        WHERE branch_id = ? 
-        ORDER BY report_date DESC, id DESC 
-        LIMIT 1
-    ");
-    $stmt->execute([$employee_branch_id]);
-    $dr_cash = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_cash = floatval($dr_cash['current_cash'] ?? 0);
-    $total_capital = $total_float + $total_cash;
+    // ============================================================
+    // ✅ CURRENT FLOAT/CASH - FIXED!
+    // ============================================================
+    $total_float = 0;
+    $total_cash = 0;
+    $total_capital = 0;
+    
+    $latest_dr = getLatestDailyReport($db, $employee_branch_id);
+    
+    if ($latest_dr) {
+        // ✅ Hesabu float kutoka LATEST record per provider
+        $total_float = calculateTotalFloat($db, $latest_dr['id']);
+        
+        // ✅ Cash kutoka latest daily report
+        $total_cash = floatval($latest_dr['current_cash'] ?? 0);
+        
+        // ✅ Capital = Float + Cash
+        $total_capital = $total_float + $total_cash;
+    }
 
     // PROVIDERS FOR MODAL
     $providers_for_modal = [];
     if ($employee_branch_id > 0) {
         $stmt = $db->prepare("
-            SELECT 
-                p.id,
-                p.provider_name,
-                p.provider_code as main_code,
-                p.icon_class,
-                p.color_code,
-                bp.provider_code as branch_provider_code
+            SELECT p.id, p.provider_name, p.provider_code as main_code,
+                   p.icon_class, p.color_code, bp.provider_code as branch_provider_code
             FROM providers p
-            INNER JOIN branch_providers bp 
-                ON p.id = bp.provider_id 
-                AND bp.branch_id = ?
-                AND bp.is_active = 1
+            INNER JOIN branch_providers bp ON p.id = bp.provider_id 
+                AND bp.branch_id = ? AND bp.is_active = 1
             WHERE p.is_active = 1
             ORDER BY p.display_order, p.provider_name
         ");

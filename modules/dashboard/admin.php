@@ -1,10 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/dashboard/admin.php
-// WAKALA FINANCIAL SYSTEM - ADMIN DASHBOARD
-// ✅ FIXED: Spacing sahihi - haigusi sidebar wala header
+// WAKALA FINANCIAL SYSTEM - ADMIN DASHBOARD - FINAL FIXED
+// ✅ FIXED: Capital = Float + Cash (Daima recalculated kutoka providers)
+// ✅ FIXED: Float = SUM ya LATEST record per provider (no double-counting)
+// ✅ FIXED: Cash = daily_reports.current_cash
+// ✅ FIXED: Auto-fix daily_reports values kila dashboard inapopakia
 // ✅ FIXED: Profile picture inaonekana
-// ✅ FIXED: Welcome card imepanda juu
 // ================================================================
 
 require_once '../../config/config.php';
@@ -94,38 +96,129 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
+// HELPER FUNCTION: Calculate Total Float from LATEST per provider
+// ✅ Inaepuka double-counting ya duplicate records
+// ============================================================
+function calculateBranchTotalFloat($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+            WHERE drp1.daily_report_id = ?
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id, $daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
+
+// ============================================================
 // CAPITAL DATA
+// ✅ FIX: Daima recalculate kutoka daily_report_providers
+// ✅ HATUTUMII daily_reports.current_float wala current_capital (stale)
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
+$latest_dr_id = 0;
+$latest_dr_date = null;
 
-$sql_float = "SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-              FROM daily_report_providers drp
-              INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-              WHERE 1=1";
-$params_float = [];
 if ($selected_branch > 0) {
-    $sql_float .= " AND dr.branch_id = ?";
-    $params_float[] = $selected_branch;
-}
-$stmt = $db->prepare($sql_float);
-$stmt->execute($params_float);
-$total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+    // ------------------------------------------------------------
+    // STEP 1: Tafuta LATEST daily report ya branch
+    // ------------------------------------------------------------
+    $stmt = $db->prepare("
+        SELECT id, report_number, report_date, current_cash, current_float, current_capital
+        FROM daily_reports
+        WHERE branch_id = ?
+        ORDER BY report_date DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch]);
+    $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$sql_cash = "SELECT COALESCE(SUM(current_cash), 0) as total_cash
-             FROM daily_reports
-             WHERE 1=1";
-$params_cash = [];
-if ($selected_branch > 0) {
-    $sql_cash .= " AND branch_id = ?";
-    $params_cash[] = $selected_branch;
-}
-$stmt = $db->prepare($sql_cash);
-$stmt->execute($params_cash);
-$total_cash = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_cash'] ?? 0);
+    if ($latest_dr) {
+        $latest_dr_id   = intval($latest_dr['id']);
+        $latest_dr_date = $latest_dr['report_date'];
+        $total_cash     = floatval($latest_dr['current_cash'] ?? 0);
 
-$total_capital = $total_float + $total_cash;
+        // ✅ Hesabu float kutoka LATEST record per provider
+        $total_float = calculateBranchTotalFloat($db, $latest_dr_id);
+
+        // ✅ Daima recalculate capital = Float + Cash
+        $total_capital = $total_float + $total_cash;
+
+        // ✅ Auto-fix daily_reports kama values hazipo sawa
+        $db_float = floatval($latest_dr['current_float'] ?? 0);
+        $db_capital = floatval($latest_dr['current_capital'] ?? 0);
+        
+        if (abs($total_float - $db_float) > 0.01 || abs($total_capital - $db_capital) > 0.01) {
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_float = ?, current_capital = ?
+                WHERE id = ?
+            ");
+            $stmt->execute([$total_float, $total_capital, $latest_dr_id]);
+        }
+    }
+} else {
+    // ------------------------------------------------------------
+    // ALL BRANCHES: hesabu kutoka LATEST daily report ya KILA branch
+    // ------------------------------------------------------------
+    $stmt = $db->prepare("
+        SELECT dr.branch_id, dr.id, dr.current_cash, dr.current_float, dr.current_capital
+        FROM daily_reports dr
+        INNER JOIN (
+            SELECT branch_id, MAX(report_date) as max_date
+            FROM daily_reports
+            GROUP BY branch_id
+        ) latest ON dr.branch_id = latest.branch_id AND dr.report_date = latest.max_date
+        INNER JOIN (
+            SELECT branch_id, report_date, MAX(id) as max_id
+            FROM daily_reports
+            GROUP BY branch_id, report_date
+        ) latest2 ON dr.branch_id = latest2.branch_id 
+            AND dr.report_date = latest2.report_date 
+            AND dr.id = latest2.max_id
+    ");
+    $stmt->execute();
+    $all_latest_drs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($all_latest_drs as $dr_row) {
+        $dr_id = intval($dr_row['id']);
+        $dr_cash = floatval($dr_row['current_cash'] ?? 0);
+
+        // ✅ Hesabu float kutoka LATEST record per provider
+        $dr_float = calculateBranchTotalFloat($db, $dr_id);
+        
+        // ✅ Recalculate capital
+        $dr_cap = $dr_float + $dr_cash;
+
+        $total_float   += $dr_float;
+        $total_cash    += $dr_cash;
+        $total_capital += $dr_cap;
+        
+        // ✅ Auto-fix daily_reports
+        $db_float = floatval($dr_row['current_float'] ?? 0);
+        $db_capital = floatval($dr_row['current_capital'] ?? 0);
+        
+        if (abs($dr_float - $db_float) > 0.01 || abs($dr_cap - $db_capital) > 0.01) {
+            $stmt3 = $db->prepare("
+                UPDATE daily_reports 
+                SET current_float = ?, current_capital = ?
+                WHERE id = ?
+            ");
+            $stmt3->execute([$dr_float, $dr_cap, $dr_id]);
+        }
+    }
+}
 
 // ============================================================
 // SUMMARY DATA
@@ -277,7 +370,12 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="csh-info">
                         <span class="csh-title">Branch Capital Overview</span>
-                        <span class="csh-subtitle"><?php echo htmlspecialchars($branch_name); ?></span>
+                        <span class="csh-subtitle">
+                            <?php echo htmlspecialchars($branch_name); ?>
+                            <?php if ($latest_dr_date): ?>
+                                • Latest: <?php echo date('d M Y', strtotime($latest_dr_date)); ?>
+                            <?php endif; ?>
+                        </span>
                     </div>
                 </div>
                 <div class="csh-badge">
@@ -297,7 +395,7 @@ include_once '../../includes/admin_topbar.php';
                         <?php echo formatCurrency($total_float); ?>
                     </div>
                     <div class="cp-sublabel">
-                        <i class="fas fa-info-circle"></i> All provider floats
+                        <i class="fas fa-info-circle"></i> Latest DR providers
                     </div>
                 </div>
                 
@@ -312,7 +410,7 @@ include_once '../../includes/admin_topbar.php';
                         <?php echo formatCurrency($total_cash); ?>
                     </div>
                     <div class="cp-sublabel">
-                        <i class="fas fa-info-circle"></i> Branch cash balance
+                        <i class="fas fa-info-circle"></i> Latest DR branch cash
                     </div>
                 </div>
                 
@@ -564,13 +662,12 @@ html, body {
     width: 100% !important;
 }
 
-/* ✅ FIXED: Spacing sahihi */
 .main-wrapper {
     overflow-x: hidden !important;
     max-width: 100% !important;
-    margin-left: 260px;                    /* ✅ Space kwa sidebar */
+    margin-left: 260px;
     width: calc(100% - 260px);
-    padding-top: 70px;                     /* ✅ Space kwa header */
+    padding-top: 70px;
     min-height: 100vh;
     background: var(--bg-body);
     transition: margin-left 0.3s ease, width 0.3s ease;
@@ -581,7 +678,7 @@ html, body {
     overflow-x: hidden !important;
     max-width: 100% !important;
     width: 100% !important;
-    padding: 20px 28px 24px 28px !important;   /* ✅ Top + Left + Right + Bottom */
+    padding: 20px 28px 24px 28px !important;
 }
 
 @media (max-width: 1024px) {
@@ -590,30 +687,21 @@ html, body {
         width: calc(100% - 260px);
         padding-top: 70px;
     }
-    .main-content {
-        padding: 18px 22px 20px 22px !important;
-    }
+    .main-content { padding: 18px 22px 20px 22px !important; }
 }
 
 @media (max-width: 768px) {
     .main-wrapper {
         margin-left: 0;
         width: 100%;
-        padding-top: 62px;                  /* ✅ Space kwa header ya mobile */
+        padding-top: 62px;
     }
-    .main-content {
-        padding: 16px 16px 18px 16px !important;
-    }
+    .main-content { padding: 16px 16px 18px 16px !important; }
 }
 
 @media (max-width: 480px) {
-    .main-wrapper {
-        padding-top: 58px;
-        width: 100%;
-    }
-    .main-content {
-        padding: 14px 12px 16px 12px !important;
-    }
+    .main-wrapper { padding-top: 58px; width: 100%; }
+    .main-content { padding: 14px 12px 16px 12px !important; }
 }
 
 :root {
@@ -680,7 +768,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     z-index: 1;
 }
 
-/* PROFILE PICTURE */
 .welcome-avatar {
     width: 76px;
     height: 76px;
@@ -716,9 +803,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     letter-spacing: 1px;
     background: linear-gradient(135deg, #FCD34D 0%, #F59E0B 100%);
     border-radius: 50%;
-}
-html.dark-mode .welcome-avatar {
-    border-color: rgba(252, 211, 77, 0.5);
 }
 
 .welcome-info {
@@ -1483,7 +1567,9 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
     console.log('%c🛡️ Admin Dashboard', 'font-size:16px; font-weight:bold; color:#DC2626;');
-    console.log('%cProfile Picture: <?php echo $profile_pic_exists ? $profile_pic_url : "Fallback to initials"; ?>', 'font-size:11px; color:#059669;');
+    console.log('%cFloat: <?php echo formatCurrency($total_float); ?>', 'font-size:13px; color:#2563EB;');
+    console.log('%cCash: <?php echo formatCurrency($total_cash); ?>', 'font-size:13px; color:#059669;');
+    console.log('%cCapital: <?php echo formatCurrency($total_capital); ?>', 'font-size:13px; color:#7C3AED;');
 });
 </script>
 </body>

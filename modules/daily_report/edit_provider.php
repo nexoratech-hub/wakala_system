@@ -2,10 +2,8 @@
 // ================================================================
 // FILE: modules/daily_report/edit_provider.php
 // EDIT PROVIDER (Daily Report Provider)
-// ✅ FIXED: Ondoa `notes` kwenye UPDATE (haipo kwenye daily_report_providers)
-// ✅ FIXED: Dark mode inatumia html.dark-mode
-// ✅ NEW: Modern design na soft background cards
-// ✅ NEW: Better validation na confirmation
+// ✅ FIXED: Baada ya UPDATE, sync daily_reports totals
+// ✅ FIXED: current_capital = total_float + current_cash
 // ================================================================
 
 require_once '../../config/config.php';
@@ -30,6 +28,55 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
+// ✅ HELPER: Sync daily_reports totals from LATEST record per provider
+// ============================================================
+function syncDailyReportTotals($db, $daily_report_id, $current_cash = null) {
+    // Get current cash if not provided
+    if ($current_cash === null) {
+        $stmt = $db->prepare("SELECT current_cash FROM daily_reports WHERE id = ?");
+        $stmt->execute([$daily_report_id]);
+        $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+        $current_cash = floatval($dr['current_cash'] ?? 0);
+    }
+    
+    // Get total float from LATEST record per provider
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float,
+               COALESCE(SUM(latest.total_deposits), 0) as total_deposits,
+               COALESCE(SUM(latest.total_withdrawals), 0) as total_withdrawals
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float, 
+                   drp1.total_deposits, drp1.total_withdrawals
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_float = floatval($totals['total_float'] ?? 0);
+    $total_deposits = floatval($totals['total_deposits'] ?? 0);
+    $total_withdrawals = floatval($totals['total_withdrawals'] ?? 0);
+    $current_capital = $total_float + $current_cash;
+    
+    $stmt = $db->prepare("
+        UPDATE daily_reports 
+        SET current_float = ?, current_capital = ?,
+            total_deposits = ?, total_withdrawals = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([$total_float, $current_capital, $total_deposits, $total_withdrawals, $daily_report_id]);
+    
+    return ['total_float' => $total_float, 'current_capital' => $current_capital];
+}
+
+// ============================================================
 // GET PARAMETERS
 // ============================================================
 $provider_row_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
@@ -46,20 +93,11 @@ if ($provider_row_id <= 0) {
 // ============================================================
 try {
     $stmt = $db->prepare("
-        SELECT 
-            drp.*,
-            p.provider_name,
-            p.provider_code as main_code,
-            p.provider_type,
-            p.icon_class,
-            p.color_code,
-            dr.report_number,
-            dr.report_date,
-            dr.branch_id,
-            dr.id as report_id,
-            b.branch_name,
-            b.branch_code,
-            e.full_name as employee_name
+        SELECT drp.*, p.provider_name, p.provider_code as main_code,
+               p.provider_type, p.icon_class, p.color_code,
+               dr.report_number, dr.report_date, dr.branch_id,
+               dr.id as report_id, dr.current_cash,
+               b.branch_name, b.branch_code, e.full_name as employee_name
         FROM daily_report_providers drp
         LEFT JOIN providers p ON drp.provider_id = p.id
         LEFT JOIN daily_reports dr ON drp.daily_report_id = dr.id
@@ -82,7 +120,6 @@ if (!$provider_data) {
     exit();
 }
 
-// If branch_id not provided, get from data
 if ($branch_id <= 0) {
     $branch_id = intval($provider_data['branch_id'] ?? 0);
 }
@@ -100,40 +137,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $new_morning_float = floatval(str_replace(',', '', $_POST['morning_float'] ?? 0));
         $new_current_float = floatval(str_replace(',', '', $_POST['current_float'] ?? 0));
         
-        // Validation
-        if ($new_morning_float < 0) {
-            throw new Exception('Morning Float haiwezi kuwa negative.');
-        }
-        if ($new_current_float < 0) {
-            throw new Exception('Current Float haiwezi kuwa negative.');
-        }
+        if ($new_morning_float < 0) throw new Exception('Morning Float haiwezi kuwa negative.');
+        if ($new_current_float < 0) throw new Exception('Current Float haiwezi kuwa negative.');
         
         $old_morning_float = floatval($provider_data['morning_float'] ?? 0);
         $old_current_float = floatval($provider_data['current_float'] ?? 0);
         
-        // ✅ FIXED: Ondoa `notes` (haipo kwenye daily_report_providers)
+        // UPDATE provider row
         $stmt = $db->prepare("
             UPDATE daily_report_providers 
-            SET morning_float = ?,
-                current_float = ?,
-                updated_at = NOW()
+            SET morning_float = ?, current_float = ?, updated_at = NOW()
             WHERE id = ?
         ");
-        $stmt->execute([
-            $new_morning_float,
-            $new_current_float,
-            $provider_row_id
-        ]);
+        $stmt->execute([$new_morning_float, $new_current_float, $provider_row_id]);
         
-        // Log activity
+        // ✅ MUHIMU: Sync daily_reports totals
+        $daily_report_id = $provider_data['daily_report_id'];
+        $current_cash = floatval($provider_data['current_cash'] ?? 0);
+        syncDailyReportTotals($db, $daily_report_id, $current_cash);
+        
         logActivity(
-            $user_id,
-            'Edit Provider',
-            'Daily Report Provider',
-            $provider_row_id,
-            'Morning Float: ' . number_format($old_morning_float, 0) . ' | Current Float: ' . number_format($old_current_float, 0),
-            'Morning Float: ' . number_format($new_morning_float, 0) . ' | Current Float: ' . number_format($new_current_float, 0) . 
-            ' | Provider: ' . $provider_data['provider_name']
+            $user_id, 'Edit Provider', 'Daily Report Provider', $provider_row_id,
+            'Morning: ' . number_format($old_morning_float, 0) . ' | Current: ' . number_format($old_current_float, 0),
+            'Morning: ' . number_format($new_morning_float, 0) . ' | Current: ' . number_format($new_current_float, 0)
         );
         
         $db->commit();
@@ -143,9 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit();
         
     } catch (Exception $e) {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
+        if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
     }
 }
@@ -153,20 +177,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Refresh data after update
 try {
     $stmt = $db->prepare("
-        SELECT 
-            drp.*,
-            p.provider_name,
-            p.provider_code as main_code,
-            p.provider_type,
-            p.icon_class,
-            p.color_code,
-            dr.report_number,
-            dr.report_date,
-            dr.branch_id,
-            dr.id as report_id,
-            b.branch_name,
-            b.branch_code,
-            e.full_name as employee_name
+        SELECT drp.*, p.provider_name, p.provider_code as main_code,
+               p.provider_type, p.icon_class, p.color_code,
+               dr.report_number, dr.report_date, dr.branch_id,
+               dr.id as report_id, dr.current_cash,
+               b.branch_name, b.branch_code, e.full_name as employee_name
         FROM daily_report_providers drp
         LEFT JOIN providers p ON drp.provider_id = p.id
         LEFT JOIN daily_reports dr ON drp.daily_report_id = dr.id
@@ -180,22 +195,16 @@ try {
     error_log("Error refreshing data: " . $e->getMessage());
 }
 
-// ============================================================
-// GET RELATED TRANSACTIONS FOR THIS PROVIDER
-// ============================================================
+// GET RELATED TRANSACTIONS
 $recent_transactions = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            t.*,
-            e.full_name as employee_name
+        SELECT t.*, e.full_name as employee_name
         FROM transactions t
         LEFT JOIN employees e ON t.employee_id = e.id
-        WHERE t.provider_id = ?
-        AND t.branch_id = ?
+        WHERE t.provider_id = ? AND t.branch_id = ?
         AND DATE(t.transaction_date) = ?
-        ORDER BY t.created_at DESC
-        LIMIT 10
+        ORDER BY t.created_at DESC LIMIT 10
     ");
     $stmt->execute([
         $provider_data['provider_id'],
@@ -207,18 +216,6 @@ try {
     error_log("Error fetching transactions: " . $e->getMessage());
 }
 
-// Calculate totals
-$total_deposits = 0;
-$total_withdrawals = 0;
-foreach ($recent_transactions as $t) {
-    if ($t['transaction_type'] === 'deposit') {
-        $total_deposits += floatval($t['amount']);
-    } else {
-        $total_withdrawals += floatval($t['amount']);
-    }
-}
-
-// Session messages
 $success_message_session = '';
 if (isset($_SESSION['success_message'])) {
     $success_message_session = $_SESSION['success_message'];

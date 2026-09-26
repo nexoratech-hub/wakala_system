@@ -2,10 +2,12 @@
 // ================================================================
 // FILE: modules/commissions/index.php
 // WAKALA FINANCIAL SYSTEM - COMMISSIONS LIST
-// ✅ NEW: BLUE branch card
-// ✅ NEW: Single continuous table (all providers 1-30)
-// ✅ NEW: Red line separator between branches
-// ✅ REMOVED: Edit button (only View + Delete remain)
+// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
+// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
+// ✅ FIXED: current_capital = total_float + total_cash
+// ✅ BLUE branch card
+// ✅ Single continuous table (all providers 1-30)
+// ✅ Red line separator between branches
 // ================================================================
 
 require_once '../../config/config.php';
@@ -31,6 +33,43 @@ $user = $stmt->fetch();
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
 $all_branches = $stmt->fetchAll();
+
+// ============================================================
+// ✅ HELPER: Get latest daily report for a branch
+// ============================================================
+function getLatestDailyReport($db, $branch_id) {
+    $stmt = $db->prepare("
+        SELECT * FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$branch_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// Inaepuka double-counting ya duplicate records
+// ============================================================
+function calculateTotalFloat($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
 
 // ============================================================
 // HANDLE DELETE COMMISSIONS FOR PROVIDER
@@ -121,32 +160,41 @@ $result = $stmt->fetch();
 $this_month_commission = $result['total'] ?? 0;
 
 // ============================================================
-// CAPITAL DATA
+// ✅ CAPITAL DATA - FIXED!
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
 
-$sql_float = "SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-              FROM daily_report_providers drp
-              INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-              WHERE 1=1";
-$params_float = [];
-if ($selected_branch > 0) { $sql_float .= " AND dr.branch_id = ?"; $params_float[] = $selected_branch; }
-$stmt = $db->prepare($sql_float);
-$stmt->execute($params_float);
-$total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
-
-$sql_cash = "SELECT COALESCE(SUM(current_cash), 0) as total_cash
-             FROM daily_reports
-             WHERE 1=1";
-$params_cash = [];
-if ($selected_branch > 0) { $sql_cash .= " AND branch_id = ?"; $params_cash[] = $selected_branch; }
-$stmt = $db->prepare($sql_cash);
-$stmt->execute($params_cash);
-$total_cash = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_cash'] ?? 0);
-
-$total_capital = $total_float + $total_cash;
+if ($selected_branch > 0) {
+    // ✅ Chukua latest daily report ya branch hii
+    $latest_dr = getLatestDailyReport($db, $selected_branch);
+    
+    if ($latest_dr) {
+        // ✅ Hesabu total float kutoka LATEST record per provider
+        $total_float = calculateTotalFloat($db, $latest_dr['id']);
+        
+        // ✅ Cash kutoka latest daily report
+        $total_cash = floatval($latest_dr['current_cash'] ?? 0);
+        
+        // ✅ Capital = Float + Cash
+        $total_capital = $total_float + $total_cash;
+    }
+} else {
+    // ✅ Kama "All Branches" - jumla ya branches zote
+    // Chukua latest daily report kwa kila branch
+    $branch_ids = array_column($all_branches, 'id');
+    
+    foreach ($branch_ids as $bid) {
+        $latest_dr = getLatestDailyReport($db, $bid);
+        if ($latest_dr) {
+            $total_float += calculateTotalFloat($db, $latest_dr['id']);
+            $total_cash += floatval($latest_dr['current_cash'] ?? 0);
+        }
+    }
+    
+    $total_capital = $total_float + $total_cash;
+}
 
 // ============================================================
 // SUMMARY CARDS
@@ -309,9 +357,7 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ============================================================
-             ✅ BLUE BRANCH CARD
-             ============================================================ -->
+        <!-- BLUE BRANCH CARD -->
         <div class="branch-status-card-blue">
             <div class="branch-status-icon-blue">
                 <i class="fas <?php echo $selected_branch > 0 ? 'fa-store-alt' : 'fa-globe-africa'; ?>"></i>
@@ -503,10 +549,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-             ✅ SINGLE CONTINUOUS TABLE (All Providers 1-30)
-             Red line separator between branches
-             ============================================================ -->
+        <!-- SINGLE CONTINUOUS TABLE -->
         <div class="table-container">
             
             <!-- RED HEADER with Search + Scroll + Count -->
@@ -578,7 +621,7 @@ include_once '../../includes/admin_topbar.php';
                                 );
                             ?>
                                 <?php if ($is_new_branch && $global_row > 1): ?>
-                                    <!-- ✅ RED LINE SEPARATOR between branches -->
+                                    <!-- RED LINE SEPARATOR between branches -->
                                     <tr class="branch-separator-row">
                                         <td colspan="9">
                                             <div class="branch-separator-line"></div>
@@ -638,14 +681,12 @@ include_once '../../includes/admin_topbar.php';
                                     </td>
                                     <td>
                                         <div class="provider-actions">
-                                            <!-- ✅ VIEW ONLY -->
                                             <a href="view_provider_commissions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $p['branch_id']; ?>" 
                                                class="btn-provider btn-provider-view" 
                                                title="View All Commissions">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                             
-                                            <!-- ✅ DELETE ONLY -->
                                             <a href="index.php?delete_provider_commissions=1&branch_id=<?php echo $p['branch_id']; ?>&provider_id=<?php echo $p['provider_id']; ?>" 
                                                class="btn-provider btn-provider-delete" 
                                                onclick="return confirmDeleteCommissions('<?php echo addslashes($p['provider_name']); ?>', <?php echo $p['commission_count']; ?>)"
@@ -740,9 +781,7 @@ body {
     display: block;
 }
 
-/* ============================================================
-   ✅ BLUE BRANCH CARD
-   ============================================================ */
+/* BLUE BRANCH CARD */
 .branch-status-card-blue {
     display: flex;
     align-items: center;
@@ -1188,9 +1227,7 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     word-break: break-all; line-height: 1.2;
 }
 
-/* ============================================================
-   TABLE CONTAINER
-   ============================================================ */
+/* TABLE CONTAINER */
 .table-container {
     background: var(--commission-card-bg);
     border-radius: 12px;
@@ -1199,7 +1236,7 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     overflow: hidden; width: 100%; max-width: 100%;
 }
 
-/* RED HEADER with Search + Scroll + Count */
+/* RED HEADER */
 .table-header-red-with-controls {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -1418,9 +1455,7 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
 }
 .data-table tbody td.text-right { text-align: right; }
 
-/* ============================================================
-   ✅ BRANCH SEPARATOR ROW (RED LINE)
-   ============================================================ */
+/* BRANCH SEPARATOR ROW */
 .branch-separator-row {
     background: transparent !important;
     border: none !important;
@@ -1507,7 +1542,7 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     white-space: nowrap;
 }
 
-/* ✅ Branch Badge Cell */
+/* Branch Badge Cell */
 .branch-badge-cell {
     display: inline-flex;
     align-items: center;
@@ -1854,7 +1889,6 @@ function filterProviders(input) {
     
     let matchCount = 0;
     let lastVisibleBranchId = null;
-    let firstMatchOfBranch = false;
     
     providerRows.forEach(row => {
         const searchData = row.getAttribute('data-search') || '';
@@ -1863,14 +1897,7 @@ function filterProviders(input) {
         if (searchData.includes(searchTerm)) {
             row.classList.remove('hidden-by-search');
             matchCount++;
-            
-            // Check if this is first visible of its branch
-            if (branchId !== lastVisibleBranchId) {
-                firstMatchOfBranch = true;
-                lastVisibleBranchId = branchId;
-            } else {
-                firstMatchOfBranch = false;
-            }
+            lastVisibleBranchId = branchId;
         } else {
             row.classList.add('hidden-by-search');
         }
@@ -1921,7 +1948,7 @@ function scrollProviderTable(direction) {
 }
 
 // ============================================================
-// CONFIRM DELETE COMMISSIONS (not provider)
+// CONFIRM DELETE COMMISSIONS
 // ============================================================
 function confirmDeleteCommissions(providerName, count) {
     var msg = 'Are you sure you want to DELETE COMMISSIONS for:\n\n' +

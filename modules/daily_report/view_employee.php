@@ -1,12 +1,10 @@
 <?php
 // ================================================================
-// FILE: modules/daily_report/view.php
-// DAILY REPORT - VIEW (ADMIN) - BEAUTIFUL CARDS
-// ✅ Blue theme + Green providers cards
-// ✅ JetBrains Mono font kwa numbers na codes
-// ✅ Summary cards (Cash, Float, Capital, Net Profit)
-// ✅ Admin actions: Edit, Delete, Print
-// ✅ Full responsive + dark mode
+// FILE: modules/daily_report/view_employee.php
+// DAILY REPORT - VIEW (EMPLOYEE) - BEAUTIFUL CARDS
+// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
+// ✅ FIXED: total_cash inachukuliwa kutoka report.current_cash
+// ✅ FIXED: grand_total = total_float + total_cash
 // ================================================================
 
 require_once '../../config/config.php';
@@ -25,7 +23,13 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role    = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin') {
+// Get employee branch
+$stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+$stmt->execute([$user_id]);
+$emp = $stmt->fetch(PDO::FETCH_ASSOC);
+$employee_branch_id = intval($emp['branch_id'] ?? 0);
+
+if ($employee_branch_id <= 0) {
     header('Location: ../dashboard/employee.php');
     exit();
 }
@@ -33,8 +37,30 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($id <= 0) {
     $_SESSION['error_message'] = 'Invalid daily report.';
-    header('Location: index.php');
+    header('Location: index_employee.php');
     exit();
+}
+
+// ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ============================================================
+function calculateTotalFloatFromReport($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
 }
 
 // ============================================================
@@ -58,39 +84,41 @@ $stmt = $db->prepare("
     LEFT JOIN morning_reports mr ON dr.morning_report_id = mr.id
     LEFT JOIN employees e ON dr.employee_id = e.id
     LEFT JOIN branches b ON dr.branch_id = b.id
-    WHERE dr.id = ?
+    WHERE dr.id = ? AND dr.branch_id = ?
 ");
-$stmt->execute([$id]);
+$stmt->execute([$id, $employee_branch_id]);
 $report = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$report) {
-    $_SESSION['error_message'] = 'Daily report not found.';
-    header('Location: index.php');
+    $_SESSION['error_message'] = 'Daily report not found or access denied.';
+    header('Location: index_employee.php');
     exit();
 }
 
 // ============================================================
-// FETCH PROVIDERS
+// FETCH PROVIDERS (LATEST per provider - avoid duplicates)
 // ============================================================
 $stmt = $db->prepare("
     SELECT 
         drp.*,
         p.icon_class, p.color_code, p.provider_type
     FROM daily_report_providers drp
+    INNER JOIN (
+        SELECT provider_id, MAX(id) as max_id
+        FROM daily_report_providers
+        WHERE daily_report_id = ?
+        GROUP BY provider_id
+    ) latest ON drp.id = latest.max_id
     LEFT JOIN providers p ON drp.provider_id = p.id
-    WHERE drp.daily_report_id = ?
     ORDER BY p.display_order, drp.provider_name
 ");
 $stmt->execute([$id]);
 $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
-// CALCULATE TOTALS
+// ✅ CALCULATE TOTALS - FIXED!
 // ============================================================
-$total_float = 0;
-foreach ($providers as $p) {
-    $total_float += floatval(str_replace(',', '', $p['current_float'] ?? 0));
-}
+$total_float = calculateTotalFloatFromReport($db, $id);
 $total_cash = floatval(str_replace(',', '', $report['current_cash'] ?? 0));
 $grand_total = $total_float + $total_cash;
 
@@ -108,9 +136,9 @@ if (isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+include_once '../../includes/employee_header.php';
+include_once '../../includes/employee_sidebar.php';
+include_once '../../includes/employee_topbar.php';
 ?>
 
 <!-- ✅ JETBRAINS MONO FONT -->
@@ -142,7 +170,7 @@ include_once '../../includes/admin_topbar.php';
                 <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <a href="index.php" class="btn-back-card">
+                <a href="index_employee.php" class="btn-back-card">
                     <i class="fas fa-arrow-left"></i>
                     <span>Back to Reports</span>
                 </a>
@@ -152,21 +180,15 @@ include_once '../../includes/admin_topbar.php';
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-file-invoice" style="color:#2563EB;"></i> Daily Report Details</h2>
+                <h2><i class="fas fa-file-invoice" style="color:#2563EB;"></i> Daily Report</h2>
                 <p class="text-muted">
                     <i class="fas fa-hashtag"></i>
                     <?php echo htmlspecialchars($report['report_number']); ?>
                 </p>
             </div>
             <div class="header-right">
-                <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit">
-                    <i class="fas fa-edit"></i> Edit
-                </a>
                 <button onclick="window.print()" class="btn btn-print">
                     <i class="fas fa-print"></i> Print
-                </button>
-                <button onclick="deleteReport(<?php echo $id; ?>, '<?php echo addslashes($report['report_number']); ?>')" class="btn btn-delete">
-                    <i class="fas fa-trash"></i> Delete
                 </button>
             </div>
         </div>
@@ -417,22 +439,16 @@ include_once '../../includes/admin_topbar.php';
 
         <!-- ACTIONS -->
         <div class="actions-card">
-            <a href="index.php" class="btn btn-secondary">
+            <a href="index_employee.php" class="btn btn-secondary">
                 <i class="fas fa-arrow-left"></i> Back
-            </a>
-            <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit-lg">
-                <i class="fas fa-edit"></i> Edit Report
             </a>
             <button onclick="window.print()" class="btn btn-print-lg">
                 <i class="fas fa-print"></i> Print Report
             </button>
-            <button onclick="deleteReport(<?php echo $id; ?>, '<?php echo addslashes($report['report_number']); ?>')" class="btn btn-delete-lg">
-                <i class="fas fa-trash"></i> Delete
-            </button>
         </div>
 
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php include_once '../../includes/employee_footer.php'; ?>
 </div>
 
 <style>
@@ -458,7 +474,7 @@ include_once '../../includes/admin_topbar.php';
     --green-primary: #059669;
     --green-dark: #047857;
     --green-darker: #065F46;
-    --sidebar-width: 240px;
+    --sidebar-width: 220px;
     --topbar-height: 70px;
 }
 html.dark-mode {
@@ -487,8 +503,16 @@ html, body {
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 /* ============================================================
-   BRANCH INDICATOR - BLUE
+   ✅ APPLY JETBRAINS MONO KWA:
+   - Report numbers (main-card-number)
+   - Info values za mono
+   - Total values (money)
+   - Provider codes
+   - Badges (employee codes, provider codes)
+   - Cash summary values
    ============================================================ */
+
+/* Branch indicator */
 .branch-indicator {
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -505,28 +529,22 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     font-size: 11px; font-weight: 700; padding: 3px 12px; 
     background: rgba(255,255,255,0.2); border-radius: 12px; 
     border: 1px solid rgba(255,255,255,0.25);
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     letter-spacing: 0.3px;
 }
 .branch-location { display: flex; align-items: center; gap: 5px; font-size: 12px; color: rgba(255,255,255,0.9); padding: 4px 12px; background: rgba(255,255,255,0.12); border-radius: 12px; }
 .btn-back-card { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: rgba(255,255,255,0.12); border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); color: #FFF; text-decoration: none; font-size: 13px; font-weight: 600; transition: all 0.3s ease; }
 .btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
 
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
 .page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; }
 .page-header .header-left .text-muted { 
     font-size: 13px; color: var(--text-muted); margin: 6px 0 0 0; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     letter-spacing: 0.3px;
 }
 .header-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
 .alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; font-size: 13px; }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
@@ -534,9 +552,7 @@ html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; }
 html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; }
 .alert-close { background: transparent; border: none; font-size: 22px; cursor: pointer; opacity: 0.6; }
 
-/* ============================================================
-   MAIN CARD - BLUE
-   ============================================================ */
+/* Main card */
 .main-card { background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); border-radius: 16px; padding: 28px 32px; margin-bottom: 18px; display: flex; align-items: center; gap: 24px; color: #FFF; box-shadow: 0 8px 32px rgba(30, 64, 175, 0.25); position: relative; overflow: hidden; }
 .main-card::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: rgba(255,255,255,0.1); border-radius: 50%; }
 .main-card-icon { width: 88px; height: 88px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 40px; flex-shrink: 0; border: 2px solid rgba(255,255,255,0.3); position: relative; z-index: 1; }
@@ -545,7 +561,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; }
 .main-card-number { 
     font-size: clamp(22px, 2.5vw, 32px); 
     font-weight: 900; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     margin-bottom: 6px; 
     letter-spacing: -0.5px;
     word-break: break-all;
@@ -555,9 +571,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 20px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; border: 1.5px solid; }
 .badge-open { background: rgba(255,255,255,0.25); color: #FFF; border-color: rgba(255,255,255,0.4); backdrop-filter: blur(8px); }
 
-/* ============================================================
-   TOTALS GRID - 4 CARDS
-   ============================================================ */
+/* Totals grid */
 .totals-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
 .total-card { display: flex; align-items: center; gap: 16px; padding: 20px 24px; border-radius: 14px; color: #FFF; box-shadow: 0 4px 16px rgba(0,0,0,0.15); position: relative; overflow: hidden; }
 .total-card::before { content: ''; position: absolute; top: -50%; right: -20%; width: 140px; height: 140px; background: rgba(255,255,255,0.1); border-radius: 50%; }
@@ -571,14 +585,12 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; }
 .total-value { 
     font-size: clamp(15px, 1.5vw, 20px); 
     font-weight: 900; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     letter-spacing: -0.3px;
     word-break: break-all;
 }
 
-/* ============================================================
-   DETAILS GRID
-   ============================================================ */
+/* Details grid */
 .details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 18px; }
 .detail-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); }
 .detail-card-header { padding: 16px 20px; background: var(--bg-table-even); border-bottom: 1.5px solid var(--border-color); display: flex; align-items: center; gap: 14px; }
@@ -590,7 +602,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; }
 .info-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .info-value { font-size: 13px; font-weight: 700; color: var(--text-primary); text-align: right; }
 .info-value.mono { 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     color: #2563EB;
     letter-spacing: 0.3px;
 }
@@ -605,14 +617,12 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
 .employee-code { 
     display: inline-block; padding: 2px 10px; background: #059669; color: #FFF; 
     border-radius: 8px; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     font-size: 11px; font-weight: 700; align-self: flex-start; 
     letter-spacing: 0.3px;
 }
 
-/* ============================================================
-   PROVIDERS SECTION - BLUE HEADER
-   ============================================================ */
+/* Providers section - BLUE HEADER */
 .providers-section { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); box-shadow: 0 2px 8px var(--shadow-color); margin-bottom: 18px; overflow: hidden; }
 .section-header { background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%); padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; color: #FFFFFF; }
 .section-header-left { display: flex; align-items: center; gap: 14px; }
@@ -621,9 +631,7 @@ html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047
 .section-header p { font-size: 12px; margin: 0; color: rgba(255,255,255,0.85); }
 .section-count-badge { background: rgba(255,255,255,0.22); padding: 6px 18px; border-radius: 12px; font-size: 13px; font-weight: 800; border: 1px solid rgba(255,255,255,0.3); }
 
-/* ============================================================
-   ✅ PROVIDERS GRID - GREEN THEME
-   ============================================================ */
+/* ✅ PROVIDERS GRID - GREEN THEME */
 .providers-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 20px; }
 .provider-card { background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%); border: 2px solid #6EE7B7; border-radius: 16px; overflow: hidden; transition: all 0.3s ease; position: relative; box-shadow: 0 4px 16px rgba(5, 150, 105, 0.12); }
 .provider-card::before { content: ''; position: absolute; top: -40px; right: -40px; width: 120px; height: 120px; background: rgba(16, 185, 129, 0.15); border-radius: 50%; pointer-events: none; }
@@ -636,7 +644,7 @@ html.dark-mode .provider-card { background: linear-gradient(135deg, #064E3B 0%, 
     background: linear-gradient(135deg, #059669, #10B981); color: #FFF; 
     display: flex; align-items: center; justify-content: center; 
     font-size: 12px; font-weight: 800; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     border: 2px solid rgba(255,255,255,0.5); 
     box-shadow: 0 3px 10px rgba(5,150,105,0.3); 
 }
@@ -653,7 +661,7 @@ html.dark-mode .provider-card-name { color: #D1FAE5; }
 .provider-card-code { 
     display: inline-flex; align-items: center; gap: 6px; 
     font-size: 11px; font-weight: 800; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     color: #047857; 
     background: rgba(255,255,255,0.7); 
     padding: 5px 12px; border-radius: 8px; 
@@ -668,16 +676,14 @@ html.dark-mode .provider-card-name { color: #D1FAE5; }
 .provider-card-footer-value { 
     font-size: 20px; 
     font-weight: 900; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     color: #FFFFFF; 
     letter-spacing: -0.5px;
     word-break: break-all;
     text-shadow: 0 2px 8px rgba(0,0,0,0.25); 
 }
 
-/* ============================================================
-   CASH SUMMARY
-   ============================================================ */
+/* Cash summary */
 .cash-summary-section { padding: 0 20px 20px 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .cash-summary-card { display: flex; align-items: center; gap: 16px; padding: 20px 22px; border-radius: 14px; color: #FFF; position: relative; overflow: hidden; }
 .cash-summary-card::before { content: ''; position: absolute; top: -50%; right: -20%; width: 140px; height: 140px; background: rgba(255,255,255,0.1); border-radius: 50%; }
@@ -690,20 +696,16 @@ html.dark-mode .provider-card-name { color: #D1FAE5; }
 .cash-summary-value { 
     font-size: clamp(15px, 1.5vw, 20px); 
     font-weight: 900; 
-    font-family: var(--font-mono);
+    font-family: var(--font-mono);  /* ✅ JetBrains Mono */
     letter-spacing: -0.3px;
     word-break: break-all;
 }
 
-/* ============================================================
-   EMPTY PROVIDERS
-   ============================================================ */
+/* Empty providers */
 .empty-providers { text-align: center; padding: 60px 20px; color: var(--text-muted); }
 .empty-providers i { font-size: 56px; opacity: 0.4; display: block; margin-bottom: 16px; }
 
-/* ============================================================
-   NOTES
-   ============================================================ */
+/* Notes card */
 .notes-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); margin-bottom: 18px; }
 .notes-card-header { padding: 14px 20px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-bottom: 1.5px solid #FCD34D; display: flex; align-items: center; gap: 10px; }
 .notes-card-header i { font-size: 18px; color: #D97706; }
@@ -711,25 +713,20 @@ html.dark-mode .provider-card-name { color: #D1FAE5; }
 .notes-card-body { padding: 18px 20px; }
 .notes-card-body p { font-size: 14px; line-height: 1.7; margin: 0; }
 
-/* ============================================================
-   ACTIONS
-   ============================================================ */
+/* Actions */
 .actions-card { display: flex; gap: 12px; padding: 20px 24px; background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); flex-wrap: wrap; }
-.btn { padding: 12px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.3s ease; text-decoration: none; font-family: var(--font-sans); white-space: nowrap; }
+.btn { padding: 12px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.3s ease; text-decoration: none; font-family: var(--font-sans); }
 .btn-secondary { background: var(--bg-table-even); color: var(--text-secondary); border: 1.5px solid var(--border-color); }
 .btn-secondary:hover { background: var(--bg-table-even); transform: translateY(-2px); }
-.btn-edit { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
-.btn-edit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4); color: #FFF; }
 .btn-print { background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3); }
-.btn-print:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4); color: #FFF; }
-.btn-delete { background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFF; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
-.btn-delete:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4); color: #FFF; }
-.btn-edit-lg { flex: 1; justify-content: center; min-width: 160px; background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; }
-.btn-edit-lg:hover { transform: translateY(-2px); color: #FFF; }
-.btn-print-lg { flex: 1; justify-content: center; min-width: 160px; background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; }
+.btn-print:hover { transform: translateY(-2px); color: #FFF; }
+.btn-print-lg { flex: 1; justify-content: center; min-width: 180px; background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; }
 .btn-print-lg:hover { transform: translateY(-2px); color: #FFF; }
-.btn-delete-lg { flex: 1; justify-content: center; min-width: 160px; background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFF; }
-.btn-delete-lg:hover { transform: translateY(-2px); color: #FFF; }
+
+/* Employee footer */
+.employee-footer { margin-left: 0 !important; margin-top: auto !important; width: 100% !important; background: #ffffff !important; border-top: 1px solid var(--border-color) !important; padding: 10px 20px !important; }
+html.dark-mode .employee-footer { background: #1e293b !important; border-color: #334155 !important; }
+.employee-footer .footer-content { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #6b7280; flex-wrap: wrap; gap: 8px; }
 
 /* ============================================================
    RESPONSIVE
@@ -779,16 +776,11 @@ html.dark-mode .provider-card-name { color: #D1FAE5; }
         print-color-adjust: exact;
     }
     .providers-grid { grid-template-columns: repeat(3, 1fr); }
+    .employee-footer { display: none !important; }
 }
 </style>
 
 <script>
-function deleteReport(id, number) {
-    if (confirm('Delete daily report "' + number + '"?\n\nThis action cannot be undone.')) {
-        window.location.href = 'delete.php?id=' + id;
-    }
-}
-
 document.addEventListener('DOMContentLoaded', function() {
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {

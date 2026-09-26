@@ -2,10 +2,10 @@
 // ================================================================
 // FILE: modules/commissions/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE COMMISSIONS VIEW
+// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
+// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
+// ✅ FIXED: current_capital = total_float + total_cash
 // ✅ Employee sees ONLY THEIR OWN commissions & other income
-// ✅ Buttons: Add Commission + Add Other Expense
-// ✅ NEW: View button per provider
-// ✅ Capital Section (Float | Cash | Total Capital)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -27,6 +27,43 @@ $user_id = $_SESSION['user_id'];
 if ($role !== 'employee') {
     header('Location: index.php');
     exit();
+}
+
+// ============================================================
+// ✅ HELPER: Get latest daily report for a branch
+// ============================================================
+function getLatestDailyReport($db, $branch_id) {
+    $stmt = $db->prepare("
+        SELECT * FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$branch_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// Inaepuka double-counting ya duplicate records
+// ============================================================
+function calculateTotalFloat($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
 }
 
 // ============================================================
@@ -59,26 +96,28 @@ if ($employee_branch_id > 0) {
 }
 
 // ============================================================
-// CAPITAL DATA (Float + Cash + Total Capital for MY BRANCH)
+// ✅ CAPITAL DATA - FIXED!
+// Total Float + Cash + Total Capital for MY BRANCH
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-                      FROM daily_report_providers drp
-                      INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                      WHERE dr.branch_id = ?");
-$stmt->execute([$employee_branch_id]);
-$total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
-
-$stmt = $db->prepare("SELECT current_cash FROM daily_reports
-                      WHERE branch_id = ?
-                      ORDER BY report_date DESC, id DESC LIMIT 1");
-$stmt->execute([$employee_branch_id]);
-$total_cash = floatval($stmt->fetch(PDO::FETCH_ASSOC)['current_cash'] ?? 0);
-
-$total_capital = $total_float + $total_cash;
+if ($employee_branch_id > 0) {
+    // ✅ Chukua latest daily report ya branch yangu
+    $latest_dr = getLatestDailyReport($db, $employee_branch_id);
+    
+    if ($latest_dr) {
+        // ✅ Hesabu total float kutoka LATEST record per provider
+        $total_float = calculateTotalFloat($db, $latest_dr['id']);
+        
+        // ✅ Cash kutoka latest daily report
+        $total_cash = floatval($latest_dr['current_cash'] ?? 0);
+        
+        // ✅ Capital = Float + Cash
+        $total_capital = $total_float + $total_cash;
+    }
+}
 
 // ============================================================
 // SUMMARY CARDS - MY OWN
@@ -459,7 +498,7 @@ include_once '../../includes/employee_topbar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <!-- ✅ VIEW BUTTON -->
+                                        <!-- VIEW BUTTON -->
                                         <div class="provider-actions">
                                             <a href="view_provider_employee.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>" 
                                                class="btn-provider btn-provider-view" 
@@ -1120,7 +1159,7 @@ html.dark-mode .commission-amount {
     font-style: italic;
 }
 
-/* ✅ PROVIDER ACTIONS */
+/* PROVIDER ACTIONS */
 .provider-actions {
     display: flex;
     gap: 5px;

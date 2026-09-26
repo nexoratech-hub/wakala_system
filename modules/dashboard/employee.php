@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: modules/dashboard/employee.php
-// WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD
+// WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD - FINAL FIXED
+// ✅ FIXED: Capital data inachukua LATEST daily report pekee
+// ✅ FIXED: Float inasoma kutoka daily_reports.current_float
+// ✅ FIXED: Fallback inasoma kutoka daily_report_providers (kama current_float = 0)
 // ✅ FIXED: Profile picture inaonekana kwenye welcome card
-// ✅ FIXED: Welcome card imepanda juu kidogo
-// ✅ FIXED: Profile picture path: uploads/employees/
 // ✅ NEW: Fallback kwa initials kama profile pic haipo
 // ================================================================
 
@@ -90,25 +91,60 @@ if ($employee_branch_id > 0) {
 
 // ============================================================
 // CAPITAL DATA
+// ✅ FIX: Chukua data kwa LATEST DAILY REPORT pekee
+// ✅ FLOAT: daily_reports.current_float (KAMA ipo)
+// ✅ FALLBACK: SUM ya daily_report_providers.current_float
+// ✅ CASH: daily_reports.current_cash
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
+$latest_dr_id = 0;
+$latest_dr_date = null;
+$latest_dr_number = '';
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-                      FROM daily_report_providers drp
-                      INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                      WHERE dr.branch_id = ?");
+// ------------------------------------------------------------
+// STEP 1: Tafuta LATEST daily report ya branch hii
+// ------------------------------------------------------------
+$stmt = $db->prepare("
+    SELECT id, report_number, report_date, current_cash, current_float, current_capital
+    FROM daily_reports
+    WHERE branch_id = ?
+    ORDER BY report_date DESC, id DESC
+    LIMIT 1
+");
 $stmt->execute([$employee_branch_id]);
-$total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+$latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$stmt = $db->prepare("SELECT current_cash FROM daily_reports
-                      WHERE branch_id = ?
-                      ORDER BY report_date DESC, id DESC LIMIT 1");
-$stmt->execute([$employee_branch_id]);
-$total_cash = floatval($stmt->fetch(PDO::FETCH_ASSOC)['current_cash'] ?? 0);
+if ($latest_dr) {
+    $latest_dr_id     = intval($latest_dr['id']);
+    $latest_dr_date   = $latest_dr['report_date'];
+    $latest_dr_number = $latest_dr['report_number'];
+    $total_cash       = floatval($latest_dr['current_cash'] ?? 0);
+    $total_float      = floatval($latest_dr['current_float'] ?? 0);
+    $total_capital    = floatval($latest_dr['current_capital'] ?? 0);
 
-$total_capital = $total_float + $total_cash;
+    // ------------------------------------------------------------
+    // STEP 2: Kama current_float ya DR ni 0, hesabu kutoka providers
+    // (fallback kwa DR za zamani ambazo hazina current_float)
+    // ------------------------------------------------------------
+    if ($total_float <= 0) {
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(current_float), 0) as total_float
+            FROM daily_report_providers
+            WHERE daily_report_id = ?
+        ");
+        $stmt->execute([$latest_dr_id]);
+        $total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
+    }
+
+    // ------------------------------------------------------------
+    // STEP 3: Recalculate capital kama haipo au 0
+    // ------------------------------------------------------------
+    if ($total_capital <= 0) {
+        $total_capital = $total_float + $total_cash;
+    }
+}
 
 // ============================================================
 // SUMMARY DATA - MY OWN
@@ -270,7 +306,12 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                     <div class="csh-info">
                         <span class="csh-title">Branch Capital</span>
-                        <span class="csh-subtitle"><?php echo htmlspecialchars($branch_name); ?></span>
+                        <span class="csh-subtitle">
+                            <?php echo htmlspecialchars($branch_name); ?>
+                            <?php if ($latest_dr_date): ?>
+                                • Latest: <?php echo date('d M Y', strtotime($latest_dr_date)); ?>
+                            <?php endif; ?>
+                        </span>
                     </div>
                 </div>
                 <div class="csh-badge">
@@ -290,7 +331,7 @@ include_once '../../includes/employee_topbar.php';
                         <?php echo formatCurrency($total_float); ?>
                     </div>
                     <div class="cp-sublabel">
-                        <i class="fas fa-info-circle"></i> All provider floats
+                        <i class="fas fa-info-circle"></i> Latest DR providers
                     </div>
                 </div>
                 
@@ -305,7 +346,7 @@ include_once '../../includes/employee_topbar.php';
                         <?php echo formatCurrency($total_cash); ?>
                     </div>
                     <div class="cp-sublabel">
-                        <i class="fas fa-info-circle"></i> Branch cash balance
+                        <i class="fas fa-info-circle"></i> Latest DR branch cash
                     </div>
                 </div>
                 

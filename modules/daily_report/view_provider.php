@@ -1,11 +1,10 @@
 <?php
 // ================================================================
-// FILE: modules/daily_report/view_provider.php
-// VIEW DAILY REPORT PROVIDER DETAILS
-// ✅ FIXED: Modern design na soft background cards
-// ✅ FIXED: Dark mode inatumia html.dark-mode
-// ✅ FIXED: Consistent styling na view_provider_transactions.php
-// ✅ NEW: Hero card na stats zenye soft background
+// FILE: modules/daily_report/view.php
+// DAILY REPORT - VIEW (ADMIN) - BEAUTIFUL CARDS
+// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
+// ✅ FIXED: total_cash inachukuliwa kutoka report.current_cash
+// ✅ FIXED: grand_total = total_float + total_cash
 // ================================================================
 
 require_once '../../config/config.php';
@@ -21,81 +20,115 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
+$user_id = $_SESSION['user_id'];
+$role    = $_SESSION['role'] ?? 'employee';
+
+if ($role !== 'admin' && $role !== 'super_admin') {
+    header('Location: ../dashboard/employee.php');
+    exit();
+}
+
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
-
-if (!$id) {
+if ($id <= 0) {
+    $_SESSION['error_message'] = 'Invalid daily report.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET PROVIDER ROW WITH REPORT INFO
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
 // ============================================================
-try {
+function calculateTotalFloatFromReport($db, $daily_report_id) {
     $stmt = $db->prepare("
-        SELECT 
-            drp.*,
-            dr.report_number,
-            dr.report_date,
-            dr.branch_id,
-            dr.branch,
-            dr.employee_id,
-            dr.created_at as report_created_at,
-            e.full_name as employee_name,
-            b.branch_name as branch_name,
-            b.branch_code as branch_code,
-            b.location as branch_location,
-            p.provider_name as provider_full_name,
-            p.provider_code as main_code,
-            p.provider_type,
-            p.icon_class,
-            p.color_code
-        FROM daily_report_providers drp
-        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-        LEFT JOIN employees e ON dr.employee_id = e.id
-        LEFT JOIN branches b ON dr.branch_id = b.id
-        LEFT JOIN providers p ON drp.provider_id = p.id
-        WHERE drp.id = ?
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
     ");
-    $stmt->execute([$id]);
-    $provider = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("Error fetching provider: " . $e->getMessage());
-    header('Location: index.php');
-    exit();
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
 }
 
-if (!$provider) {
+// ============================================================
+// FETCH DAILY REPORT
+// ============================================================
+$stmt = $db->prepare("
+    SELECT 
+        dr.*,
+        mr.report_number AS morning_report_number,
+        mr.cash_balance AS morning_cash,
+        mr.cumm_total AS morning_cumm,
+        e.full_name AS employee_name,
+        e.employee_id AS employee_code,
+        e.email AS employee_email,
+        e.phone AS employee_phone,
+        e.profile_pic AS employee_avatar,
+        b.branch_name AS branch_display_name,
+        b.branch_code AS branch_display_code,
+        b.location AS branch_location
+    FROM daily_reports dr
+    LEFT JOIN morning_reports mr ON dr.morning_report_id = mr.id
+    LEFT JOIN employees e ON dr.employee_id = e.id
+    LEFT JOIN branches b ON dr.branch_id = b.id
+    WHERE dr.id = ?
+");
+$stmt->execute([$id]);
+$report = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$report) {
+    $_SESSION['error_message'] = 'Daily report not found.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// GET RELATED TRANSACTIONS
+// FETCH PROVIDERS (LATEST per provider - avoid duplicates)
 // ============================================================
-$transactions = [];
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            drt.*,
-            e.full_name as employee_name
-        FROM daily_report_transactions drt
-        LEFT JOIN employees e ON drt.created_by = e.id
-        WHERE drt.daily_report_id = ?
-        AND drt.provider_id = ?
-        ORDER BY drt.id ASC
-    ");
-    $stmt->execute([$provider['daily_report_id'], $provider['provider_id']]);
-    $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("Error fetching transactions: " . $e->getMessage());
+$stmt = $db->prepare("
+    SELECT 
+        drp.*,
+        p.icon_class, p.color_code, p.provider_type
+    FROM daily_report_providers drp
+    INNER JOIN (
+        SELECT provider_id, MAX(id) as max_id
+        FROM daily_report_providers
+        WHERE daily_report_id = ?
+        GROUP BY provider_id
+    ) latest ON drp.id = latest.max_id
+    LEFT JOIN providers p ON drp.provider_id = p.id
+    ORDER BY p.display_order, drp.provider_name
+");
+$stmt->execute([$id]);
+$providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ============================================================
+// ✅ CALCULATE TOTALS - FIXED!
+// ============================================================
+$total_float = calculateTotalFloatFromReport($db, $id);
+$total_cash = floatval(str_replace(',', '', $report['current_cash'] ?? 0));
+$grand_total = $total_float + $total_cash;
+
+$employee_initial = strtoupper(substr($report['employee_name'] ?? 'N', 0, 1));
+$employee_avatar = $report['employee_avatar'] ?? '';
+
+$success_message = '';
+$error_message = '';
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
 }
-
-// Calculate net change
-$net_change = floatval($provider['total_deposits']) - floatval($provider['total_withdrawals']);
-
-// Provider display name (tumia provider_full_name kama ipo, vinginevyo drp.provider_name)
-$provider_display_name = $provider['provider_full_name'] ?? $provider['provider_name'];
+if (isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';

@@ -2,11 +2,14 @@
 // ================================================================
 // FILE: modules/daily_report/transactions.php
 // WAKALA FINANCIAL SYSTEM - DEPOSITS & WITHDRAWALS
-// ✅ FIXED: Soft background cards (badala ya full opacity)
-// ✅ FIXED: Dark mode inatumia html.dark-mode
-// ✅ NEW: Modern design na consistent styling
-// ✅ NEW: 2 big buttons (Deposit & Withdrawal) zenye actions
+// ✅ FIXED: current_capital = TOTAL FLOAT + CASH
+// ✅ FIXED: Float = SUM ya LATEST record per provider (no double-counting)
+// ✅ FIXED: UPDATE badala ya INSERT ili kuepuka duplicates
+// ✅ FIXED: Auto-fix daily_reports values kila transaction
 // ================================================================
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
@@ -68,7 +71,7 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// HELPER
+// HELPER: Get latest daily report
 // ============================================================
 function getLatestDailyReport($db, $branch_id) {
     $stmt = $db->prepare("
@@ -79,6 +82,86 @@ function getLatestDailyReport($db, $branch_id) {
     ");
     $stmt->execute([$branch_id]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ✅ Inaepuka double-counting ya duplicate records
+// ============================================================
+function calculateTotalFloat($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
+
+// ============================================================
+// ✅ HELPER: Sync daily_reports totals from providers
+// Inahesabu total_deposits, total_withdrawals, current_float, current_capital
+// ============================================================
+function syncDailyReportTotals($db, $daily_report_id, $current_cash) {
+    // Hesabu totals kutoka LATEST record per provider
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(latest.current_float), 0) as total_float,
+            COALESCE(SUM(latest.total_deposits), 0) as total_deposits,
+            COALESCE(SUM(latest.total_withdrawals), 0) as total_withdrawals
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float, 
+                   drp1.total_deposits, drp1.total_withdrawals
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_float = floatval($totals['total_float'] ?? 0);
+    $total_deposits = floatval($totals['total_deposits'] ?? 0);
+    $total_withdrawals = floatval($totals['total_withdrawals'] ?? 0);
+    $current_capital = $total_float + $current_cash;
+    
+    // Update daily_reports
+    $stmt = $db->prepare("
+        UPDATE daily_reports 
+        SET current_float = ?,
+            current_capital = ?,
+            total_deposits = ?,
+            total_withdrawals = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([
+        $total_float,
+        $current_capital,
+        $total_deposits,
+        $total_withdrawals,
+        $daily_report_id
+    ]);
+    
+    return [
+        'total_float' => $total_float,
+        'current_capital' => $current_capital,
+        'total_deposits' => $total_deposits,
+        'total_withdrawals' => $total_withdrawals
+    ];
 }
 
 // ============================================================
@@ -99,6 +182,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $description = trim($_POST['description'] ?? '');
         $transaction_date = $_POST['transaction_date'] ?? date('Y-m-d');
         
+        // ------------------------------------------------------------
+        // VALIDATION
+        // ------------------------------------------------------------
         if ($branch_id <= 0) throw new Exception('Please select a branch.');
         if ($provider_id <= 0) throw new Exception('Please select a provider.');
         if ($amount <= 0) throw new Exception('Amount must be greater than 0.');
@@ -106,6 +192,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Invalid transaction type.');
         }
         
+        // ------------------------------------------------------------
+        // VALIDATE PROVIDER
+        // ------------------------------------------------------------
         $stmt = $db->prepare("SELECT * FROM providers WHERE id = ? AND is_active = 1");
         $stmt->execute([$provider_id]);
         $provider = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -116,6 +205,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $branch_provider = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$branch_provider) throw new Exception('Provider is not assigned to this branch.');
         
+        // ------------------------------------------------------------
+        // GET LATEST DAILY REPORT
+        // ------------------------------------------------------------
         $latest_dr = getLatestDailyReport($db, $branch_id);
         if (!$latest_dr) {
             throw new Exception('Hakuna daily report yoyote. Tafadhali tengeneza daily report kwanza.');
@@ -124,10 +216,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $daily_report_id = $latest_dr['id'];
         $current_cash = floatval($latest_dr['current_cash'] ?? 0);
         
+        // ------------------------------------------------------------
+        // ✅ GET LATEST record ya provider (kuepuka duplicates)
+        // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT * FROM daily_report_providers 
             WHERE daily_report_id = ? AND provider_id = ?
-            ORDER BY id DESC LIMIT 1
+            ORDER BY id DESC 
+            LIMIT 1
         ");
         $stmt->execute([$daily_report_id, $provider_id]);
         $dr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -135,6 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($dr_provider) {
             $current_float = floatval($dr_provider['current_float'] ?? 0);
         } else {
+            // Fallback: chukua kutoka morning_report_providers
             $stmt = $db->prepare("
                 SELECT mrp.float_balance 
                 FROM morning_report_providers mrp
@@ -154,6 +251,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $current_float = floatval($mr_provider['float_balance'] ?? 0);
         }
         
+        // ------------------------------------------------------------
+        // CALCULATE NEW FLOAT & CASH
+        // Deposit:    Float += amount, Cash -= amount
+        // Withdrawal: Float -= amount, Cash += amount
+        // ------------------------------------------------------------
         if ($transaction_type === 'withdrawal') {
             $new_float = $current_float - $amount;
             $new_cash  = $current_cash + $amount;
@@ -162,6 +264,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $new_cash  = $current_cash - $amount;
         }
         
+        // ------------------------------------------------------------
+        // VALIDATE BALANCES
+        // ------------------------------------------------------------
         if ($new_float < 0) {
             throw new Exception('Float haitoshi. Current float: TSh ' . number_format($current_float, 0) . 
                                ' | Unajaribu kutoa: TSh ' . number_format($amount, 0));
@@ -171,11 +276,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                ' | Unajaribu kutoa: TSh ' . number_format($amount, 0));
         }
         
-        $new_capital = $new_float + $new_cash;
-        
+        // ------------------------------------------------------------
+        // GENERATE TRANSACTION NUMBER
+        // ------------------------------------------------------------
         $prefix = $transaction_type === 'deposit' ? 'DEP' : 'WTH';
         $transaction_number = $prefix . '-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
         
+        // ============================================================
+        // STEP 1: INSERT TRANSACTION
+        // ============================================================
         $stmt = $db->prepare("
             INSERT INTO transactions 
             (transaction_number, transaction_type, employee_id, branch_id, branch,
@@ -202,6 +311,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $transaction_id = $db->lastInsertId();
         
+        // ============================================================
+        // ✅ STEP 2: UPDATE daily_report_providers (FLOAT ya provider husika)
+        // ✅ Tumia UPDATE tu ili kuepuka duplicates
+        // ============================================================
         if ($dr_provider) {
             $stmt = $db->prepare("
                 UPDATE daily_report_providers 
@@ -218,6 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $dr_provider['id']
             ]);
         } else {
+            // INSERT mara moja tu
             $stmt = $db->prepare("
                 INSERT INTO daily_report_providers 
                 (daily_report_id, provider_id, provider_code, provider_name,
@@ -237,24 +351,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ]);
         }
         
+        // ============================================================
+        // ✅ STEP 3: UPDATE daily_reports.current_cash PEKEE
+        // ✅ Total float, capital, deposits, withdrawals zitarekebishwa na syncDailyReportTotals()
+        // ============================================================
         $stmt = $db->prepare("
             UPDATE daily_reports 
             SET current_cash = ?,
-                current_capital = ?,
-                total_deposits = total_deposits + ?,
-                total_withdrawals = total_withdrawals + ?,
                 updated_at = NOW()
             WHERE id = ?
         ");
-        $stmt->execute([
-            $new_cash,
-            $new_capital,
-            $transaction_type === 'deposit' ? $amount : 0,
-            $transaction_type === 'withdrawal' ? $amount : 0,
-            $daily_report_id
-        ]);
+        $stmt->execute([$new_cash, $daily_report_id]);
         
-        // Log kwenye daily_report_transactions
+        // ============================================================
+        // ✅ STEP 4: SYNC daily_reports totals kutoka providers
+        // ✅ Hii inahakikisha current_float, current_capital, 
+        //    total_deposits, total_withdrawals ni SAHIHI
+        // ============================================================
+        syncDailyReportTotals($db, $daily_report_id, $new_cash);
+        
+        // ============================================================
+        // STEP 5: LOG KWENYE daily_report_transactions
+        // ============================================================
         $stmt = $db->prepare("
             INSERT INTO daily_report_transactions 
             (daily_report_id, provider_id, provider_code, transaction_type,
@@ -275,6 +393,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $user_id
         ]);
         
+        // ------------------------------------------------------------
+        // LOG ACTIVITY
+        // ------------------------------------------------------------
         logActivity(
             $user_id, 
             'Add ' . ucfirst($transaction_type), 
@@ -381,7 +502,9 @@ try {
     $withdrawal_count = intval($wth_data['cnt'] ?? 0);
     $withdrawal_amount = floatval($wth_data['total'] ?? 0);
     
-    // Current float & cash
+    // ============================================================
+    // ✅ CURRENT FLOAT, CASH & CAPITAL (Recalculated)
+    // ============================================================
     $current_float = 0;
     $current_cash = 0;
     $current_capital = 0;
@@ -392,16 +515,25 @@ try {
         if ($latest_dr) {
             $latest_dr_id = $latest_dr['id'];
             $current_cash = floatval($latest_dr['current_cash'] ?? 0);
-            $current_capital = floatval($latest_dr['current_capital'] ?? 0);
             
-            $stmt = $db->prepare("
-                SELECT COALESCE(SUM(current_float), 0) as total_float
-                FROM daily_report_providers 
-                WHERE daily_report_id = ?
-            ");
-            $stmt->execute([$latest_dr_id]);
-            $f = $stmt->fetch(PDO::FETCH_ASSOC);
-            $current_float = floatval($f['total_float'] ?? 0);
+            // ✅ Hesabu float kutoka LATEST record per provider
+            $current_float = calculateTotalFloat($db, $latest_dr_id);
+            
+            // ✅ Recalculate capital
+            $current_capital = $current_float + $current_cash;
+            
+            // ✅ Auto-fix daily_reports kama values hazipo sawa
+            $db_float = floatval($latest_dr['current_float'] ?? 0);
+            $db_capital = floatval($latest_dr['current_capital'] ?? 0);
+            
+            if (abs($current_float - $db_float) > 0.01 || abs($current_capital - $db_capital) > 0.01) {
+                $stmt = $db->prepare("
+                    UPDATE daily_reports 
+                    SET current_float = ?, current_capital = ?
+                    WHERE id = ?
+                ");
+                $stmt->execute([$current_float, $current_capital, $latest_dr_id]);
+            }
         }
     }
     
@@ -475,9 +607,7 @@ include_once '../../includes/admin_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ============================================================
-        BRANCH INDICATOR
-        ============================================================ -->
+        <!-- BRANCH INDICATOR -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
@@ -499,11 +629,8 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        CAPITAL SUMMARY - SOFT BACKGROUND
-        ============================================================ -->
+        <!-- CAPITAL SUMMARY -->
         <div class="stats-grid-soft">
-            <!-- Current Float -->
             <div class="stat-card-soft stat-card-soft-float">
                 <div class="stat-icon-soft">
                     <i class="fas fa-coins"></i>
@@ -519,7 +646,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="stat-decoration-soft"></div>
             </div>
             
-            <!-- Current Cash -->
             <div class="stat-card-soft stat-card-soft-cash">
                 <div class="stat-icon-soft">
                     <i class="fas fa-money-bill-wave"></i>
@@ -535,7 +661,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="stat-decoration-soft"></div>
             </div>
             
-            <!-- Total Capital -->
             <div class="stat-card-soft stat-card-soft-capital">
                 <div class="stat-icon-soft">
                     <i class="fas fa-building"></i>
@@ -552,9 +677,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        PAGE HEADER WITH 2 BIG BUTTONS
-        ============================================================ -->
+        <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
                 <h2>
@@ -585,9 +708,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        MESSAGES
-        ============================================================ -->
+        <!-- MESSAGES -->
         <?php if (!empty($success_message_session)): ?>
             <div class="alert alert-success">
                 <i class="fas fa-check-circle"></i>
@@ -604,11 +725,8 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        SUMMARY CARDS - SOFT BACKGROUND
-        ============================================================ -->
+        <!-- SUMMARY CARDS -->
         <div class="summary-cards-soft">
-            <!-- Deposits Card -->
             <div class="summary-card-soft summary-card-soft-deposit">
                 <div class="summary-icon-soft">
                     <i class="fas fa-arrow-down"></i>
@@ -624,7 +742,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="summary-decoration-soft"></div>
             </div>
             
-            <!-- Withdrawals Card -->
             <div class="summary-card-soft summary-card-soft-withdraw">
                 <div class="summary-icon-soft">
                     <i class="fas fa-arrow-up"></i>
@@ -641,9 +758,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        ADD TRANSACTION FORM
-        ============================================================ -->
+        <!-- ADD TRANSACTION FORM -->
         <div class="form-container">
             <div class="form-header" style="background: linear-gradient(135deg, <?php echo $theme_color; ?> 0%, <?php echo $theme_color; ?>dd 100%);">
                 <div class="form-header-left">
@@ -695,7 +810,6 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- LIVE PROVIDER BALANCE PREVIEW -->
                 <div class="provider-balance-preview" id="providerPreview" style="display:none;">
                     <div class="preview-header">
                         <i class="fas fa-eye"></i> Provider Balance Preview
@@ -770,9 +884,7 @@ include_once '../../includes/admin_topbar.php';
             </form>
         </div>
 
-        <!-- ============================================================
-        FILTERS
-        ============================================================ -->
+        <!-- FILTERS -->
         <div class="filters-bar">
             <form method="GET" action="" class="filters-form">
                 <input type="hidden" name="type" value="<?php echo $type; ?>">
@@ -806,9 +918,7 @@ include_once '../../includes/admin_topbar.php';
             </form>
         </div>
 
-        <!-- ============================================================
-        TRANSACTIONS TABLE
-        ============================================================ -->
+        <!-- TRANSACTIONS TABLE -->
         <div class="table-container">
             <div class="table-header">
                 <h3>
@@ -966,9 +1076,7 @@ html.dark-mode {
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* ============================================================
-   BRANCH INDICATOR
-   ============================================================ */
+/* BRANCH INDICATOR */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 12px;
@@ -1012,9 +1120,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     font-weight: 500;
 }
 
-/* ============================================================
-   STATS GRID - SOFT BACKGROUND
-   ============================================================ */
+/* STATS GRID - SOFT BACKGROUND */
 .stats-grid-soft {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1040,7 +1146,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
 }
 
-/* SOFT BLUE */
 .stat-card-soft-float {
     background: rgba(37, 99, 235, 0.08);
     border-color: rgba(37, 99, 235, 0.2);
@@ -1052,7 +1157,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .stat-card-soft-float .stat-value-soft { color: #1D4ED8; }
 
-/* SOFT GREEN */
 .stat-card-soft-cash {
     background: rgba(5, 150, 105, 0.08);
     border-color: rgba(5, 150, 105, 0.2);
@@ -1064,7 +1168,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .stat-card-soft-cash .stat-value-soft { color: #047857; }
 
-/* SOFT PURPLE */
 .stat-card-soft-capital {
     background: rgba(124, 58, 237, 0.08);
     border-color: rgba(124, 58, 237, 0.2);
@@ -1076,7 +1179,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .stat-card-soft-capital .stat-value-soft { color: #6D28D9; }
 
-/* Dark mode */
 html.dark-mode .stat-card-soft-float { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
 html.dark-mode .stat-card-soft-cash { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
 html.dark-mode .stat-card-soft-capital { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
@@ -1144,9 +1246,7 @@ html.dark-mode .stat-card-soft-capital .stat-value-soft { color: #C4B5FD; }
     pointer-events: none;
 }
 
-/* ============================================================
-   PAGE HEADER + BIG BUTTONS
-   ============================================================ */
+/* PAGE HEADER + BIG BUTTONS */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -1239,9 +1339,7 @@ html.dark-mode .stat-card-soft-capital .stat-value-soft { color: #C4B5FD; }
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
 }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
+/* ALERTS */
 .alert {
     padding: 14px 18px;
     border-radius: 10px;
@@ -1270,9 +1368,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ============================================================
-   SUMMARY CARDS - SOFT BACKGROUND
-   ============================================================ */
+/* SUMMARY CARDS */
 .summary-cards-soft {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -1299,7 +1395,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
 }
 
-/* SOFT GREEN - Deposits */
 .summary-card-soft-deposit {
     background: rgba(5, 150, 105, 0.08);
     border-color: rgba(5, 150, 105, 0.2);
@@ -1311,7 +1406,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 }
 .summary-card-soft-deposit .summary-value-soft { color: #047857; }
 
-/* SOFT RED - Withdrawals */
 .summary-card-soft-withdraw {
     background: rgba(220, 38, 38, 0.08);
     border-color: rgba(220, 38, 38, 0.2);
@@ -1385,9 +1479,7 @@ html.dark-mode .summary-card-soft-withdraw .summary-value-soft { color: #FCA5A5;
     pointer-events: none;
 }
 
-/* ============================================================
-   FORM CONTAINER
-   ============================================================ */
+/* FORM CONTAINER */
 .form-container {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1546,9 +1638,7 @@ textarea.form-control {
     justify-content: flex-end;
 }
 
-/* ============================================================
-   PROVIDER BALANCE PREVIEW
-   ============================================================ */
+/* PROVIDER BALANCE PREVIEW */
 .provider-balance-preview {
     background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
     border: 2px solid #93C5FD;
@@ -1640,9 +1730,7 @@ html.dark-mode .preview-new-float { color: #34D399; }
 .preview-change { color: #7C3AED; }
 html.dark-mode .preview-change { color: #A78BFA; }
 
-/* ============================================================
-   BUTTONS
-   ============================================================ */
+/* BUTTONS */
 .btn {
     padding: 12px 22px;
     border: none;
@@ -1713,9 +1801,7 @@ html.dark-mode .preview-change { color: #A78BFA; }
     color: var(--text-primary);
 }
 
-/* ============================================================
-   FILTERS
-   ============================================================ */
+/* FILTERS */
 .filters-bar {
     background: var(--bg-card);
     padding: 16px 20px;
@@ -1759,9 +1845,7 @@ html.dark-mode .preview-change { color: #A78BFA; }
     align-items: flex-end;
 }
 
-/* ============================================================
-   TABLE
-   ============================================================ */
+/* TABLE */
 .table-container {
     background: var(--bg-card);
     border-radius: 14px;
@@ -2033,9 +2117,7 @@ html.dark-mode .amount-badge.withdrawal { background: #7F1D1D; color: #FCA5A5; b
     margin: 0;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+/* RESPONSIVE */
 @media (max-width: 1024px) {
     .stats-grid-soft { grid-template-columns: repeat(3, 1fr); }
     .preview-grid { grid-template-columns: repeat(2, 1fr); }

@@ -2,10 +2,7 @@
 // ================================================================
 // FILE: modules/daily_report/view_provider_transactions.php
 // WAKALA FINANCIAL SYSTEM - VIEW PROVIDER TRANSACTIONS
-// ✅ FIXED: Stats cards zenye soft background (kama files nyingine)
-// ✅ FIXED: Dark mode inatumia html.dark-mode
-// ✅ FIXED: Query optimization na indexes
-// ✅ NEW: Modern design na consistent styling
+// ✅ FIXED: current_float inachukuliwa kutoka LATEST record
 // ================================================================
 
 require_once '../../config/config.php';
@@ -57,52 +54,34 @@ try {
         exit();
     }
 
-    // ============================================================
-    // GET BRANCH INFO
-    // ============================================================
     $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
     $stmt->execute([$branch_id]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-
     $branch_name = $branch['branch_name'] ?? 'Unknown';
     $branch_code = $branch['branch_code'] ?? '';
 
-    // ============================================================
-    // GET BRANCH PROVIDER CODE
-    // ============================================================
     $stmt = $db->prepare("
-        SELECT provider_code 
-        FROM branch_providers 
-        WHERE branch_id = ? AND provider_id = ? 
-        LIMIT 1
+        SELECT provider_code FROM branch_providers 
+        WHERE branch_id = ? AND provider_id = ? LIMIT 1
     ");
     $stmt->execute([$branch_id, $provider_id]);
     $bp = $stmt->fetch(PDO::FETCH_ASSOC);
     $provider_branch_code = $bp['provider_code'] ?? $provider['provider_code'];
 
-    // ============================================================
-    // GET ALL TRANSACTIONS FOR THIS PROVIDER
-    // ============================================================
+    // GET ALL TRANSACTIONS
     $stmt = $db->prepare("
-        SELECT 
-            t.*,
-            e.full_name as employee_name,
-            e.profile_pic as employee_pic,
-            b.branch_name as txn_branch_name,
-            b.branch_code as txn_branch_code
+        SELECT t.*, e.full_name as employee_name, e.profile_pic as employee_pic,
+               b.branch_name as txn_branch_name, b.branch_code as txn_branch_code
         FROM transactions t
         LEFT JOIN employees e ON t.employee_id = e.id
         LEFT JOIN branches b ON t.branch_id = b.id
-        WHERE t.provider_id = ?
-        AND t.branch_id = ?
+        WHERE t.provider_id = ? AND t.branch_id = ?
         ORDER BY t.created_at DESC, t.id DESC
     ");
     $stmt->execute([$provider_id, $branch_id]);
     $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ============================================================
     // CALCULATE SUMMARY
-    // ============================================================
     $total_deposits = 0;
     $total_withdrawals = 0;
     $total_deposit_count = 0;
@@ -121,14 +100,8 @@ try {
             $total_withdrawal_count++;
         }
         
-        // Build employee summary
         if (!isset($employee_summary[$emp_name])) {
-            $employee_summary[$emp_name] = [
-                'name' => $emp_name,
-                'deposits' => 0,
-                'withdrawals' => 0,
-                'count' => 0
-            ];
+            $employee_summary[$emp_name] = ['name' => $emp_name, 'deposits' => 0, 'withdrawals' => 0, 'count' => 0];
         }
         if ($t['transaction_type'] === 'deposit') {
             $employee_summary[$emp_name]['deposits'] += $amount;
@@ -139,20 +112,15 @@ try {
     }
 
     // ============================================================
-    // GET CURRENT FLOAT FOR THIS PROVIDER
+    // ✅ GET CURRENT FLOAT - LATEST record per provider
     // ============================================================
     $stmt = $db->prepare("
-        SELECT 
-            drp.current_float,
-            drp.current_cash,
-            drp.morning_float,
-            drp.total_deposits,
-            drp.total_withdrawals,
-            dr.report_date
+        SELECT drp.current_float, drp.current_cash, drp.morning_float,
+               drp.total_deposits, drp.total_withdrawals, dr.report_date
         FROM daily_report_providers drp
         INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
         WHERE drp.provider_id = ? AND dr.branch_id = ?
-        ORDER BY dr.report_date DESC, dr.id DESC
+        ORDER BY dr.report_date DESC, dr.id DESC, drp.id DESC
         LIMIT 1
     ");
     $stmt->execute([$provider_id, $branch_id]);

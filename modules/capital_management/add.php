@@ -7,6 +7,8 @@
 // ✅ 3 providers per row
 // ✅ FIXED: Cash Out INAKATAA kama hakuna daily_report
 // ✅ FIXED: Validation ya current cash/float
+// ✅ FIXED: calculateTotalFloat from LATEST record per provider
+// ✅ ALL TEXT IN ENGLISH
 // ================================================================
 
 error_reporting(E_ALL);
@@ -34,6 +36,41 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
+// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// Inaepuka double-counting
+// ============================================================
+function calculateTotalFloatForBranch($db, $branch_id) {
+    // Get latest daily report
+    $stmt = $db->prepare("
+        SELECT id FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$branch_id]);
+    $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$dr) return 0;
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$dr['id']]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
+
+// ============================================================
 // ✅ HELPER: Pata current capital kwa branch
 // ============================================================
 function getCurrentCapitalForBranch($db, $branch_id) {
@@ -41,7 +78,7 @@ function getCurrentCapitalForBranch($db, $branch_id) {
     
     // STEP 1: Jaribu daily_reports kwanza
     $stmt = $db->prepare("
-        SELECT id, current_cash, current_capital, current_float
+        SELECT id, current_cash, current_capital
         FROM daily_reports 
         WHERE branch_id = ? 
         ORDER BY report_date DESC, id DESC 
@@ -52,8 +89,12 @@ function getCurrentCapitalForBranch($db, $branch_id) {
     
     if ($dr) {
         $cash = floatval($dr['current_cash'] ?? 0);
-        $capital = floatval($dr['current_capital'] ?? 0);
-        $float = floatval($dr['current_float'] ?? 0);
+        
+        // ✅ Hesabu float kutoka LATEST record per provider
+        $float = calculateTotalFloatForBranch($db, $branch_id);
+        
+        // ✅ Capital = Float + Cash
+        $capital = $float + $cash;
         
         if ($cash > 0 || $float > 0 || $capital > 0) {
             $result['cash'] = $cash;
@@ -109,22 +150,38 @@ function getCurrentCapitalForBranch($db, $branch_id) {
 }
 
 /**
- * Pata current float ya kila provider kwa branch
+ * ✅ Get current float ya kila provider kwa branch
+ * Inatumia LATEST record per provider
  */
 function getProviderFloats($db, $branch_id) {
     $floats = [];
     
-    // STEP 1: Jaribu daily_report_providers
+    // Get latest daily report
     $stmt = $db->prepare("
-        SELECT drp.provider_id, drp.current_float
-        FROM daily_report_providers drp
-        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-        WHERE dr.branch_id = ?
-          AND dr.id = (SELECT MAX(id) FROM daily_reports WHERE branch_id = ?)
+        SELECT id FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
     ");
-    $stmt->execute([$branch_id, $branch_id]);
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $floats[intval($row['provider_id'])] = floatval($row['current_float']);
+    $stmt->execute([$branch_id]);
+    $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($dr) {
+        // ✅ Chukua LATEST record per provider
+        $stmt = $db->prepare("
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ");
+        $stmt->execute([$dr['id']]);
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $floats[intval($row['provider_id'])] = floatval($row['current_float']);
+        }
     }
     
     if (!empty($floats)) {
@@ -259,16 +316,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if ($has_cash && $cash_amount > 0) {
                 if (!$has_dr && $current['cash'] <= 0) {
                     throw new Exception(
-                        'Huwezi kufanya Cash Out bila Daily Report. ' .
-                        'Tafadhali tengeneza Opening Capital kwanza.'
+                        'Cannot perform Cash Out without a Daily Report. ' .
+                        'Please create Opening Capital first.'
                     );
                 }
                 
                 if ($cash_amount > $current['cash']) {
                     throw new Exception(
-                        'Cash haitoshi. ' .
-                        'Iliyopo: ' . formatCurrency($current['cash']) . ', ' .
-                        'Unaomba: ' . formatCurrency($cash_amount) . '.'
+                        'Insufficient cash. ' .
+                        'Available: ' . formatCurrency($current['cash']) . ', ' .
+                        'Requested: ' . formatCurrency($cash_amount) . '.'
                     );
                 }
             }
@@ -290,16 +347,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     
                     if (!$has_dr && $available <= 0) {
                         throw new Exception(
-                            'Huwezi kufanya Cash Out kwa ' . $pname . ' bila Daily Report. ' .
-                            'Tafadhali tengeneza Opening Capital kwanza.'
+                            'Cannot perform Cash Out for ' . $pname . ' without a Daily Report. ' .
+                            'Please create Opening Capital first.'
                         );
                     }
                     
                     if ($amt > $available) {
                         throw new Exception(
-                            'Float haitoshi kwa ' . $pname . '. ' .
-                            'Iliyopo: ' . formatCurrency($available) . ', ' .
-                            'Unaomba: ' . formatCurrency($amt) . '.'
+                            'Insufficient float for ' . $pname . '. ' .
+                            'Available: ' . formatCurrency($available) . ', ' .
+                            'Requested: ' . formatCurrency($amt) . '.'
                         );
                     }
                 }
@@ -312,16 +369,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             if ($total_out > $current['capital']) {
                 throw new Exception(
-                    'Jumla inazidi Capital iliyopo. ' .
-                    'Iliyopo: ' . formatCurrency($current['capital']) . ', ' .
-                    'Unaomba: ' . formatCurrency($total_out) . '.'
+                    'Total exceeds available Capital. ' .
+                    'Available: ' . formatCurrency($current['capital']) . ', ' .
+                    'Requested: ' . formatCurrency($total_out) . '.'
                 );
             }
         }
         
         $db->beginTransaction();
         
-        // Get latest daily report (kama ipo)
+        // Get latest daily report
         $stmt = $db->prepare("
             SELECT id, current_cash, current_capital 
             FROM daily_reports 
@@ -372,22 +429,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             if ($dr_id) {
                 $old_cash = floatval($latest_dr['current_cash']);
-                $old_capital = floatval($latest_dr['current_capital']);
                 
                 if ($is_out) {
                     $new_cash = max(0, $old_cash - $cash_amount);
-                    $new_capital = max(0, $old_capital - $cash_amount);
                 } else {
                     $new_cash = $old_cash + $cash_amount;
-                    $new_capital = $old_capital + $cash_amount;
                 }
+                
+                // ✅ Recalculate capital = total float + new cash
+                $total_float = calculateTotalFloatForBranch($db, $branch_id);
+                $new_capital = $total_float + $new_cash;
                 
                 $stmt = $db->prepare("
                     UPDATE daily_reports 
-                    SET current_cash = ?, current_capital = ?, updated_at = NOW() 
+                    SET current_cash = ?, current_float = ?, current_capital = ?, 
+                        updated_at = NOW() 
                     WHERE id = ?
                 ");
-                $stmt->execute([$new_cash, $new_capital, $dr_id]);
+                $stmt->execute([$new_cash, $total_float, $new_capital, $dr_id]);
                 
                 $latest_dr['current_cash'] = $new_cash;
                 $latest_dr['current_capital'] = $new_capital;
@@ -421,6 +480,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $transactions_created[] = $capital_number;
                 
                 if ($dr_id) {
+                    // ✅ Chukua LATEST record ya provider
                     $stmt = $db->prepare("
                         SELECT id, current_float 
                         FROM daily_report_providers 
@@ -441,6 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ");
                         $stmt->execute([$new_float, $drp['id']]);
                     } else {
+                        // Insert new record
                         $stmt = $db->prepare("
                             SELECT p.provider_name, bp.provider_code 
                             FROM providers p
@@ -467,21 +528,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         }
                     }
                     
-                    $stmt = $db->prepare("SELECT current_capital, current_float FROM daily_reports WHERE id = ?");
-                    $stmt->execute([$dr_id]);
-                    $cap_row = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $current_cap = floatval($cap_row['current_capital']);
-                    $current_float_dr = floatval($cap_row['current_float'] ?? 0);
-                    
-                    $new_capital = $is_out ? max(0, $current_cap - $amount) : $current_cap + $amount;
-                    $new_float_dr = $is_out ? max(0, $current_float_dr - $amount) : $current_float_dr + $amount;
+                    // ✅ Recalculate daily_reports: current_float & current_capital
+                    $current_cash = floatval($latest_dr['current_cash']);
+                    $new_total_float = calculateTotalFloatForBranch($db, $branch_id);
+                    $new_capital = $new_total_float + $current_cash;
                     
                     $stmt = $db->prepare("
                         UPDATE daily_reports 
-                        SET current_capital = ?, current_float = ?, updated_at = NOW() 
+                        SET current_float = ?, current_capital = ?, updated_at = NOW() 
                         WHERE id = ?
                     ");
-                    $stmt->execute([$new_capital, $new_float_dr, $dr_id]);
+                    $stmt->execute([$new_total_float, $new_capital, $dr_id]);
                     
                     $latest_dr['current_capital'] = $new_capital;
                 }
@@ -607,7 +664,7 @@ include_once '../../includes/admin_topbar.php';
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-plus-circle"></i> Add Capital Transaction</h2>
-                <p class="text-muted">Jaza Cash na Providers kwa pamoja</p>
+                <p class="text-muted">Fill in Cash and Provider amounts together</p>
             </div>
         </div>
 
@@ -639,22 +696,22 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ✅ NO DAILY REPORT WARNING -->
+        <!-- ✅ NO DAILY REPORT WARNING - ENGLISH -->
         <?php if ($selected_branch > 0 && !$has_daily_report && $current_capital <= 0): ?>
             <div class="no-daily-report-warning">
                 <i class="fas fa-info-circle"></i>
                 <div>
-                    <strong>Hakuna Opening Capital kwa branch hii</strong>
+                    <strong>No Opening Capital for this branch</strong>
                     <p>
-                        Unaweza kuongeza <strong>Opening Capital</strong>, <strong>Additional Capital</strong>, 
-                        au <strong>Profit Allocation</strong>. 
-                        Lakini <strong>Cash Out haitaruhusiwa</strong> mpaka uwe na capital ya kutosha.
+                        You can add <strong>Opening Capital</strong>, <strong>Additional Capital</strong>, 
+                        or <strong>Profit Allocation</strong>. 
+                        However, <strong>Cash Out will not be allowed</strong> until you have sufficient capital.
                     </p>
                 </div>
             </div>
         <?php endif; ?>
 
-        <!-- ✅ SUMMARY CARDS - ZENYE DESIGN NZURI -->
+        <!-- SUMMARY CARDS -->
         <?php if ($selected_branch > 0): ?>
         <div class="summary-cards-row">
             <div class="summary-mini-card mini-cash">
@@ -732,7 +789,7 @@ include_once '../../includes/admin_topbar.php';
                 
                 <?php if ($selected_branch > 0): ?>
                 
-                <!-- ✅ TRANSACTION TYPE - CARDS NZURI -->
+                <!-- TRANSACTION TYPE -->
                 <div class="form-section">
                     <div class="section-header">
                         <h3><i class="fas fa-tag"></i> Transaction Type</h3>
@@ -774,7 +831,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- ✅ CASH SECTION - DESIGN NZURI -->
+                <!-- CASH SECTION -->
                 <div class="form-section cash-section">
                     <div class="section-header">
                         <h3><i class="fas fa-money-bill-wave"></i> Cash Amount</h3>
@@ -809,13 +866,13 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                             <div class="cic-hint" id="cashHint">
                                 <i class="fas fa-info-circle"></i>
-                                Acha wazi kama hutaki kubadilisha cash
+                                Leave empty if you don't want to change cash
                             </div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- ✅ PROVIDERS SECTION - GREEN THEME CARDS -->
+                <!-- PROVIDERS SECTION -->
                 <div class="form-section">
                     <div class="section-header">
                         <h3><i class="fas fa-university"></i> Provider Floats</h3>
@@ -908,7 +965,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
                 
-                <!-- ✅ PREVIEW - DESIGN NZURI -->
+                <!-- PREVIEW -->
                 <div class="form-section preview-section">
                     <div class="section-header">
                         <h3><i class="fas fa-calculator"></i> Preview</h3>
@@ -938,7 +995,6 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     
-                    <!-- ✅ Warning Preview -->
                     <div class="preview-warning" id="previewWarning" style="display:none;">
                         <i class="fas fa-exclamation-triangle"></i>
                         <span id="previewWarningText"></span>
@@ -1145,9 +1201,7 @@ html.dark-mode .no-daily-report-warning {
 .no-daily-report-warning strong { font-weight: 800; font-size: 14px; display: block; margin-bottom: 4px; }
 .no-daily-report-warning p { font-size: 13px; margin: 0; line-height: 1.5; }
 
-/* ============================================================
-   ✅ SUMMARY MINI CARDS - BEAUTIFUL DESIGN
-   ============================================================ */
+/* SUMMARY MINI CARDS */
 .summary-cards-row {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 16px; margin-bottom: 20px;
@@ -1164,7 +1218,6 @@ html.dark-mode .no-daily-report-warning {
 html.dark-mode .summary-mini-card {
     background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
     border-color: #10B981;
-    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
 }
 .summary-mini-card::before {
     content: ''; position: absolute;
@@ -1179,11 +1232,6 @@ html.dark-mode .summary-mini-card {
     box-shadow: 0 12px 32px rgba(5, 150, 105, 0.3);
     border-color: #059669;
 }
-html.dark-mode .summary-mini-card:hover {
-    border-color: #34D399;
-    box-shadow: 0 12px 32px rgba(16, 185, 129, 0.4);
-}
-
 .smc-icon {
     width: 56px; height: 56px; border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
@@ -1199,7 +1247,6 @@ html.dark-mode .summary-mini-card:hover {
     font-size: 11px; font-weight: 800;
     color: #047857;
     text-transform: uppercase; letter-spacing: 1.2px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 html.dark-mode .smc-label { color: #6EE7B7; }
 .smc-value {
@@ -1207,7 +1254,6 @@ html.dark-mode .smc-label { color: #6EE7B7; }
     color: #065F46;
     font-family: 'Inter', 'Courier New', monospace;
     word-break: break-word; line-height: 1.15;
-    letter-spacing: -0.5px;
 }
 html.dark-mode .smc-value { color: #D1FAE5; }
 
@@ -1331,9 +1377,7 @@ html.dark-mode .bo-code { background: #065F46; color: #34D399; }
 .bo-check { opacity: 0; color: #059669; font-size: 20px; flex-shrink: 0; }
 .branch-option input[type="radio"]:checked + .bo-content .bo-check { opacity: 1; }
 
-/* ============================================================
-   ✅ TYPE OPTIONS GRID - BEAUTIFUL CARDS
-   ============================================================ */
+/* TYPE OPTIONS GRID */
 .type-options-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1413,9 +1457,7 @@ html.dark-mode .type-option-disabled .toc-content {
     filter: grayscale(0.5);
 }
 
-/* ============================================================
-   ✅ CASH SECTION - BEAUTIFUL CARD
-   ============================================================ */
+/* CASH SECTION */
 .cash-section { 
     background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); 
 }
@@ -1512,16 +1554,12 @@ html.dark-mode .cash-section {
 }
 .cic-hint i { color: #FCD34D; }
 
-/* ============================================================
-   ✅ PROVIDERS AMOUNT GRID - GREEN THEME CARDS
-   ============================================================ */
+/* PROVIDERS AMOUNT GRID */
 .providers-amount-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 14px;
 }
-
-/* ✅ PROVIDER AMOUNT CARD - GREEN THEME (kama view.php) */
 .provider-amount-card {
     background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
     border: 2px solid #6EE7B7;
@@ -1535,10 +1573,8 @@ html.dark-mode .cash-section {
 .provider-amount-card::before {
     content: '';
     position: absolute;
-    top: -40px;
-    right: -40px;
-    width: 120px;
-    height: 120px;
+    top: -40px; right: -40px;
+    width: 120px; height: 120px;
     background: rgba(16, 185, 129, 0.15);
     border-radius: 50%;
     pointer-events: none;
@@ -1547,29 +1583,19 @@ html.dark-mode .cash-section {
 html.dark-mode .provider-amount-card {
     background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
     border-color: #10B981;
-    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
-}
-html.dark-mode .provider-amount-card::before {
-    background: rgba(16, 185, 129, 0.2);
 }
 .provider-amount-card:hover {
     border-color: #059669;
     transform: translateY(-4px);
     box-shadow: 0 12px 28px rgba(5, 150, 105, 0.25);
 }
-html.dark-mode .provider-amount-card:hover {
-    border-color: #34D399;
-    box-shadow: 0 12px 28px rgba(16, 185, 129, 0.35);
-}
-
 .pac-header {
     padding: 12px 14px;
     background: rgba(255, 255, 255, 0.6);
     backdrop-filter: blur(10px);
     border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
     display: flex; align-items: center; gap: 10px;
-    position: relative;
-    z-index: 1;
+    position: relative; z-index: 1;
 }
 html.dark-mode .pac-header {
     background: rgba(15, 23, 42, 0.3);
@@ -1588,7 +1614,6 @@ html.dark-mode .pac-header {
     font-size: 13px; font-weight: 800;
     color: #065F46;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    letter-spacing: -0.2px;
 }
 html.dark-mode .pac-name { color: #D1FAE5; }
 .pac-code {
@@ -1606,26 +1631,21 @@ html.dark-mode .pac-code {
     color: #6EE7B7;
     border-color: rgba(16, 185, 129, 0.4);
 }
-
-/* PAC CURRENT */
 .pac-current {
     padding: 10px 14px;
     background: rgba(255, 255, 255, 0.4);
     display: flex; justify-content: space-between; align-items: center;
     font-size: 11px;
     border-bottom: 1.5px solid rgba(5, 150, 105, 0.15);
-    position: relative;
-    z-index: 1;
+    position: relative; z-index: 1;
 }
 html.dark-mode .pac-current {
     background: rgba(15, 23, 42, 0.2);
     border-bottom-color: rgba(16, 185, 129, 0.2);
 }
 .pac-current-label { 
-    color: #047857; 
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    color: #047857; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px;
     font-size: 10px;
 }
 html.dark-mode .pac-current-label { color: #6EE7B7; }
@@ -1636,14 +1656,11 @@ html.dark-mode .pac-current-label { color: #6EE7B7; }
     font-size: 13px;
 }
 html.dark-mode .pac-current-value { color: #34D399; }
-
-/* PAC INPUT */
 .pac-input-wrapper {
     display: flex; align-items: center;
     padding: 10px 14px;
     background: rgba(255, 255, 255, 0.85);
-    position: relative;
-    z-index: 1;
+    position: relative; z-index: 1;
 }
 html.dark-mode .pac-input-wrapper {
     background: rgba(15, 23, 42, 0.4);
@@ -1671,11 +1688,9 @@ html.dark-mode .pac-currency {
     text-align: right;
     outline: none;
     min-width: 0;
-    letter-spacing: 0.5px;
 }
 html.dark-mode .pac-input { color: #A7F3D0; }
 .pac-input::placeholder { color: rgba(5, 150, 105, 0.4); font-weight: 700; }
-html.dark-mode .pac-input::placeholder { color: rgba(167, 243, 208, 0.3); }
 
 .empty-providers {
     text-align: center; padding: 30px 20px;
@@ -1735,9 +1750,7 @@ html.dark-mode .pac-input::placeholder { color: rgba(167, 243, 208, 0.3); }
     line-height: 1.6;
 }
 
-/* ============================================================
-   ✅ PREVIEW SECTION - BEAUTIFUL
-   ============================================================ */
+/* PREVIEW SECTION */
 .preview-section { 
     background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); 
 }
@@ -1795,7 +1808,6 @@ html.dark-mode .pi-value { color: #D1FAE5; }
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-/* PREVIEW WARNING */
 .preview-warning {
     margin-top: 16px;
     padding: 14px 18px;
@@ -1989,18 +2001,18 @@ function updatePreview() {
         var warnings = [];
         
         if (cashAmount > currentCash) {
-            warnings.push('Cash: Unaomba TSh ' + cashAmount.toLocaleString() + 
-                          ', iliyopo TSh ' + currentCash.toLocaleString());
+            warnings.push('Cash: Requested TSh ' + cashAmount.toLocaleString() + 
+                          ', available TSh ' + currentCash.toLocaleString());
         }
         
         if (totalAmount > currentCapital) {
-            warnings.push('Jumla: Unaomba TSh ' + totalAmount.toLocaleString() + 
-                          ', Capital iliyopo TSh ' + currentCapital.toLocaleString());
+            warnings.push('Total: Requested TSh ' + totalAmount.toLocaleString() + 
+                          ', available Capital TSh ' + currentCapital.toLocaleString());
         }
         
         if (warnings.length > 0) {
             warningEl.style.display = 'flex';
-            warningText.innerHTML = '<strong>⚠️ Haiwezi kuendelea:</strong> ' + warnings.join(' • ');
+            warningText.innerHTML = '<strong>⚠️ Cannot proceed:</strong> ' + warnings.join(' • ');
         } else {
             warningEl.style.display = 'none';
         }
@@ -2063,21 +2075,23 @@ function validateForm() {
     
     if (isOut) {
         if (cashAmount > 0 && currentCash <= 0) {
-            alert('❌ Huwezi kufanya Cash Out.\n\nHakuna Daily Report au Cash iliyopo kwa branch hii.\nTafadhali tengeneza Opening Capital kwanza.');
+            alert('❌ Cannot perform Cash Out.\n\n' +
+                  'No Daily Report or Cash available for this branch.\n' +
+                  'Please create Opening Capital first.');
             return false;
         }
         
         if (cashAmount > currentCash) {
-            alert('❌ Cash haitoshi.\n\n' +
-                  'Iliyopo: TSh ' + currentCash.toLocaleString() + '\n' +
-                  'Unaomba: TSh ' + cashAmount.toLocaleString());
+            alert('❌ Insufficient cash.\n\n' +
+                  'Available: TSh ' + currentCash.toLocaleString() + '\n' +
+                  'Requested: TSh ' + cashAmount.toLocaleString());
             return false;
         }
         
         if (totalAmount > currentCapital) {
-            alert('❌ Jumla inazidi Capital iliyopo.\n\n' +
-                  'Iliyopo: TSh ' + currentCapital.toLocaleString() + '\n' +
-                  'Unaomba: TSh ' + totalAmount.toLocaleString());
+            alert('❌ Total exceeds available Capital.\n\n' +
+                  'Available: TSh ' + currentCapital.toLocaleString() + '\n' +
+                  'Requested: TSh ' + totalAmount.toLocaleString());
             return false;
         }
     }
