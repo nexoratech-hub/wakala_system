@@ -2,10 +2,11 @@
 // ================================================================
 // FILE: modules/daily_report/index.php
 // WAKALA FINANCIAL SYSTEM - DAILY REPORTS (ADMIN)
-// ✅ FIXED: AJAX add_transaction inatumia syncDailyReportTotals()
+// ✅ FIXED: Date-aware summary (no yesterday data)
+// ✅ FIXED: All Branches inahesabu jumla ya branches ZOTE
+// ✅ FIXED: AJAX add_transaction inatumia report ya LEO
 // ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
-// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
-// ✅ FIXED: current_capital = total_float + current_cash
+// ✅ FIXED: current_capital = total_float + total_cash
 // ✅ Export dropdown: PDF, CSV, Word
 // ✅ Time filters (All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom)
 // ================================================================
@@ -36,16 +37,18 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 // ============================================================
 
 /**
- * ✅ Get latest daily report for a branch
+ * ✅ Get daily report for a SPECIFIC DATE
+ * ✅ Inarudisha null kama hakuna report ya tarehe hiyo
  */
-function getLatestDailyReport($db, $branch_id) {
+function getDailyReportByDate($db, $branch_id, $report_date) {
     $stmt = $db->prepare("
         SELECT * FROM daily_reports 
         WHERE branch_id = ? 
-        ORDER BY report_date DESC, id DESC 
+          AND report_date = ?
+        ORDER BY id DESC 
         LIMIT 1
     ");
-    $stmt->execute([$branch_id]);
+    $stmt->execute([$branch_id, $report_date]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
@@ -74,7 +77,6 @@ function calculateTotalFloat($db, $daily_report_id) {
 
 /**
  * ✅ Sync daily_reports totals from providers
- * Inahesabu total_deposits, total_withdrawals, current_float, current_capital
  */
 function syncDailyReportTotals($db, $daily_report_id, $current_cash) {
     $stmt = $db->prepare("
@@ -134,7 +136,9 @@ if (isset($_POST['ajax_action'])) {
     header('Content-Type: application/json');
     
     try {
-        // GET PROVIDER FLOAT
+        // ============================================================
+        // GET PROVIDER FLOAT - ✅ Report ya LEO PEKEE
+        // ============================================================
         if ($_POST['ajax_action'] === 'get_provider_float') {
             $provider_id = intval($_POST['provider_id'] ?? 0);
             $branch_id = intval($_POST['branch_id'] ?? 0);
@@ -144,8 +148,9 @@ if (isset($_POST['ajax_action'])) {
                 exit();
             }
             
-            // ✅ Chukua latest daily report ya branch
-            $latest_dr = getLatestDailyReport($db, $branch_id);
+            // ✅ Tumia report ya LEO pekee
+            $today = date('Y-m-d');
+            $latest_dr = getDailyReportByDate($db, $branch_id, $today);
             
             if (!$latest_dr) {
                 echo json_encode([
@@ -153,12 +158,12 @@ if (isset($_POST['ajax_action'])) {
                     'float' => 0,
                     'cash' => 0,
                     'formatted_float' => formatCurrency(0),
-                    'formatted_cash' => formatCurrency(0)
+                    'formatted_cash' => formatCurrency(0),
+                    'message' => 'Hakuna daily report ya leo'
                 ]);
                 exit();
             }
             
-            // ✅ Chukua float ya provider husika kutoka LATEST record
             $stmt = $db->prepare("
                 SELECT current_float 
                 FROM daily_report_providers 
@@ -169,8 +174,6 @@ if (isset($_POST['ajax_action'])) {
             $stmt->execute([$latest_dr['id'], $provider_id]);
             $drp = $stmt->fetch(PDO::FETCH_ASSOC);
             $current_float = floatval($drp['current_float'] ?? 0);
-            
-            // ✅ Chukua current_cash kutoka latest daily_report
             $current_cash = floatval($latest_dr['current_cash'] ?? 0);
             
             echo json_encode([
@@ -183,7 +186,9 @@ if (isset($_POST['ajax_action'])) {
             exit();
         }
         
-        // ADD TRANSACTION
+        // ============================================================
+        // ADD TRANSACTION - ✅ Report ya LEO PEKEE
+        // ============================================================
         if ($_POST['ajax_action'] === 'add_transaction') {
             $branch_id = intval($_POST['branch_id'] ?? 0);
             $provider_id = intval($_POST['provider_id'] ?? 0);
@@ -220,17 +225,17 @@ if (isset($_POST['ajax_action'])) {
             $branch = $stmt->fetch(PDO::FETCH_ASSOC);
             $branch_name_db = $branch['branch_name'] ?? 'Main';
             
-            // Get latest daily report
-            $latest_dr = getLatestDailyReport($db, $branch_id);
+            // ✅ Get daily report ya LEO PEKEE
+            $today = date('Y-m-d');
+            $latest_dr = getDailyReportByDate($db, $branch_id, $today);
             
             if (!$latest_dr) {
-                throw new Exception('No daily report found. Please create a morning report first.');
+                throw new Exception('Hakuna daily report ya LEO kwa branch hii. Tafadhali tengeneza morning report kwanza.');
             }
             
             $daily_report_id = $latest_dr['id'];
             $current_cash = floatval($latest_dr['current_cash'] ?? 0);
             
-            // ✅ Chukua LATEST record ya provider (kuepuka duplicates)
             $stmt = $db->prepare("
                 SELECT * FROM daily_report_providers 
                 WHERE daily_report_id = ? AND provider_id = ?
@@ -242,21 +247,22 @@ if (isset($_POST['ajax_action'])) {
             if ($dr_provider) {
                 $current_float = floatval($dr_provider['current_float'] ?? 0);
             } else {
-                // Fallback: chukua kutoka morning_report_providers
+                // Fallback: chukua kutoka morning_report_providers ya leo
                 $stmt = $db->prepare("
                     SELECT mrp.float_balance 
                     FROM morning_report_providers mrp
                     INNER JOIN morning_reports mr ON mrp.report_id = mr.id
                     WHERE mr.branch_id = ? 
                     AND mrp.provider_id = ?
-                    ORDER BY mr.report_date DESC, mr.id DESC
+                    AND mr.report_date = ?
+                    ORDER BY mr.id DESC
                     LIMIT 1
                 ");
-                $stmt->execute([$branch_id, $provider_id]);
+                $stmt->execute([$branch_id, $provider_id, $today]);
                 $mr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if (!$mr_provider) {
-                    throw new Exception('No provider float found. Please create a morning report first.');
+                    throw new Exception('Hakuna provider float ya leo. Tafadhali tengeneza morning report kwanza.');
                 }
                 $current_float = floatval($mr_provider['float_balance'] ?? 0);
             }
@@ -277,7 +283,6 @@ if (isset($_POST['ajax_action'])) {
                 throw new Exception('Insufficient cash. Current cash: TSh ' . number_format($current_cash, 0));
             }
             
-            // Generate transaction number
             $prefix = $transaction_type === 'deposit' ? 'DEP' : 'WTH';
             $transaction_number = $prefix . '-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
@@ -307,7 +312,7 @@ if (isset($_POST['ajax_action'])) {
             
             $transaction_id = $db->lastInsertId();
             
-            // ✅ STEP 2: UPDATE daily_report_providers (UPDATE tu, siyo INSERT)
+            // STEP 2: UPDATE/INSERT daily_report_providers
             if ($dr_provider) {
                 $stmt = $db->prepare("
                     UPDATE daily_report_providers 
@@ -343,7 +348,7 @@ if (isset($_POST['ajax_action'])) {
                 ]);
             }
             
-            // ✅ STEP 3: UPDATE daily_reports.current_cash pekee
+            // STEP 3: UPDATE daily_reports.current_cash
             $stmt = $db->prepare("
                 UPDATE daily_reports 
                 SET current_cash = ?,
@@ -352,13 +357,13 @@ if (isset($_POST['ajax_action'])) {
             ");
             $stmt->execute([$new_cash, $daily_report_id]);
             
-            // ✅ STEP 4: SYNC daily_reports totals (current_float, current_capital, deposits, withdrawals)
+            // STEP 4: SYNC totals
             $synced = syncDailyReportTotals($db, $daily_report_id, $new_cash);
             
             $new_total_float = $synced['total_float'];
             $new_capital = $synced['current_capital'];
             
-            // STEP 5: LOG KWENYE daily_report_transactions
+            // STEP 5: LOG
             $stmt = $db->prepare("
                 INSERT INTO daily_report_transactions 
                 (daily_report_id, provider_id, provider_code, transaction_type,
@@ -465,15 +470,6 @@ if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && $_GET['branch_id']
     $selected_branch = intval($_GET['branch_id']);
 }
 
-if ($selected_branch == 0) {
-    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
-    $stmt->execute([$user_id]);
-    $emp = $stmt->fetch();
-    if ($emp && $emp['branch_id'] > 0) {
-        $selected_branch = intval($emp['branch_id']);
-    }
-}
-
 $branch_name = 'All Branches';
 $branch_code = '';
 $branch_location = '';
@@ -489,7 +485,9 @@ if ($selected_branch > 0) {
 }
 
 try {
-    // Get reports with providers
+    // ============================================================
+    // GET REPORTS (kwa period iliyochaguliwa)
+    // ============================================================
     $sql = "SELECT 
                 dr.id as report_id,
                 dr.report_number,
@@ -574,7 +572,7 @@ try {
     $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Summary
+    // Summary (kwa period iliyochaguliwa)
     $sql_summary = "SELECT 
             COUNT(*) as total_reports,
             SUM(total_deposits) as total_deposits,
@@ -617,26 +615,29 @@ try {
     $withdrawal_count = intval($txn_count_result['withdrawal_count'] ?? 0);
 
     // ============================================================
-    // ✅ TOTAL FLOAT & CASH - KUTOKA LATEST DAILY REPORT
+    // ✅✅✅ TOTAL FLOAT & CASH - DATE-AWARE ✅✅✅
+    // ✅ Inaonyesha data ya TAREHE ya filter pekee
+    // ✅ Kama hakuna report ya tarehe hiyo → 0
     // ============================================================
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
     
+    // ✅ Tumia tarehe ya MWISHO ya filter (kawaida ni leo/tarehe iliyochaguliwa)
+    $summary_date = $to_date;
+    
     if ($selected_branch > 0) {
-        $latest_dr = getLatestDailyReport($db, $selected_branch);
+        // ============================================================
+        // BRANCH MOJA - Chukua report ya TAREHE ya filter PEKEE
+        // ============================================================
+        $latest_dr = getDailyReportByDate($db, $selected_branch, $summary_date);
         
         if ($latest_dr) {
-            // ✅ Hesabu total float kutoka LATEST record per provider
             $total_float = calculateTotalFloat($db, $latest_dr['id']);
-            
-            // ✅ Cash kutoka latest daily report
             $total_cash = floatval($latest_dr['current_cash'] ?? 0);
-            
-            // ✅ Capital = Float + Cash
             $total_capital = $total_float + $total_cash;
             
-            // ✅ Auto-fix daily_reports kama values hazipo sawa
+            // Auto-fix kama values hazipo sawa
             $db_float = floatval($latest_dr['current_float'] ?? 0);
             $db_capital = floatval($latest_dr['current_capital'] ?? 0);
             
@@ -649,6 +650,31 @@ try {
                 $stmt->execute([$total_float, $total_capital, $latest_dr['id']]);
             }
         }
+        // Kama hakuna report ya tarehe hiyo, inabaki 0 ✅
+        
+    } else {
+        // ============================================================
+        // ✅ ALL BRANCHES - Hesabu jumla ya branches ZOTE kwa TAREHE ya filter
+        // ✅ Kila branch, chukua report ya TAREHE HUSIKA PEKEE
+        // ============================================================
+        $stmt = $db->prepare("SELECT id FROM branches WHERE is_active = 1");
+        $stmt->execute();
+        $all_branch_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        foreach ($all_branch_ids as $bid) {
+            $latest_dr = getDailyReportByDate($db, $bid, $summary_date);
+            
+            if ($latest_dr) {
+                $branch_float = calculateTotalFloat($db, $latest_dr['id']);
+                $branch_cash = floatval($latest_dr['current_cash'] ?? 0);
+                
+                $total_float += $branch_float;
+                $total_cash += $branch_cash;
+            }
+            // Kama hakuna report ya tarehe hiyo, inaongeza 0 ✅
+        }
+        
+        $total_capital = $total_float + $total_cash;
     }
 
     // Providers for modal
@@ -721,7 +747,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- CAPITAL CARD -->
+        <!-- CAPITAL CARD - ✅ DATE-AWARE -->
         <div class="capital-card-compact">
             <div class="capital-compact-icon">
                 <i class="fas fa-university"></i>
@@ -753,7 +779,11 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
             <div class="capital-compact-badge">
-                <i class="fas fa-clock"></i> Live
+                <i class="fas fa-clock"></i> 
+                <?php echo $selected_branch > 0 ? 'Live' : 'All Branches'; ?>
+                <span style="opacity:0.7;font-weight:500;margin-left:4px;">
+                    (<?php echo date('d M', strtotime($summary_date)); ?>)
+                </span>
             </div>
         </div>
 
@@ -1157,19 +1187,19 @@ include_once '../../includes/admin_topbar.php';
                                             </td>
                                             <td>
                                                 <div class="provider-actions">
-                                                    <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $selected_branch; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
+                                                    <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
                                                        class="btn-provider btn-provider-view" 
                                                        title="View Transactions">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
                                                     
-                                                    <a href="edit_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $selected_branch; ?>" 
+                                                    <a href="edit_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>" 
                                                        class="btn-provider btn-provider-edit" 
                                                        title="Edit Provider">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
                                                     
-                                                    <a href="delete_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $selected_branch; ?>" 
+                                                    <a href="delete_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>" 
                                                        class="btn-provider btn-provider-delete" 
                                                        onclick="return confirm('Are you sure you want to delete provider \'<?php echo addslashes($p['provider_name']); ?>\'?')"
                                                        title="Delete">
@@ -1225,10 +1255,10 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-inbox"></i>
                 <h3>No daily reports found</h3>
-                <p>No daily reports found in this period.</p>
+                <p>Hakuna daily reports kwa tarehe <strong><?php echo date('d M Y', strtotime($to_date)); ?></strong>.</p>
                 <p style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">
                     <i class="fas fa-info-circle"></i>
-                    Change the filter or create a morning report first.
+                    Badilisha filter au tengeneza morning report kwanza.
                 </p>
             </div>
         <?php endif; ?>
@@ -3243,6 +3273,13 @@ let currentProviderData = { float: 0, cash: 0 };
 let currentTxnType = 'deposit';
 
 function openTransactionModal(type, providerId = null) {
+    // ✅ Check kama All Branches imechaguliwa
+    const branchId = '<?php echo $selected_branch; ?>';
+    if (branchId == '0') {
+        alert('Tafadhali chagua branch maalum kwanza!\n\nUmechagua "All Branches" - ili kuongeza transaction, chagua branch moja kwenye filter.');
+        return;
+    }
+    
     currentTxnType = type;
     
     const overlay = document.getElementById('txnModalOverlay');
