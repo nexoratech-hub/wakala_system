@@ -1,12 +1,12 @@
 <?php
 // ================================================================
-// FILE: modules/store_cash_out/index.php
-// WAKALA FINANCIAL SYSTEM - STORE CASH OUT
+// FILE: modules/reports/salaries.php
+// WAKALA FINANCIAL SYSTEM - SALARIES REPORT
 // 🔴 RED THEME — SCOPED CSS — SIDEBAR SAFE
-// ✅ Quick Filter Buttons: All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom
-// ✅ Detailed cash out records
-// ✅ Search + Scroll buttons
-// ✅ Export PDF / CSV / Word
+// ✅ Quick Filters: All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom
+// ✅ Summary Cards + Status Breakdown
+// ✅ Live Search + Scroll buttons
+// ✅ Export PDF
 // ================================================================
 
 require_once '../../config/config.php';
@@ -31,7 +31,6 @@ $is_admin = ($role === 'admin' || $role === 'super_admin');
 // ============================================================
 $quick = isset($_GET['quick']) ? trim($_GET['quick']) : '';
 $today = date('Y-m-d');
-
 $from_date = $today;
 $to_date = $today;
 $filter_label = 'Today';
@@ -103,8 +102,7 @@ if ($quick !== '') {
 }
 
 $selected_branch = isset($_GET['branch_id']) ? intval($_GET['branch_id']) : 0;
-$selected_status = isset($_GET['status']) && in_array($_GET['status'], ['all', 'pending', 'approved', 'rejected', 'cancelled']) 
-    ? $_GET['status'] : 'all';
+$selected_status = isset($_GET['status']) ? trim($_GET['status']) : '';
 
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from_date)) $from_date = $today;
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to_date)) $to_date = $today;
@@ -139,77 +137,110 @@ if ($is_admin) {
 }
 
 // ============================================================
-// GET STORE CASH OUT
+// GET SALARIES
 // ============================================================
-$cashouts = [];
+$salaries = [];
 $summary = [
     'total_count' => 0,
     'total_amount' => 0,
-    'pending_count' => 0,
-    'pending_amount' => 0,
-    'approved_count' => 0,
-    'approved_amount' => 0,
-    'rejected_count' => 0,
-    'rejected_amount' => 0,
+    'paid_amount' => 0,
+    'paid_count' => 0,
+    'waiting_amount' => 0,
+    'waiting_count' => 0,
+    'upcoming_amount' => 0,
+    'upcoming_count' => 0,
+    'cancelled_count' => 0,
+    'total_tax' => 0,
+    'total_deductions' => 0,
 ];
 
 try {
     $sql = "
         SELECT 
-            sco.*,
-            b.branch_name as branch_display_name,
-            b.branch_code as branch_display_code,
-            e.full_name as employee_name,
-            e.employee_id as employee_code,
-            e.profile_pic as employee_avatar
-        FROM store_cash_out sco
-        LEFT JOIN branches b ON sco.branch_id = b.id
-        LEFT JOIN employees e ON sco.employee_id = e.id
-        WHERE sco.cashout_date BETWEEN ? AND ?
+            es.*,
+            e.full_name AS employee_name,
+            e.employee_id AS employee_code,
+            e.profile_pic AS employee_avatar,
+            e.position AS employee_position,
+            b.branch_name AS branch_display_name,
+            b.branch_code AS branch_display_code
+        FROM employee_salaries es
+        LEFT JOIN employees e ON es.employee_id = e.id
+        LEFT JOIN branches b ON es.branch_id = b.id
+        WHERE es.salary_month BETWEEN ? AND ?
     ";
     $params = [$from_date, $to_date];
 
     if ($selected_branch > 0) {
-        $sql .= " AND sco.branch_id = ?";
+        $sql .= " AND es.branch_id = ?";
         $params[] = $selected_branch;
     }
 
-    if ($selected_status !== 'all') {
-        $sql .= " AND sco.status = ?";
+    if (!empty($selected_status)) {
+        $sql .= " AND es.status = ?";
         $params[] = $selected_status;
     }
 
-    $sql .= " ORDER BY sco.cashout_date DESC, sco.id DESC";
+    $sql .= " ORDER BY es.salary_month DESC, es.id DESC";
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $salaries = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Calculate summary
-    foreach ($cashouts as $c) {
-        $amount = floatval($c['amount'] ?? 0);
+    foreach ($salaries as $s) {
         $summary['total_count']++;
+        $amount = floatval($s['net_pay']);
         $summary['total_amount'] += $amount;
-        
-        switch ($c['status']) {
-            case 'pending':
-                $summary['pending_count']++;
-                $summary['pending_amount'] += $amount;
+        $summary['total_tax'] += floatval($s['tax']);
+        $summary['total_deductions'] += floatval($s['deductions']);
+
+        switch ($s['status']) {
+            case 'paid':
+                $summary['paid_amount'] += $amount;
+                $summary['paid_count']++;
                 break;
-            case 'approved':
-                $summary['approved_count']++;
-                $summary['approved_amount'] += $amount;
+            case 'waiting':
+                $summary['waiting_amount'] += $amount;
+                $summary['waiting_count']++;
                 break;
-            case 'rejected':
-                $summary['rejected_count']++;
-                $summary['rejected_amount'] += $amount;
+            case 'upcoming':
+                $summary['upcoming_amount'] += $amount;
+                $summary['upcoming_count']++;
+                break;
+            case 'cancelled':
+                $summary['cancelled_count']++;
                 break;
         }
     }
 
+    // Monthly breakdown
+    $sql_monthly = "
+        SELECT 
+            DATE_FORMAT(es.salary_month, '%Y-%m') AS month_key,
+            DATE_FORMAT(es.salary_month, '%b %Y') AS month_label,
+            COUNT(*) AS count,
+            COALESCE(SUM(es.net_pay), 0) AS total_amount,
+            COALESCE(SUM(CASE WHEN es.status = 'paid' THEN es.net_pay ELSE 0 END), 0) AS paid_amount
+        FROM employee_salaries es
+        WHERE es.salary_month BETWEEN ? AND ?
+    ";
+    $params_monthly = [$from_date, $to_date];
+
+    if ($selected_branch > 0) {
+        $sql_monthly .= " AND es.branch_id = ?";
+        $params_monthly[] = $selected_branch;
+    }
+
+    $sql_monthly .= " GROUP BY month_key, month_label ORDER BY month_key DESC LIMIT 8";
+
+    $stmt = $db->prepare($sql_monthly);
+    $stmt->execute($params_monthly);
+    $monthly_breakdown = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 } catch (PDOException $e) {
-    error_log("Store cash out error: " . $e->getMessage());
-    $cashouts = [];
+    error_log("Salaries error: " . $e->getMessage());
+    $salaries = [];
+    $monthly_breakdown = [];
 }
 
 $success_message = '';
@@ -223,7 +254,7 @@ include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_sidebar.
 include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_topbar.php';
 ?>
 
-<style id="cashout-scoped">
+<style id="salaries-report-scoped">
 /* ============================================================
    🔴 RED THEME VARIABLES
    ============================================================ */
@@ -358,30 +389,13 @@ html.dark-mode .main-wrapper {
     background: var(--bg-input); color: var(--text-secondary);
     border: 1.5px solid var(--border-color);
 }
-.main-wrapper .btn-secondary:hover { background: var(--bg-card); color: var(--text-primary); }
-
-.main-wrapper .btn-add {
-    background: linear-gradient(135deg, #059669, #10B981);
-    color: #FFFFFF; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .btn-add:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
-    color: #FFFFFF;
+.main-wrapper .btn-secondary:hover {
+    background: var(--red-lighter);
+    color: var(--red-dark);
+    border-color: var(--red-accent);
 }
 
-/* ALERTS */
-.main-wrapper .alert {
-    padding: 14px 18px; border-radius: 10px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-.main-wrapper .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE5; }
-
-/* ============================================================
-   🔥 QUICK FILTER BUTTONS - RED THEME
-   ============================================================ */
+/* QUICK FILTERS */
 .main-wrapper .quick-filters {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     margin-bottom: 12px; padding: 10px 14px;
@@ -391,14 +405,14 @@ html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE
 }
 .main-wrapper .quick-filters-label {
     font-size: 11px; font-weight: 800; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.8px;
-    margin-right: 6px; display: flex; align-items: center; gap: 6px;
+    text-transform: uppercase; letter-spacing: 0.8px; margin-right: 6px;
+    display: flex; align-items: center; gap: 6px;
 }
 .main-wrapper .quick-filters-label i { color: #DC2626; font-size: 12px; }
 .main-wrapper .quick-filter-btn {
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 800; cursor: pointer;
-    text-decoration: none; transition: all 0.25s ease;
+    padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 800;
+    cursor: pointer; text-decoration: none;
+    transition: all 0.25s ease;
     border: 1.5px solid var(--border-color);
     background: var(--bg-card); color: var(--text-secondary);
     display: inline-flex; align-items: center; gap: 5px;
@@ -407,7 +421,8 @@ html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE
 }
 .main-wrapper .quick-filter-btn i { font-size: 11px; }
 .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); border-color: var(--red-accent);
+    background: var(--red-lighter);
+    border-color: var(--red-accent);
     color: var(--red-dark);
     transform: translateY(-2px);
     box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15);
@@ -419,20 +434,160 @@ html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE
     transform: translateY(-2px);
 }
 .main-wrapper .quick-filter-btn.active i { color: #FCD34D; }
-.main-wrapper .quick-filter-btn.active:hover {
-    background: linear-gradient(135deg, #B91C1C, #991B1B); color: #FFFFFF;
+
+/* SUMMARY CARDS */
+.main-wrapper .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
 }
-html.dark-mode .main-wrapper .quick-filter-btn {
-    background: var(--bg-card); border-color: var(--border-color);
-    color: var(--text-secondary);
+.main-wrapper .summary-card {
+    position: relative; border-radius: 14px; padding: 18px 20px;
+    display: flex; align-items: center; gap: 14px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0; overflow: hidden;
+    border: 1.5px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-html.dark-mode .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); color: #FCA5A5; border-color: #DC2626;
+.main-wrapper .summary-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 28px rgba(220, 38, 38, 0.15);
 }
-html.dark-mode .main-wrapper .quick-filter-btn.active {
-    background: linear-gradient(135deg, #DC2626, #991B1B);
-    color: #FFFFFF; border-color: #FCA5A5;
+.main-wrapper .summary-card-red {
+    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
 }
+.main-wrapper .summary-card-red .summary-icon {
+    background: rgba(220, 38, 38, 0.15); color: #DC2626;
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+}
+.main-wrapper .summary-card-red .summary-value { color: #991B1B; }
+
+.main-wrapper .summary-card-green {
+    background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2);
+}
+.main-wrapper .summary-card-green .summary-icon {
+    background: rgba(5, 150, 105, 0.15); color: #059669;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+.main-wrapper .summary-card-green .summary-value { color: #047857; }
+
+.main-wrapper .summary-card-orange {
+    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
+}
+.main-wrapper .summary-card-orange .summary-icon {
+    background: rgba(217, 119, 6, 0.15); color: #D97706;
+    border: 1.5px solid rgba(217, 119, 6, 0.3);
+}
+.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
+
+.main-wrapper .summary-card-purple {
+    background: rgba(124, 58, 237, 0.08); border-color: rgba(124, 58, 237, 0.2);
+}
+.main-wrapper .summary-card-purple .summary-icon {
+    background: rgba(124, 58, 237, 0.15); color: #7C3AED;
+    border: 1.5px solid rgba(124, 58, 237, 0.3);
+}
+.main-wrapper .summary-card-purple .summary-value { color: #6D28D9; }
+
+html.dark-mode .main-wrapper .summary-card-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html.dark-mode .main-wrapper .summary-card-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
+html.dark-mode .main-wrapper .summary-card-purple { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; }
+html.dark-mode .main-wrapper .summary-card-green .summary-value { color: #6EE7B7; }
+html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
+html.dark-mode .main-wrapper .summary-card-purple .summary-value { color: #C4B5FD; }
+
+.main-wrapper .summary-icon {
+    width: 50px; height: 50px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
+}
+.main-wrapper .summary-card:hover .summary-icon { transform: scale(1.08) rotate(-4deg); }
+.main-wrapper .summary-info {
+    display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px;
+}
+.main-wrapper .summary-label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.main-wrapper .summary-value {
+    font-size: 18px; font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px; line-height: 1.2; word-break: break-word;
+}
+.main-wrapper .summary-sub {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
+}
+
+/* MONTHLY BREAKDOWN */
+.main-wrapper .category-section {
+    background: var(--bg-card); border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    padding: 18px 20px; margin-bottom: 18px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.main-wrapper .category-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.main-wrapper .category-section-title {
+    font-size: 14px; font-weight: 800; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.main-wrapper .category-section-title i { color: #DC2626; }
+.main-wrapper .category-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+.main-wrapper .category-card-mini {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    transition: all 0.25s ease;
+    min-width: 0;
+}
+.main-wrapper .category-card-mini:hover {
+    transform: translateY(-2px);
+    border-color: #DC2626;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.15);
+}
+.main-wrapper .category-icon {
+    width: 42px; height: 42px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+    color: #DC2626;
+    border: 1.5px solid #FCA5A5;
+}
+html.dark-mode .main-wrapper .category-icon {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+}
+.main-wrapper .category-info {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.main-wrapper .category-name {
+    font-size: 13px; font-weight: 800; color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.main-wrapper .category-count {
+    font-size: 10px; color: var(--text-muted); font-weight: 600;
+}
+.main-wrapper .category-amount {
+    font-size: 13px; font-weight: 900;
+    color: #DC2626;
+    font-family: 'Inter', 'Courier New', monospace;
+    white-space: nowrap;
+}
+html.dark-mode .main-wrapper .category-amount { color: #FCA5A5; }
 
 /* FILTER BAR */
 .main-wrapper .filter-bar {
@@ -468,135 +623,13 @@ html.dark-mode .main-wrapper .quick-filter-btn.active {
 }
 .main-wrapper .filter-actions { display: flex; gap: 8px; }
 
-/* STATUS TABS */
-.main-wrapper .status-tabs {
-    display: flex; gap: 6px; flex-wrap: wrap;
-    background: var(--bg-input);
-    padding: 5px; border-radius: 10px;
-    border: 1.5px solid var(--border-color);
-}
-.main-wrapper .status-tab {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 700;
-    color: var(--text-secondary);
-    text-decoration: none; transition: all 0.25s ease;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    white-space: nowrap;
-}
-.main-wrapper .status-tab:hover { background: var(--bg-card); color: var(--text-primary); }
-.main-wrapper .status-tab.active {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    color: #FFFFFF;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .status-tab.tab-pending.active {
-    background: linear-gradient(135deg, #D97706, #F59E0B);
-    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .status-tab.tab-approved.active {
-    background: linear-gradient(135deg, #059669, #10B981);
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .status-tab.tab-rejected.active {
-    background: linear-gradient(135deg, #DC2626, #EF4444);
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-
-/* SUMMARY CARDS */
-.main-wrapper .summary-cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 18px;
-}
-.main-wrapper .summary-card {
-    position: relative; border-radius: 14px; padding: 18px 20px;
-    display: flex; align-items: center; gap: 14px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 0; overflow: hidden;
-    border: 1.5px solid transparent;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-.main-wrapper .summary-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 28px rgba(220, 38, 38, 0.15);
-}
-.main-wrapper .summary-card-blue {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
-}
-.main-wrapper .summary-card-blue .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .summary-card-blue .summary-value { color: #991B1B; }
-.main-wrapper .summary-card-orange {
-    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
-}
-.main-wrapper .summary-card-orange .summary-icon {
-    background: rgba(217, 119, 6, 0.15); color: #D97706;
-    border: 1.5px solid rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
-.main-wrapper .summary-card-green {
-    background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2);
-}
-.main-wrapper .summary-card-green .summary-icon {
-    background: rgba(5, 150, 105, 0.15); color: #059669;
-    border: 1.5px solid rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .summary-card-green .summary-value { color: #047857; }
-.main-wrapper .summary-card-red {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
-}
-.main-wrapper .summary-card-red .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .summary-card-red .summary-value { color: #B91C1C; }
-
-html.dark-mode .main-wrapper .summary-card-blue { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
-html.dark-mode .main-wrapper .summary-card-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
-html.dark-mode .main-wrapper .summary-card-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-blue .summary-value { color: #FCA5A5; }
-html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
-html.dark-mode .main-wrapper .summary-card-green .summary-value { color: #34D399; }
-html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; }
-
-.main-wrapper .summary-icon {
-    width: 50px; height: 50px; border-radius: 13px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
-}
-.main-wrapper .summary-card:hover .summary-icon { transform: scale(1.08) rotate(-4deg); }
-.main-wrapper .summary-info {
-    display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px;
-}
-.main-wrapper .summary-label {
-    font-size: 10px; font-weight: 800; text-transform: uppercase;
-    letter-spacing: 0.8px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.main-wrapper .summary-value {
-    font-size: 18px; font-weight: 900;
-    font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px; line-height: 1.2; word-break: break-word;
-}
-.main-wrapper .summary-sub {
-    font-size: 10px; font-weight: 600; color: var(--text-muted);
-    display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
-}
-
-/* TABLE CONTAINER */
+/* TABLE */
 .main-wrapper .table-container {
     background: var(--bg-card); border-radius: 14px;
     border: 1.5px solid var(--border-color);
     overflow: hidden;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-
-/* TABLE HEADER */
 .main-wrapper .table-header {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     padding: 16px 20px; color: #FFFFFF;
@@ -663,9 +696,7 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     font-family: 'Inter', sans-serif;
     color: #1e293b; outline: none; min-width: 0; font-weight: 500;
 }
-.main-wrapper .table-search-live input::placeholder {
-    color: #94a3b8; font-size: 12px;
-}
+.main-wrapper .table-search-live input::placeholder { color: #94a3b8; font-size: 12px; }
 .main-wrapper .table-search-live .search-clear-btn {
     width: 22px; height: 22px; border-radius: 50%;
     background: #FEE2E2; color: #DC2626; border: none;
@@ -700,7 +731,6 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
 }
 .main-wrapper .scroll-btn i { font-size: 14px; display: block; line-height: 1; }
 
-/* TABLE WRAPPER */
 .main-wrapper .table-wrapper {
     overflow-x: auto !important;
     overflow-y: hidden;
@@ -718,11 +748,13 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     background: linear-gradient(135deg, #DC2626, #B91C1C);
     border-radius: 4px;
 }
+.main-wrapper .table-wrapper::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+}
 
-/* DATA TABLE */
 .main-wrapper .data-table {
     width: 100%; border-collapse: collapse;
-    font-size: 12px; min-width: 1200px;
+    font-size: 12px; min-width: 1300px;
 }
 .main-wrapper .data-table thead tr { background: var(--bg-table-even); }
 .main-wrapper .data-table thead th {
@@ -759,7 +791,6 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     font-weight: 800;
 }
 
-/* ROW NUMBER */
 .main-wrapper .row-number {
     display: inline-flex; align-items: center; justify-content: center;
     width: 26px; height: 26px; border-radius: 50%;
@@ -770,7 +801,6 @@ html.dark-mode .main-wrapper .row-number {
     background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
 }
 
-/* DATE CELL */
 .main-wrapper .date-cell {
     display: inline-flex; flex-direction: column; gap: 2px;
     font-size: 11px; font-weight: 700;
@@ -782,12 +812,8 @@ html.dark-mode .main-wrapper .row-number {
     color: #DC2626;
 }
 html.dark-mode .main-wrapper .date-main { color: #FCA5A5; }
-.main-wrapper .time-sub {
-    font-size: 10px; color: var(--text-muted);
-}
 
-/* CASHOUT NUMBER */
-.main-wrapper .cashout-number {
+.main-wrapper .salary-number {
     font-family: 'Courier New', monospace;
     font-size: 11px; font-weight: 800;
     color: #DC2626; background: #FEE2E2;
@@ -795,11 +821,38 @@ html.dark-mode .main-wrapper .date-main { color: #FCA5A5; }
     white-space: nowrap;
     border: 1.5px solid #FCA5A5;
 }
-html.dark-mode .main-wrapper .cashout-number {
+html.dark-mode .main-wrapper .salary-number {
     background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
 }
 
-/* BRANCH CELL */
+.main-wrapper .employee-cell {
+    display: flex; align-items: center; gap: 8px;
+    min-width: 0;
+}
+.main-wrapper .employee-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 12px; color: #FFFFFF;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    border: 2px solid #FCA5A5;
+    object-fit: cover;
+}
+.main-wrapper .employee-info {
+    display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.main-wrapper .employee-name-sm {
+    font-size: 12px; font-weight: 800;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 140px;
+}
+.main-wrapper .employee-position {
+    font-size: 9px; color: var(--text-muted);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 140px;
+}
+
 .main-wrapper .branch-cell {
     display: flex; flex-direction: column; gap: 2px;
     min-width: 100px;
@@ -819,135 +872,54 @@ html.dark-mode .main-wrapper .branch-code-sm {
     background: #7F1D1D; color: #FCA5A5;
 }
 
-/* EMPLOYEE CELL */
-.main-wrapper .employee-cell {
-    display: flex; align-items: center; gap: 8px;
-    min-width: 0;
-}
-.main-wrapper .employee-avatar {
-    width: 30px; height: 30px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 12px; color: #FFFFFF;
-    flex-shrink: 0;
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    border: 2px solid #FCA5A5;
-    object-fit: cover;
-}
-.main-wrapper .employee-name-sm {
-    font-size: 12px; font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 120px;
-}
-
-/* REASON CELL */
-.main-wrapper .reason-cell {
-    display: flex; flex-direction: column; gap: 2px;
-    min-width: 0;
-}
-.main-wrapper .reason-text {
-    font-size: 12px; font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-.main-wrapper .taken-by {
-    font-size: 10px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-
-/* AMOUNT */
-.main-wrapper .amount-cashout {
+.main-wrapper .amount-badge {
     display: inline-flex; align-items: center;
     padding: 4px 12px; border-radius: 8px;
     font-weight: 900; font-size: 12px;
     font-family: 'Courier New', monospace;
     white-space: nowrap;
+}
+.main-wrapper .amount-net {
     background: #FEE2E2; color: #991B1B;
     border: 1.5px solid #FCA5A5;
 }
-html.dark-mode .main-wrapper .amount-cashout {
+.main-wrapper .amount-gross {
+    background: var(--bg-input); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+html.dark-mode .main-wrapper .amount-net {
     background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
 }
 
-/* STATUS BADGE */
-.main-wrapper .status-badge {
+.main-wrapper .status-badge-sm {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 8px;
+    padding: 4px 12px; border-radius: 8px;
     font-size: 10px; font-weight: 800;
     text-transform: uppercase; letter-spacing: 0.5px;
     white-space: nowrap;
-}
-.main-wrapper .status-pending {
-    background: #FEF3C7; color: #B45309;
-    border: 1.5px solid #FCD34D;
-}
-.main-wrapper .status-approved {
-    background: #DCFCE7; color: #15803D;
-    border: 1.5px solid #86EFAC;
-}
-.main-wrapper .status-rejected {
-    background: #FEE2E2; color: #991B1B;
-    border: 1.5px solid #FCA5A5;
-}
-.main-wrapper .status-cancelled {
-    background: #E5E7EB; color: #4B5563;
-    border: 1.5px solid #9CA3AF;
-}
-html.dark-mode .main-wrapper .status-pending { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
-html.dark-mode .main-wrapper .status-approved { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .status-rejected { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
-html.dark-mode .main-wrapper .status-cancelled { background: #374151; color: #9CA3AF; border-color: #6B7280; }
-
-/* ACTION BUTTONS */
-.main-wrapper .action-buttons {
-    display: flex;
-    gap: 6px;
-    justify-content: center;
-}
-.main-wrapper .action-btn {
-    width: 32px; height: 32px;
-    border-radius: 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    text-decoration: none;
-    transition: all 0.2s ease;
     border: 1.5px solid;
-    cursor: pointer;
-    padding: 0;
 }
-.main-wrapper .action-view {
-    background: #DBEAFE; color: #1D4ED8;
-    border-color: #93C5FD;
-}
-.main-wrapper .action-view:hover {
-    background: #1D4ED8; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-.main-wrapper .action-approve {
+.main-wrapper .status-paid {
     background: #DCFCE7; color: #15803D;
     border-color: #86EFAC;
 }
-.main-wrapper .action-approve:hover {
-    background: #059669; color: #FFFFFF;
-    transform: translateY(-2px);
+.main-wrapper .status-waiting {
+    background: #FEF3C7; color: #B45309;
+    border-color: #FCD34D;
 }
-.main-wrapper .action-reject {
+.main-wrapper .status-upcoming {
+    background: #DBEAFE; color: #1D4ED8;
+    border-color: #93C5FD;
+}
+.main-wrapper .status-cancelled {
     background: #FEE2E2; color: #991B1B;
     border-color: #FCA5A5;
 }
-.main-wrapper .action-reject:hover {
-    background: #DC2626; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-html.dark-mode .main-wrapper .action-view { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .main-wrapper .action-approve { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .action-reject { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .main-wrapper .status-paid { background: #14532D; color: #4ADE80; border-color: #16A34A; }
+html.dark-mode .main-wrapper .status-waiting { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
+html.dark-mode .main-wrapper .status-upcoming { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+html.dark-mode .main-wrapper .status-cancelled { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
 
-/* TOTALS ROW */
 .main-wrapper .data-table tbody tr.totals-row {
     background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%) !important;
     border-top: 3px solid #DC2626;
@@ -963,7 +935,6 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
     font-size: 12px;
 }
 
-/* EMPTY STATE */
 .main-wrapper .empty-state {
     text-align: center; padding: 60px 20px;
 }
@@ -1006,8 +977,6 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
     .main-wrapper .data-table { min-width: 1000px; }
     .main-wrapper .quick-filters { padding: 8px 10px; gap: 5px; }
     .main-wrapper .quick-filter-btn { padding: 7px 12px; font-size: 11px; flex: 1; justify-content: center; }
-    .main-wrapper .status-tabs { width: 100%; }
-    .main-wrapper .status-tab { flex: 1; justify-content: center; }
 }
 @media (max-width: 480px) {
     .main-wrapper .summary-value { font-size: 16px; }
@@ -1026,10 +995,10 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
-                    <i class="fas fa-money-bill-wave"></i>
+                    <i class="fas fa-users"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">Store Cash Out</span>
+                    <span class="branch-indicator-label">Salaries Report</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -1047,7 +1016,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-money-bill-wave" style="color:#DC2626;"></i> Store Cash Out</h2>
+                <h2><i class="fas fa-users" style="color:#DC2626;"></i> Salaries Report</h2>
                 <p class="text-muted">
                     <i class="fas fa-calendar"></i>
                     <?php echo date('d M Y', strtotime($from_date)); ?> — <?php echo date('d M Y', strtotime($to_date)); ?>
@@ -1056,90 +1025,29 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                     <?php echo htmlspecialchars($filter_label); ?>
                     •
                     <i class="fas fa-list"></i>
-                    <?php echo number_format($summary['total_count']); ?> records
+                    <?php echo number_format($summary['total_count']); ?> salaries
                 </p>
             </div>
             <div class="header-right">
-                <a href="create.php" class="btn btn-add">
-                    <i class="fas fa-plus-circle"></i> Add New
-                </a>
-                <a href="../reports/export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&format=pdf" 
+                <a href="export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&type=salaries&format=pdf" 
                    class="btn btn-primary" target="_blank">
                     <i class="fas fa-file-pdf"></i> Export
                 </a>
-                <a href="../reports/index.php" class="btn btn-secondary">
+                <a href="index.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>" 
+                   class="btn btn-secondary">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
         </div>
 
         <?php if (!empty($success_message)): ?>
-            <div class="alert alert-success">
+            <div style="padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; display: flex; align-items: center; gap: 12px;">
                 <i class="fas fa-check-circle"></i>
                 <span><?php echo htmlspecialchars($success_message); ?></span>
             </div>
         <?php endif; ?>
 
-        <!-- SUMMARY CARDS -->
-        <div class="summary-cards">
-            <div class="summary-card summary-card-blue">
-                <div class="summary-icon">
-                    <i class="fas fa-list"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Records</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_count']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-money-bill"></i>
-                        <?php echo formatCurrency($summary['total_amount']); ?>
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-orange">
-                <div class="summary-icon">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Pending</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['pending_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['pending_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-green">
-                <div class="summary-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Approved</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['approved_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['approved_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-red">
-                <div class="summary-icon">
-                    <i class="fas fa-times-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Rejected</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['rejected_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['rejected_count']); ?> records
-                    </span>
-                </div>
-            </div>
-        </div>
-
-        <!-- 🔥 QUICK FILTER BUTTONS -->
+        <!-- QUICK FILTERS -->
         <div class="quick-filters">
             <span class="quick-filters-label">
                 <i class="fas fa-bolt"></i>
@@ -1178,19 +1086,108 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <?php endforeach; ?>
         </div>
 
+        <!-- SUMMARY CARDS -->
+        <div class="summary-cards">
+            <div class="summary-card summary-card-red">
+                <div class="summary-icon">
+                    <i class="fas fa-money-bill-wave"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Salaries</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['total_count']); ?> records
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-green">
+                <div class="summary-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Paid</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['paid_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['paid_count']); ?> paid
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-orange">
+                <div class="summary-icon">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Waiting</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['waiting_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['waiting_count']); ?> waiting
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-purple">
+                <div class="summary-icon">
+                    <i class="fas fa-calendar-check"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Upcoming</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['upcoming_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['upcoming_count']); ?> upcoming
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- MONTHLY BREAKDOWN -->
+        <?php if (count($monthly_breakdown) > 0): ?>
+        <div class="category-section">
+            <div class="category-section-header">
+                <div class="category-section-title">
+                    <i class="fas fa-chart-bar"></i>
+                    Monthly Breakdown
+                </div>
+                <span style="font-size: 11px; font-weight: 800; background: #FEE2E2; color: #991B1B; padding: 4px 12px; border-radius: 8px; border: 1.5px solid #FCA5A5;">
+                    <?php echo count($monthly_breakdown); ?> months
+                </span>
+            </div>
+            <div class="category-grid">
+                <?php foreach ($monthly_breakdown as $mb): ?>
+                    <a href="?quick=custom&from_date=<?php echo $mb['month_key']; ?>-01&to_date=<?php echo date('Y-m-t', strtotime($mb['month_key'] . '-01')); ?>&branch_id=<?php echo $selected_branch; ?>" 
+                       class="category-card-mini" style="text-decoration: none;">
+                        <div class="category-icon">
+                            <i class="fas fa-calendar"></i>
+                        </div>
+                        <div class="category-info">
+                            <span class="category-name"><?php echo htmlspecialchars($mb['month_label']); ?></span>
+                            <span class="category-count"><?php echo number_format($mb['count']); ?> employees</span>
+                        </div>
+                        <span class="category-amount"><?php echo formatCurrency($mb['total_amount']); ?></span>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <!-- FILTER BAR -->
         <div class="filter-bar">
             <form method="GET" action="" class="filter-form">
-                <input type="hidden" name="quick" value="custom">
+                <input type="hidden" name="quick" value="<?php echo htmlspecialchars($quick); ?>">
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> From Date</label>
+                    <label><i class="fas fa-calendar-day"></i> From</label>
                     <input type="date" name="from_date" class="form-control" 
                            value="<?php echo htmlspecialchars($from_date); ?>">
                 </div>
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> To Date</label>
+                    <label><i class="fas fa-calendar-day"></i> To</label>
                     <input type="date" name="to_date" class="form-control" 
                            value="<?php echo htmlspecialchars($to_date); ?>">
                 </div>
@@ -1211,33 +1208,19 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 
                 <div class="filter-group">
                     <label><i class="fas fa-filter"></i> Status</label>
-                    <div class="status-tabs">
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=all" 
-                           class="status-tab <?php echo $selected_status === 'all' ? 'active' : ''; ?>">
-                            <i class="fas fa-list"></i> All
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=pending" 
-                           class="status-tab tab-pending <?php echo $selected_status === 'pending' ? 'active' : ''; ?>">
-                            <i class="fas fa-clock"></i> Pending
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=approved" 
-                           class="status-tab tab-approved <?php echo $selected_status === 'approved' ? 'active' : ''; ?>">
-                            <i class="fas fa-check-circle"></i> Approved
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=rejected" 
-                           class="status-tab tab-rejected <?php echo $selected_status === 'rejected' ? 'active' : ''; ?>">
-                            <i class="fas fa-times-circle"></i> Rejected
-                        </a>
-                    </div>
+                    <select name="status" class="form-control">
+                        <option value="">All Status</option>
+                        <option value="paid" <?php echo $selected_status === 'paid' ? 'selected' : ''; ?>>Paid</option>
+                        <option value="waiting" <?php echo $selected_status === 'waiting' ? 'selected' : ''; ?>>Waiting</option>
+                        <option value="upcoming" <?php echo $selected_status === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
+                        <option value="cancelled" <?php echo $selected_status === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+                    </select>
                 </div>
                 
                 <div class="filter-actions">
                     <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-search"></i> Apply Filter
+                        <i class="fas fa-search"></i> Apply
                     </button>
-                    <a href="index.php" class="btn btn-secondary">
-                        <i class="fas fa-undo"></i> Reset
-                    </a>
                 </div>
             </form>
         </div>
@@ -1247,8 +1230,8 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <div class="table-header">
                 <div class="table-header-left">
                     <i class="fas fa-list-alt"></i>
-                    <h3>Cash Out Records</h3>
-                    <span class="count-badge" id="totalCountBadge"><?php echo count($cashouts); ?></span>
+                    <h3>Salaries</h3>
+                    <span class="count-badge" id="totalCountBadge"><?php echo count($salaries); ?></span>
                 </div>
                 
                 <div class="table-header-right">
@@ -1256,7 +1239,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                         <i class="fas fa-search"></i>
                         <input type="text" 
                                id="liveSearchInput" 
-                               placeholder="Search cash out..."
+                               placeholder="Search salaries..."
                                oninput="performLiveSearch(this.value)"
                                autocomplete="off">
                         <button type="button" 
@@ -1283,81 +1266,50 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 </div>
             </div>
             
-            <?php if (count($cashouts) > 0): ?>
+            <?php if (count($salaries) > 0): ?>
                 <div class="table-wrapper" id="tableWrapper">
-                    <table class="data-table" id="cashoutsTable">
+                    <table class="data-table" id="salariesTable">
                         <thead>
                             <tr>
                                 <th style="width: 50px;">#</th>
-                                <th>Date</th>
-                                <th>Cashout #</th>
-                                <th>Reason</th>
-                                <th class="text-right">Amount</th>
+                                <th>Salary #</th>
+                                <th>Month</th>
+                                <th>Employee</th>
+                                <th class="text-right">Base</th>
+                                <th class="text-right">Bonus</th>
+                                <th class="text-right">Allowances</th>
+                                <th class="text-right">Gross</th>
+                                <th class="text-right">Tax</th>
+                                <th class="text-right">Deductions</th>
+                                <th class="text-right">Net Pay</th>
                                 <th class="text-center">Status</th>
                                 <th>Branch</th>
-                                <th>Employee</th>
-                                <th class="text-center">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="cashoutsTableBody">
-                            <?php $i = 1; foreach ($cashouts as $c): 
-                                $c_date = date('d M Y', strtotime($c['cashout_date']));
-                                $c_time = date('H:i', strtotime($c['created_at']));
-                                $emp_initial = strtoupper(substr($c['employee_name'] ?? 'N', 0, 1));
-                                $emp_avatar = $c['employee_avatar'] ?? '';
-                                $status = $c['status'] ?? 'pending';
+                        <tbody id="salariesTableBody">
+                            <?php $i = 1; foreach ($salaries as $s): 
+                                $month_display = date('M Y', strtotime($s['salary_month']));
+                                $emp_initial = strtoupper(substr($s['employee_name'] ?? 'N', 0, 1));
+                                $emp_avatar = $s['employee_avatar'] ?? '';
+                                $status = $s['status'] ?? 'waiting';
                                 
                                 $search_text = strtolower(
-                                    ($c['cashout_number'] ?? '') . ' ' . 
-                                    ($c['reason'] ?? '') . ' ' . 
-                                    ($c['taken_by'] ?? '') . ' ' .
-                                    ($c['employee_name'] ?? '') . ' ' .
-                                    ($c['branch_display_name'] ?? '') . ' ' .
-                                    $c['amount']
+                                    ($s['salary_number'] ?? '') . ' ' . 
+                                    ($s['employee_name'] ?? '') . ' ' . 
+                                    ($s['employee_position'] ?? '') . ' ' .
+                                    ($s['branch_display_name'] ?? '') . ' ' .
+                                    $status . ' ' . $month_display . ' ' .
+                                    $s['net_pay']
                                 );
                             ?>
-                                <tr class="cashout-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
+                                <tr class="salary-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
                                     <td><span class="row-number"><?php echo $i++; ?></span></td>
                                     <td>
+                                        <span class="salary-number"><?php echo htmlspecialchars($s['salary_number']); ?></span>
+                                    </td>
+                                    <td>
                                         <div class="date-cell">
-                                            <span class="date-main"><?php echo $c_date; ?></span>
-                                            <span class="time-sub"><?php echo $c_time; ?></span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="cashout-number"><?php echo htmlspecialchars($c['cashout_number']); ?></span>
-                                    </td>
-                                    <td>
-                                        <div class="reason-cell">
-                                            <span class="reason-text"><?php echo htmlspecialchars($c['reason']); ?></span>
-                                            <?php if (!empty($c['taken_by'])): ?>
-                                                <span class="taken-by">
-                                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($c['taken_by']); ?>
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td class="text-right">
-                                        <span class="amount-cashout">
-                                            <?php echo formatCurrency($c['amount']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-center">
-                                        <span class="status-badge status-<?php echo $status; ?>">
-                                            <i class="fas fa-<?php 
-                                                echo $status === 'pending' ? 'clock' : 
-                                                    ($status === 'approved' ? 'check-circle' : 
-                                                    ($status === 'rejected' ? 'times-circle' : 'ban')); 
-                                            ?>"></i>
-                                            <?php echo ucfirst($status); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div class="branch-cell">
-                                            <span class="branch-name"><?php echo htmlspecialchars($c['branch_display_name'] ?? 'Main'); ?></span>
-                                            <?php if (!empty($c['branch_display_code'])): ?>
-                                                <span class="branch-code-sm"><?php echo htmlspecialchars($c['branch_display_code']); ?></span>
-                                            <?php endif; ?>
+                                            <span class="date-main"><?php echo $month_display; ?></span>
                                         </div>
                                     </td>
                                     <td>
@@ -1368,54 +1320,99 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                                             <?php else: ?>
                                                 <div class="employee-avatar"><?php echo $emp_initial; ?></div>
                                             <?php endif; ?>
-                                            <span class="employee-name-sm"><?php echo htmlspecialchars($c['employee_name'] ?? 'N/A'); ?></span>
+                                            <div class="employee-info">
+                                                <span class="employee-name-sm"><?php echo htmlspecialchars($s['employee_name'] ?? 'N/A'); ?></span>
+                                                <?php if (!empty($s['employee_position'])): ?>
+                                                    <span class="employee-position"><?php echo htmlspecialchars($s['employee_position']); ?></span>
+                                                <?php endif; ?>
+                                            </div>
                                         </div>
                                     </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['base_salary']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['bonus']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['allowances']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['total_gross']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['tax']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-gross">
+                                            <?php echo formatCurrency($s['deductions']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-badge amount-net">
+                                            <?php echo formatCurrency($s['net_pay']); ?>
+                                        </span>
+                                    </td>
                                     <td class="text-center">
-                                        <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $c['id']; ?>" 
-                                               class="action-btn action-view" 
-                                               title="View">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <?php if ($is_admin && $status === 'pending'): ?>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=approve" 
-                                                   class="action-btn action-approve" 
-                                                   title="Approve"
-                                                   onclick="return confirm('Approve this cash out?')">
-                                                    <i class="fas fa-check"></i>
-                                                </a>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=reject" 
-                                                   class="action-btn action-reject" 
-                                                   title="Reject"
-                                                   onclick="return confirm('Reject this cash out?')">
-                                                    <i class="fas fa-times"></i>
-                                                </a>
+                                        <?php 
+                                        $status_classes = [
+                                            'paid' => 'status-paid',
+                                            'waiting' => 'status-waiting',
+                                            'upcoming' => 'status-upcoming',
+                                            'cancelled' => 'status-cancelled',
+                                        ];
+                                        $status_icons = [
+                                            'paid' => 'check-circle',
+                                            'waiting' => 'clock',
+                                            'upcoming' => 'calendar-check',
+                                            'cancelled' => 'times-circle',
+                                        ];
+                                        $s_class = $status_classes[$status] ?? 'status-waiting';
+                                        $s_icon = $status_icons[$status] ?? 'clock';
+                                        ?>
+                                        <span class="status-badge-sm <?php echo $s_class; ?>">
+                                            <i class="fas fa-<?php echo $s_icon; ?>"></i>
+                                            <?php echo ucfirst($status); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="branch-cell">
+                                            <span class="branch-name"><?php echo htmlspecialchars($s['branch_display_name'] ?? 'Main'); ?></span>
+                                            <?php if (!empty($s['branch_display_code'])): ?>
+                                                <span class="branch-code-sm"><?php echo htmlspecialchars($s['branch_display_code']); ?></span>
                                             <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                             
-                            <!-- TOTALS ROW -->
                             <tr class="totals-row">
-                                <td colspan="4" style="text-align:right;">GRAND TOTAL (<?php echo number_format($summary['total_count']); ?> records)</td>
+                                <td colspan="10" style="text-align:right;">TOTAL (<?php echo number_format($summary['total_count']); ?> salaries)</td>
                                 <td class="text-right">
                                     <span style="color: #DC2626; font-weight: 900; font-size: 14px;">
                                         <?php echo formatCurrency($summary['total_amount']); ?>
                                     </span>
                                 </td>
-                                <td colspan="4"></td>
+                                <td colspan="2"></td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
                 
-                <!-- NO RESULTS -->
                 <div class="empty-state" id="noSearchResults" style="display:none;">
                     <i class="fas fa-search-minus"></i>
                     <h3>No results found</h3>
-                    <p>No cash out records match your search.</p>
+                    <p>No salaries match your search.</p>
                     <button type="button" class="btn btn-secondary" onclick="clearLiveSearch()">
                         <i class="fas fa-times"></i> Clear Search
                     </button>
@@ -1423,12 +1420,12 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 
             <?php else: ?>
                 <div class="empty-state">
-                    <i class="fas fa-inbox"></i>
-                    <h3>No Cash Out Records</h3>
-                    <p>No records found for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
+                    <i class="fas fa-users"></i>
+                    <h3>No Salaries Found</h3>
+                    <p>No salaries for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
                     <p style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
                         <i class="fas fa-info-circle"></i>
-                        Try changing the quick filter, date range, or branch filter.
+                        Try changing the quick filter, date range, branch, or status.
                     </p>
                 </div>
             <?php endif; ?>
@@ -1439,14 +1436,11 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
 </div>
 
 <script>
-// ============================================================
-// LIVE SEARCH
-// ============================================================
 function performLiveSearch(searchTerm) {
-    const tableBody = document.getElementById('cashoutsTableBody');
+    const tableBody = document.getElementById('salariesTableBody');
     if (!tableBody) return;
     
-    const rows = tableBody.querySelectorAll('tr.cashout-row');
+    const rows = tableBody.querySelectorAll('tr.salary-row');
     const clearBtn = document.getElementById('searchClearBtn');
     const countBadge = document.getElementById('searchCountBadge');
     const noResults = document.getElementById('noSearchResults');
@@ -1461,10 +1455,7 @@ function performLiveSearch(searchTerm) {
             row.classList.remove('search-match', 'search-hidden');
             removeAllMarks(row);
         });
-        if (countBadge) {
-            countBadge.style.display = 'none';
-            countBadge.textContent = '0';
-        }
+        if (countBadge) { countBadge.style.display = 'none'; countBadge.textContent = '0'; }
         if (noResults) noResults.style.display = 'none';
         if (tableWrapper) tableWrapper.style.display = '';
         return;
@@ -1475,7 +1466,6 @@ function performLiveSearch(searchTerm) {
     
     rows.forEach(row => {
         removeAllMarks(row);
-        
         const searchText = (row.getAttribute('data-search') || '').toLowerCase();
         const rowText = row.textContent.toLowerCase();
         
@@ -1518,22 +1508,18 @@ function highlightMatchesInRow(row, term) {
     const cells = row.querySelectorAll('td');
     
     cells.forEach(cell => {
-        if (cell.querySelector('button')) return;
+        if (cell.querySelector('button') || cell.querySelector('a')) return;
         if (cell.querySelector('img') && cell.textContent.trim() === '') return;
         
-        const walker = document.createTreeWalker(
-            cell,
-            NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: function(node) {
-                    if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'MARK') return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'I') return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'BUTTON') return NodeFilter.FILTER_REJECT;
-                    return NodeFilter.FILTER_ACCEPT;
-                }
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) {
+                if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'MARK') return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'I') return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'BUTTON') return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
             }
-        );
+        });
         
         const textNodes = [];
         while (walker.nextNode()) textNodes.push(walker.currentNode);
@@ -1567,56 +1553,31 @@ function highlightMatchesInRow(row, term) {
 
 function clearLiveSearch() {
     const input = document.getElementById('liveSearchInput');
-    if (input) {
-        input.value = '';
-        performLiveSearch('');
-        input.focus();
-    }
+    if (input) { input.value = ''; performLiveSearch(''); input.focus(); }
 }
 
-// ============================================================
-// TABLE SCROLL
-// ============================================================
 function scrollTable(direction) {
     const wrapper = document.getElementById('tableWrapper');
     if (!wrapper) return;
-    const scrollAmount = 350;
     wrapper.scrollBy({
-        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        left: direction === 'left' ? -350 : 350,
         behavior: 'smooth'
     });
 }
 
-// ============================================================
-// KEYBOARD
-// ============================================================
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        const searchInput = document.getElementById('liveSearchInput');
-        if (searchInput && searchInput.value.length > 0) clearLiveSearch();
+        const i = document.getElementById('liveSearchInput');
+        if (i && i.value.length > 0) clearLiveSearch();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        const searchInput = document.getElementById('liveSearchInput');
-        if (searchInput) { searchInput.focus(); searchInput.select(); }
+        const i = document.getElementById('liveSearchInput');
+        if (i) { i.focus(); i.select(); }
     }
 });
 
-// ============================================================
-// INIT
-// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    var successAlert = document.querySelector('.alert-success');
-    if (successAlert) {
-        setTimeout(function() {
-            successAlert.style.transition = 'opacity 0.4s ease';
-            successAlert.style.opacity = '0';
-            setTimeout(function() {
-                if (successAlert.parentElement) successAlert.remove();
-            }, 400);
-        }, 8000);
-    }
-    
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';

@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: modules/morning_report/index_employee.php
-// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (EMPLOYEE) - FINAL
+// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (EMPLOYEE) - FINAL FIXED
 // 
 // ✅ BLUE THEME
 // ✅ Summary Cards: 2x2 GRID + SOFT BACKGROUND (60% opacity)
@@ -9,6 +9,9 @@
 // ✅ Report Card Design
 // ✅ View button kwenye Report Header
 // ✅ Employee anaona reports za branch yake tu
+// 
+// 🔧 FIX: Default from_date/to_date = date('Y-m-d') - tarehe ya leo TU
+// 🔧 FIX: "AWAITING STOCK" inaangalia tarehe ya leo TU (sio jana)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -54,17 +57,15 @@ $branch_code = $branch['branch_code'] ?? '';
 $branch_location = $branch['location'] ?? '';
 
 // ============================================================
-// FILTERS
-// ============================================================
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
-$to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
-$search    = isset($_GET['search'])    ? trim($_GET['search']) : '';
-
-// ============================================================
-// TODAY - Kwa ku-check "AWAITING STOCK"
+// ✅ FILTERS - DEFAULT = TAREHE YA LEO TU (FIXED!)
 // ============================================================
 $today_date = date('Y-m-d');
-$yesterday_date = date('Y-m-d', strtotime('-1 day'));
+
+// ✅ FIX: Default from_date = to_date = date('Y-m-d')
+// Hii inaonyesha report za tarehe ya leo TU
+$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today_date;
+$to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : $today_date;
+$search    = isset($_GET['search'])    ? trim($_GET['search']) : '';
 
 // ============================================================
 // FETCH MORNING REPORTS
@@ -139,18 +140,26 @@ try {
 }
 
 // ============================================================
-// CHECK KAMA KUNA "AWAITING STOCK" TODAY
+// ✅ CHECK "AWAITING STOCK" - TAREHE YA LEO TU
 // ============================================================
+// Tunaangalia kama branch ya employee ina morning report ya LEO
+// Kama haina, tunaonyesha "AWAITING STOCK" banner
+
 $awaiting_today = true;
 
-// Check kama report ya LEO au JANA ipo kwa branch hii
+// Angalia kama branch hii ina report ya LEO
 $stmt = $db->prepare("
     SELECT COUNT(*) FROM morning_reports 
-    WHERE branch_id = ? AND report_date IN (?, ?)
+    WHERE branch_id = ? AND report_date = ?
 ");
-$stmt->execute([$selected_branch, $today_date, $yesterday_date]);
+$stmt->execute([$selected_branch, $today_date]);
+
 if ($stmt->fetchColumn() > 0) {
+    // Ina report ya leo - haipo awaiting
     $awaiting_today = false;
+} else {
+    // Haina report ya leo - ipo awaiting
+    $awaiting_today = true;
 }
 
 // ============================================================
@@ -243,7 +252,7 @@ include_once '../../includes/employee_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-             AWAITING STOCK BANNER - Kila tarehe inapobadilika
+             ✅ AWAITING STOCK BANNER - INAONEKANA KAMA HAKUNA REPORT YA LEO
              ============================================================ -->
         <?php if ($awaiting_today): ?>
             <div class="awaiting-banner">
@@ -550,7 +559,7 @@ include_once '../../includes/employee_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-sun"></i>
                 <h3>No Morning Reports</h3>
-                <p>No morning reports found for your branch in this period.</p>
+                <p>No morning reports found for today (<?php echo date('d M Y'); ?>).</p>
                 <a href="add_employee.php" class="btn-new-report">
                     <i class="fas fa-plus-circle"></i> Create First Report
                 </a>

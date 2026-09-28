@@ -1,12 +1,13 @@
 <?php
 // ================================================================
-// FILE: modules/store_cash_out/index.php
-// WAKALA FINANCIAL SYSTEM - STORE CASH OUT
+// FILE: modules/reports/expenses.php
+// WAKALA FINANCIAL SYSTEM - EXPENSES REPORT
 // 🔴 RED THEME — SCOPED CSS — SIDEBAR SAFE
 // ✅ Quick Filter Buttons: All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom
-// ✅ Detailed cash out records
-// ✅ Search + Scroll buttons
-// ✅ Export PDF / CSV / Word
+// ✅ Detailed expenses with category breakdown
+// ✅ Summary cards + Category + Provider breakdown
+// ✅ Live Search + Scroll buttons
+// ✅ Export PDF
 // ================================================================
 
 require_once '../../config/config.php';
@@ -29,9 +30,13 @@ $is_admin = ($role === 'admin' || $role === 'super_admin');
 // ============================================================
 // 🔥 QUICK FILTER LOGIC
 // ============================================================
+// Kama mtumiaji amebonyeza quick filter (e.g. ?quick=today)
+// basi tunahesabu from_date/to_date automatically
+
 $quick = isset($_GET['quick']) ? trim($_GET['quick']) : '';
 $today = date('Y-m-d');
 
+// Default values
 $from_date = $today;
 $to_date = $today;
 $filter_label = 'Today';
@@ -89,6 +94,8 @@ if ($quick !== '') {
             $filter_label = 'Today';
     }
 } else {
+    // Kama hakuna quick filter, tumia from_date/to_date kutoka URL
+    // Kama hazipo, tumia Today kama default
     if (isset($_GET['from_date']) || isset($_GET['to_date'])) {
         $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today;
         $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : $today;
@@ -103,9 +110,9 @@ if ($quick !== '') {
 }
 
 $selected_branch = isset($_GET['branch_id']) ? intval($_GET['branch_id']) : 0;
-$selected_status = isset($_GET['status']) && in_array($_GET['status'], ['all', 'pending', 'approved', 'rejected', 'cancelled']) 
-    ? $_GET['status'] : 'all';
+$selected_category = isset($_GET['category']) ? trim($_GET['category']) : '';
 
+// Validate dates
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from_date)) $from_date = $today;
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to_date)) $to_date = $today;
 
@@ -138,78 +145,106 @@ if ($is_admin) {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Get expense categories
+$categories = [];
+try {
+    $stmt = $db->prepare("SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY category_name");
+    $stmt->execute();
+    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $categories = [];
+}
+
 // ============================================================
-// GET STORE CASH OUT
+// GET EXPENSES
 // ============================================================
-$cashouts = [];
+$expenses = [];
 $summary = [
     'total_count' => 0,
     'total_amount' => 0,
-    'pending_count' => 0,
-    'pending_amount' => 0,
-    'approved_count' => 0,
-    'approved_amount' => 0,
-    'rejected_count' => 0,
-    'rejected_amount' => 0,
+    'business_amount' => 0,
+    'non_business_amount' => 0,
+    'salary_amount' => 0,
+    'other_amount' => 0,
 ];
 
 try {
     $sql = "
         SELECT 
-            sco.*,
-            b.branch_name as branch_display_name,
-            b.branch_code as branch_display_code,
+            ex.*,
             e.full_name as employee_name,
             e.employee_id as employee_code,
-            e.profile_pic as employee_avatar
-        FROM store_cash_out sco
-        LEFT JOIN branches b ON sco.branch_id = b.id
-        LEFT JOIN employees e ON sco.employee_id = e.id
-        WHERE sco.cashout_date BETWEEN ? AND ?
+            e.profile_pic as employee_avatar,
+            b.branch_name as branch_display_name,
+            b.branch_code as branch_display_code
+        FROM expenses ex
+        LEFT JOIN employees e ON ex.employee_id = e.id
+        LEFT JOIN branches b ON ex.branch_id = b.id
+        WHERE ex.expense_date BETWEEN ? AND ?
     ";
     $params = [$from_date, $to_date];
 
     if ($selected_branch > 0) {
-        $sql .= " AND sco.branch_id = ?";
+        $sql .= " AND ex.branch_id = ?";
         $params[] = $selected_branch;
     }
 
-    if ($selected_status !== 'all') {
-        $sql .= " AND sco.status = ?";
-        $params[] = $selected_status;
+    if (!empty($selected_category)) {
+        $sql .= " AND ex.category = ?";
+        $params[] = $selected_category;
     }
 
-    $sql .= " ORDER BY sco.cashout_date DESC, sco.id DESC";
+    $sql .= " ORDER BY ex.expense_date DESC, ex.id DESC";
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Calculate summary
-    foreach ($cashouts as $c) {
-        $amount = floatval($c['amount'] ?? 0);
+    foreach ($expenses as $ex) {
         $summary['total_count']++;
+        $amount = floatval($ex['amount']);
         $summary['total_amount'] += $amount;
-        
-        switch ($c['status']) {
-            case 'pending':
-                $summary['pending_count']++;
-                $summary['pending_amount'] += $amount;
-                break;
-            case 'approved':
-                $summary['approved_count']++;
-                $summary['approved_amount'] += $amount;
-                break;
-            case 'rejected':
-                $summary['rejected_count']++;
-                $summary['rejected_amount'] += $amount;
-                break;
+
+        if (!empty($ex['is_business_expense'])) {
+            $summary['business_amount'] += $amount;
+        } else {
+            $summary['non_business_amount'] += $amount;
+        }
+
+        if (!empty($ex['is_salary_related'])) {
+            $summary['salary_amount'] += $amount;
+        } else {
+            $summary['other_amount'] += $amount;
         }
     }
 
+    // Category Breakdown
+    $sql_categories = "
+        SELECT 
+            ex.category,
+            COUNT(*) as count,
+            COALESCE(SUM(ex.amount), 0) as total_amount
+        FROM expenses ex
+        WHERE ex.expense_date BETWEEN ? AND ?
+    ";
+    $params_cat = [$from_date, $to_date];
+
+    if ($selected_branch > 0) {
+        $sql_categories .= " AND ex.branch_id = ?";
+        $params_cat[] = $selected_branch;
+    }
+
+    $sql_categories .= " GROUP BY ex.category ORDER BY total_amount DESC LIMIT 8";
+
+    $stmt = $db->prepare($sql_categories);
+    $stmt->execute($params_cat);
+    $category_breakdown = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 } catch (PDOException $e) {
-    error_log("Store cash out error: " . $e->getMessage());
-    $cashouts = [];
+    error_log("Expenses error: " . $e->getMessage());
+    $expenses = [];
+    $category_breakdown = [];
 }
 
 $success_message = '';
@@ -218,12 +253,26 @@ if (isset($_SESSION['success_message'])) {
     unset($_SESSION['success_message']);
 }
 
+// Helper function to build URL with filter params
+function buildFilterUrl($quick_type, $from_date, $to_date, $branch_id, $category = '') {
+    $params = [
+        'quick' => $quick_type,
+        'from_date' => $from_date,
+        'to_date' => $to_date,
+        'branch_id' => $branch_id,
+    ];
+    if (!empty($category)) {
+        $params['category'] = $category;
+    }
+    return '?' . http_build_query($params);
+}
+
 include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_header.php';
 include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_sidebar.php';
 include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_topbar.php';
 ?>
 
-<style id="cashout-scoped">
+<style id="expenses-report-scoped">
 /* ============================================================
    🔴 RED THEME VARIABLES
    ============================================================ */
@@ -278,7 +327,9 @@ html.dark-mode .main-wrapper {
     width: 100% !important;
 }
 
-/* BRANCH INDICATOR */
+/* ============================================================
+   🔴 BRANCH INDICATOR
+   ============================================================ */
 .main-wrapper .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -337,6 +388,7 @@ html.dark-mode .main-wrapper {
 }
 .main-wrapper .header-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* BUTTONS */
 .main-wrapper .btn {
     padding: 10px 20px; border: none; border-radius: 10px;
     font-weight: 700; font-size: 13px; cursor: pointer;
@@ -358,81 +410,245 @@ html.dark-mode .main-wrapper {
     background: var(--bg-input); color: var(--text-secondary);
     border: 1.5px solid var(--border-color);
 }
-.main-wrapper .btn-secondary:hover { background: var(--bg-card); color: var(--text-primary); }
-
-.main-wrapper .btn-add {
-    background: linear-gradient(135deg, #059669, #10B981);
-    color: #FFFFFF; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+.main-wrapper .btn-secondary:hover { 
+    background: var(--red-lighter); 
+    color: var(--red-dark); 
+    border-color: var(--red-accent);
 }
-.main-wrapper .btn-add:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
-    color: #FFFFFF;
-}
-
-/* ALERTS */
-.main-wrapper .alert {
-    padding: 14px 18px; border-radius: 10px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-.main-wrapper .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE5; }
 
 /* ============================================================
    🔥 QUICK FILTER BUTTONS - RED THEME
    ============================================================ */
 .main-wrapper .quick-filters {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    margin-bottom: 12px; padding: 10px 14px;
-    background: var(--bg-card); border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border-radius: 12px;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .main-wrapper .quick-filters-label {
-    font-size: 11px; font-weight: 800; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.8px;
-    margin-right: 6px; display: flex; align-items: center; gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-right: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
-.main-wrapper .quick-filters-label i { color: #DC2626; font-size: 12px; }
+.main-wrapper .quick-filters-label i {
+    color: #DC2626;
+    font-size: 12px;
+}
 .main-wrapper .quick-filter-btn {
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 800; cursor: pointer;
-    text-decoration: none; transition: all 0.25s ease;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.25s ease;
     border: 1.5px solid var(--border-color);
-    background: var(--bg-card); color: var(--text-secondary);
-    display: inline-flex; align-items: center; gap: 5px;
-    white-space: nowrap; font-family: 'Inter', sans-serif;
-    text-transform: uppercase; letter-spacing: 0.3px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
-.main-wrapper .quick-filter-btn i { font-size: 11px; }
+.main-wrapper .quick-filter-btn i {
+    font-size: 11px;
+}
 .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); border-color: var(--red-accent);
+    background: var(--red-lighter);
+    border-color: var(--red-accent);
     color: var(--red-dark);
     transform: translateY(-2px);
     box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15);
 }
 .main-wrapper .quick-filter-btn.active {
     background: linear-gradient(135deg, #DC2626, #B91C1C);
-    border-color: #991B1B; color: #FFFFFF;
+    border-color: #991B1B;
+    color: #FFFFFF;
     box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
     transform: translateY(-2px);
 }
-.main-wrapper .quick-filter-btn.active i { color: #FCD34D; }
-.main-wrapper .quick-filter-btn.active:hover {
-    background: linear-gradient(135deg, #B91C1C, #991B1B); color: #FFFFFF;
+.main-wrapper .quick-filter-btn.active i {
+    color: #FCD34D;
 }
+.main-wrapper .quick-filter-btn.active:hover {
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+    color: #FFFFFF;
+}
+
+/* Dark mode */
 html.dark-mode .main-wrapper .quick-filter-btn {
-    background: var(--bg-card); border-color: var(--border-color);
+    background: var(--bg-card);
+    border-color: var(--border-color);
     color: var(--text-secondary);
 }
 html.dark-mode .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); color: #FCA5A5; border-color: #DC2626;
+    background: var(--red-lighter);
+    color: #FCA5A5;
+    border-color: #DC2626;
 }
 html.dark-mode .main-wrapper .quick-filter-btn.active {
     background: linear-gradient(135deg, #DC2626, #991B1B);
-    color: #FFFFFF; border-color: #FCA5A5;
+    color: #FFFFFF;
+    border-color: #FCA5A5;
 }
+
+/* ============================================================
+   🔴 SUMMARY CARDS
+   ============================================================ */
+.main-wrapper .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+}
+.main-wrapper .summary-card {
+    position: relative; border-radius: 14px; padding: 18px 20px;
+    display: flex; align-items: center; gap: 14px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0; overflow: hidden;
+    border: 1.5px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.main-wrapper .summary-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 28px rgba(220, 38, 38, 0.15);
+}
+.main-wrapper .summary-card-blue {
+    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
+}
+.main-wrapper .summary-card-blue .summary-icon {
+    background: rgba(220, 38, 38, 0.15); color: #DC2626;
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+}
+.main-wrapper .summary-card-blue .summary-value { color: #991B1B; }
+.main-wrapper .summary-card-green {
+    background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2);
+}
+.main-wrapper .summary-card-green .summary-icon {
+    background: rgba(5, 150, 105, 0.15); color: #059669;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+.main-wrapper .summary-card-green .summary-value { color: #047857; }
+.main-wrapper .summary-card-orange {
+    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
+}
+.main-wrapper .summary-card-orange .summary-icon {
+    background: rgba(217, 119, 6, 0.15); color: #D97706;
+    border: 1.5px solid rgba(217, 119, 6, 0.3);
+}
+.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
+
+html.dark-mode .main-wrapper .summary-card-blue { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html.dark-mode .main-wrapper .summary-card-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
+html.dark-mode .main-wrapper .summary-card-blue .summary-value { color: #FCA5A5; }
+html.dark-mode .main-wrapper .summary-card-green .summary-value { color: #6EE7B7; }
+html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
+
+.main-wrapper .summary-icon {
+    width: 50px; height: 50px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
+}
+.main-wrapper .summary-card:hover .summary-icon { transform: scale(1.08) rotate(-4deg); }
+.main-wrapper .summary-info {
+    display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px;
+}
+.main-wrapper .summary-label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.main-wrapper .summary-value {
+    font-size: 18px; font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px; line-height: 1.2; word-break: break-word;
+}
+.main-wrapper .summary-sub {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
+}
+
+/* CATEGORY BREAKDOWN */
+.main-wrapper .category-section {
+    background: var(--bg-card); border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    padding: 18px 20px; margin-bottom: 18px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.main-wrapper .category-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.main-wrapper .category-section-title {
+    font-size: 14px; font-weight: 800; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.main-wrapper .category-section-title i { color: #DC2626; }
+.main-wrapper .category-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+.main-wrapper .category-card-mini {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    transition: all 0.25s ease;
+    min-width: 0;
+}
+.main-wrapper .category-card-mini:hover {
+    transform: translateY(-2px);
+    border-color: #DC2626;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.15);
+}
+.main-wrapper .category-icon {
+    width: 42px; height: 42px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+    color: #DC2626;
+    border: 1.5px solid #FCA5A5;
+}
+html.dark-mode .main-wrapper .category-icon {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+}
+.main-wrapper .category-info {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.main-wrapper .category-name {
+    font-size: 13px; font-weight: 800; color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.main-wrapper .category-count {
+    font-size: 10px; color: var(--text-muted); font-weight: 600;
+}
+.main-wrapper .category-amount {
+    font-size: 13px; font-weight: 900;
+    color: #DC2626;
+    font-family: 'Inter', 'Courier New', monospace;
+    white-space: nowrap;
+}
+html.dark-mode .main-wrapper .category-amount { color: #FCA5A5; }
 
 /* FILTER BAR */
 .main-wrapper .filter-bar {
@@ -468,126 +684,6 @@ html.dark-mode .main-wrapper .quick-filter-btn.active {
 }
 .main-wrapper .filter-actions { display: flex; gap: 8px; }
 
-/* STATUS TABS */
-.main-wrapper .status-tabs {
-    display: flex; gap: 6px; flex-wrap: wrap;
-    background: var(--bg-input);
-    padding: 5px; border-radius: 10px;
-    border: 1.5px solid var(--border-color);
-}
-.main-wrapper .status-tab {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 700;
-    color: var(--text-secondary);
-    text-decoration: none; transition: all 0.25s ease;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    white-space: nowrap;
-}
-.main-wrapper .status-tab:hover { background: var(--bg-card); color: var(--text-primary); }
-.main-wrapper .status-tab.active {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    color: #FFFFFF;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .status-tab.tab-pending.active {
-    background: linear-gradient(135deg, #D97706, #F59E0B);
-    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .status-tab.tab-approved.active {
-    background: linear-gradient(135deg, #059669, #10B981);
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .status-tab.tab-rejected.active {
-    background: linear-gradient(135deg, #DC2626, #EF4444);
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-
-/* SUMMARY CARDS */
-.main-wrapper .summary-cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 18px;
-}
-.main-wrapper .summary-card {
-    position: relative; border-radius: 14px; padding: 18px 20px;
-    display: flex; align-items: center; gap: 14px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 0; overflow: hidden;
-    border: 1.5px solid transparent;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-.main-wrapper .summary-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 28px rgba(220, 38, 38, 0.15);
-}
-.main-wrapper .summary-card-blue {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
-}
-.main-wrapper .summary-card-blue .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .summary-card-blue .summary-value { color: #991B1B; }
-.main-wrapper .summary-card-orange {
-    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
-}
-.main-wrapper .summary-card-orange .summary-icon {
-    background: rgba(217, 119, 6, 0.15); color: #D97706;
-    border: 1.5px solid rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
-.main-wrapper .summary-card-green {
-    background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2);
-}
-.main-wrapper .summary-card-green .summary-icon {
-    background: rgba(5, 150, 105, 0.15); color: #059669;
-    border: 1.5px solid rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .summary-card-green .summary-value { color: #047857; }
-.main-wrapper .summary-card-red {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
-}
-.main-wrapper .summary-card-red .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .summary-card-red .summary-value { color: #B91C1C; }
-
-html.dark-mode .main-wrapper .summary-card-blue { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
-html.dark-mode .main-wrapper .summary-card-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
-html.dark-mode .main-wrapper .summary-card-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-blue .summary-value { color: #FCA5A5; }
-html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
-html.dark-mode .main-wrapper .summary-card-green .summary-value { color: #34D399; }
-html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; }
-
-.main-wrapper .summary-icon {
-    width: 50px; height: 50px; border-radius: 13px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
-}
-.main-wrapper .summary-card:hover .summary-icon { transform: scale(1.08) rotate(-4deg); }
-.main-wrapper .summary-info {
-    display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px;
-}
-.main-wrapper .summary-label {
-    font-size: 10px; font-weight: 800; text-transform: uppercase;
-    letter-spacing: 0.8px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.main-wrapper .summary-value {
-    font-size: 18px; font-weight: 900;
-    font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px; line-height: 1.2; word-break: break-word;
-}
-.main-wrapper .summary-sub {
-    font-size: 10px; font-weight: 600; color: var(--text-muted);
-    display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
-}
-
 /* TABLE CONTAINER */
 .main-wrapper .table-container {
     background: var(--bg-card); border-radius: 14px;
@@ -595,8 +691,6 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     overflow: hidden;
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-
-/* TABLE HEADER */
 .main-wrapper .table-header {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     padding: 16px 20px; color: #FFFFFF;
@@ -718,11 +812,14 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     background: linear-gradient(135deg, #DC2626, #B91C1C);
     border-radius: 4px;
 }
+.main-wrapper .table-wrapper::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #B91C1C, #991B1B);
+}
 
 /* DATA TABLE */
 .main-wrapper .data-table {
     width: 100%; border-collapse: collapse;
-    font-size: 12px; min-width: 1200px;
+    font-size: 12px; min-width: 1300px;
 }
 .main-wrapper .data-table thead tr { background: var(--bg-table-even); }
 .main-wrapper .data-table thead th {
@@ -786,8 +883,8 @@ html.dark-mode .main-wrapper .date-main { color: #FCA5A5; }
     font-size: 10px; color: var(--text-muted);
 }
 
-/* CASHOUT NUMBER */
-.main-wrapper .cashout-number {
+/* EXPENSE NUMBER */
+.main-wrapper .expense-number {
     font-family: 'Courier New', monospace;
     font-size: 11px; font-weight: 800;
     color: #DC2626; background: #FEE2E2;
@@ -795,9 +892,83 @@ html.dark-mode .main-wrapper .date-main { color: #FCA5A5; }
     white-space: nowrap;
     border: 1.5px solid #FCA5A5;
 }
-html.dark-mode .main-wrapper .cashout-number {
+html.dark-mode .main-wrapper .expense-number {
     background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
 }
+
+/* CATEGORY BADGE */
+.main-wrapper .category-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 12px; border-radius: 8px;
+    font-size: 10px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+    background: #FEE2E2; color: #991B1B;
+    border: 1.5px solid #FCA5A5;
+}
+html.dark-mode .main-wrapper .category-badge {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+}
+
+/* EXPENSE NAME */
+.main-wrapper .expense-name-cell {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 0;
+}
+.main-wrapper .expense-name-text {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 220px;
+}
+.main-wrapper .expense-desc {
+    font-size: 10px; color: var(--text-muted);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 220px;
+}
+
+/* AMOUNT */
+.main-wrapper .amount-expense {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: 8px;
+    font-weight: 900; font-size: 12px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    background: #FEE2E2; color: #991B1B;
+    border: 1.5px solid #FCA5A5;
+}
+html.dark-mode .main-wrapper .amount-expense {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+}
+
+/* STATUS BADGES */
+.main-wrapper .status-badge-sm {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 6px;
+    font-size: 9px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.main-wrapper .status-business {
+    background: #DCFCE7; color: #15803D;
+    border: 1.5px solid #86EFAC;
+}
+.main-wrapper .status-non-business {
+    background: #FEE2E2; color: #991B1B;
+    border: 1.5px solid #FCA5A5;
+}
+.main-wrapper .status-salary {
+    background: #DBEAFE; color: #1D4ED8;
+    border: 1.5px solid #93C5FD;
+}
+.main-wrapper .status-other {
+    background: #FEF3C7; color: #B45309;
+    border: 1.5px solid #FCD34D;
+}
+html.dark-mode .main-wrapper .status-business { background: #14532D; color: #4ADE80; border-color: #16A34A; }
+html.dark-mode .main-wrapper .status-non-business { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .main-wrapper .status-salary { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+html.dark-mode .main-wrapper .status-other { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
 
 /* BRANCH CELL */
 .main-wrapper .branch-cell {
@@ -840,112 +1011,32 @@ html.dark-mode .main-wrapper .branch-code-sm {
     text-overflow: ellipsis; max-width: 120px;
 }
 
-/* REASON CELL */
-.main-wrapper .reason-cell {
-    display: flex; flex-direction: column; gap: 2px;
-    min-width: 0;
-}
-.main-wrapper .reason-text {
-    font-size: 12px; font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-.main-wrapper .taken-by {
-    font-size: 10px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-
-/* AMOUNT */
-.main-wrapper .amount-cashout {
-    display: inline-flex; align-items: center;
-    padding: 4px 12px; border-radius: 8px;
-    font-weight: 900; font-size: 12px;
-    font-family: 'Courier New', monospace;
-    white-space: nowrap;
-    background: #FEE2E2; color: #991B1B;
-    border: 1.5px solid #FCA5A5;
-}
-html.dark-mode .main-wrapper .amount-cashout {
-    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
-}
-
-/* STATUS BADGE */
-.main-wrapper .status-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 8px;
+/* RECEIPT */
+.main-wrapper .receipt-cell {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px;
+    background: #F0FDF4; color: #059669;
+    border-radius: 6px;
     font-size: 10px; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.5px;
+    text-decoration: none;
+    border: 1.5px solid #BBF7D0;
+    transition: all 0.2s ease;
     white-space: nowrap;
 }
-.main-wrapper .status-pending {
-    background: #FEF3C7; color: #B45309;
-    border: 1.5px solid #FCD34D;
-}
-.main-wrapper .status-approved {
-    background: #DCFCE7; color: #15803D;
-    border: 1.5px solid #86EFAC;
-}
-.main-wrapper .status-rejected {
-    background: #FEE2E2; color: #991B1B;
-    border: 1.5px solid #FCA5A5;
-}
-.main-wrapper .status-cancelled {
-    background: #E5E7EB; color: #4B5563;
-    border: 1.5px solid #9CA3AF;
-}
-html.dark-mode .main-wrapper .status-pending { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
-html.dark-mode .main-wrapper .status-approved { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .status-rejected { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
-html.dark-mode .main-wrapper .status-cancelled { background: #374151; color: #9CA3AF; border-color: #6B7280; }
-
-/* ACTION BUTTONS */
-.main-wrapper .action-buttons {
-    display: flex;
-    gap: 6px;
-    justify-content: center;
-}
-.main-wrapper .action-btn {
-    width: 32px; height: 32px;
-    border-radius: 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    text-decoration: none;
-    transition: all 0.2s ease;
-    border: 1.5px solid;
-    cursor: pointer;
-    padding: 0;
-}
-.main-wrapper .action-view {
-    background: #DBEAFE; color: #1D4ED8;
-    border-color: #93C5FD;
-}
-.main-wrapper .action-view:hover {
-    background: #1D4ED8; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-.main-wrapper .action-approve {
-    background: #DCFCE7; color: #15803D;
-    border-color: #86EFAC;
-}
-.main-wrapper .action-approve:hover {
+.main-wrapper .receipt-cell:hover {
     background: #059669; color: #FFFFFF;
-    transform: translateY(-2px);
+    border-color: #059669;
 }
-.main-wrapper .action-reject {
-    background: #FEE2E2; color: #991B1B;
-    border-color: #FCA5A5;
+.main-wrapper .no-receipt {
+    font-size: 10px; color: var(--text-light);
+    font-style: italic;
 }
-.main-wrapper .action-reject:hover {
-    background: #DC2626; color: #FFFFFF;
-    transform: translateY(-2px);
+html.dark-mode .main-wrapper .receipt-cell {
+    background: #14532D; color: #4ADE80; border-color: #16A34A;
 }
-html.dark-mode .main-wrapper .action-view { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .main-wrapper .action-approve { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .action-reject { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .main-wrapper .receipt-cell:hover {
+    background: #059669; color: #FFFFFF;
+}
 
 /* TOTALS ROW */
 .main-wrapper .data-table tbody tr.totals-row {
@@ -1006,8 +1097,6 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
     .main-wrapper .data-table { min-width: 1000px; }
     .main-wrapper .quick-filters { padding: 8px 10px; gap: 5px; }
     .main-wrapper .quick-filter-btn { padding: 7px 12px; font-size: 11px; flex: 1; justify-content: center; }
-    .main-wrapper .status-tabs { width: 100%; }
-    .main-wrapper .status-tab { flex: 1; justify-content: center; }
 }
 @media (max-width: 480px) {
     .main-wrapper .summary-value { font-size: 16px; }
@@ -1026,10 +1115,10 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
-                    <i class="fas fa-money-bill-wave"></i>
+                    <i class="fas fa-receipt"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">Store Cash Out</span>
+                    <span class="branch-indicator-label">Expenses Report</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -1047,7 +1136,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-money-bill-wave" style="color:#DC2626;"></i> Store Cash Out</h2>
+                <h2><i class="fas fa-receipt" style="color:#DC2626;"></i> Expenses Report</h2>
                 <p class="text-muted">
                     <i class="fas fa-calendar"></i>
                     <?php echo date('d M Y', strtotime($from_date)); ?> — <?php echo date('d M Y', strtotime($to_date)); ?>
@@ -1056,88 +1145,27 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                     <?php echo htmlspecialchars($filter_label); ?>
                     •
                     <i class="fas fa-list"></i>
-                    <?php echo number_format($summary['total_count']); ?> records
+                    <?php echo number_format($summary['total_count']); ?> expenses
                 </p>
             </div>
             <div class="header-right">
-                <a href="create.php" class="btn btn-add">
-                    <i class="fas fa-plus-circle"></i> Add New
-                </a>
-                <a href="../reports/export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&format=pdf" 
+                <a href="export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&format=pdf" 
                    class="btn btn-primary" target="_blank">
                     <i class="fas fa-file-pdf"></i> Export
                 </a>
-                <a href="../reports/index.php" class="btn btn-secondary">
+                <a href="index.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>" 
+                   class="btn btn-secondary">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
         </div>
 
         <?php if (!empty($success_message)): ?>
-            <div class="alert alert-success">
+            <div style="padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; display: flex; align-items: center; gap: 12px;">
                 <i class="fas fa-check-circle"></i>
                 <span><?php echo htmlspecialchars($success_message); ?></span>
             </div>
         <?php endif; ?>
-
-        <!-- SUMMARY CARDS -->
-        <div class="summary-cards">
-            <div class="summary-card summary-card-blue">
-                <div class="summary-icon">
-                    <i class="fas fa-list"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Records</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_count']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-money-bill"></i>
-                        <?php echo formatCurrency($summary['total_amount']); ?>
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-orange">
-                <div class="summary-icon">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Pending</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['pending_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['pending_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-green">
-                <div class="summary-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Approved</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['approved_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['approved_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-red">
-                <div class="summary-icon">
-                    <i class="fas fa-times-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Rejected</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['rejected_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['rejected_count']); ?> records
-                    </span>
-                </div>
-            </div>
-        </div>
 
         <!-- 🔥 QUICK FILTER BUTTONS -->
         <div class="quick-filters">
@@ -1163,7 +1191,8 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 $url = '?' . http_build_query([
                     'quick' => $opt['key'],
                     'branch_id' => $selected_branch,
-                    'status' => $selected_status,
+                    'category' => $selected_category,
+                    // Kwa custom, tunahifadhi from_date/to_date za sasa
                     'from_date' => ($opt['key'] === 'custom') ? $from_date : '',
                     'to_date'   => ($opt['key'] === 'custom') ? $to_date : '',
                 ]);
@@ -1178,19 +1207,108 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <?php endforeach; ?>
         </div>
 
+        <!-- SUMMARY CARDS -->
+        <div class="summary-cards">
+            <div class="summary-card summary-card-blue">
+                <div class="summary-icon">
+                    <i class="fas fa-receipt"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Expenses</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['total_count']); ?> records
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-green">
+                <div class="summary-icon">
+                    <i class="fas fa-briefcase"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Business Expenses</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['business_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-check-circle"></i>
+                        Deductible
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-blue">
+                <div class="summary-icon">
+                    <i class="fas fa-users"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Salary Related</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['salary_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-user-tie"></i>
+                        Employee payments
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-orange">
+                <div class="summary-icon">
+                    <i class="fas fa-coins"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Other Expenses</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['other_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        Non-salary
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY BREAKDOWN -->
+        <?php if (count($category_breakdown) > 0): ?>
+        <div class="category-section">
+            <div class="category-section-header">
+                <div class="category-section-title">
+                    <i class="fas fa-chart-pie"></i>
+                    Top Expense Categories
+                </div>
+                <span style="font-size: 11px; font-weight: 800; background: #FEE2E2; color: #991B1B; padding: 4px 12px; border-radius: 8px; border: 1.5px solid #FCA5A5;">
+                    <?php echo count($category_breakdown); ?> categories
+                </span>
+            </div>
+            <div class="category-grid">
+                <?php foreach ($category_breakdown as $cat): ?>
+                    <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&category=<?php echo urlencode($cat['category']); ?>" 
+                       class="category-card-mini" style="text-decoration: none;">
+                        <div class="category-icon">
+                            <i class="fas fa-tag"></i>
+                        </div>
+                        <div class="category-info">
+                            <span class="category-name"><?php echo htmlspecialchars($cat['category']); ?></span>
+                            <span class="category-count"><?php echo number_format($cat['count']); ?> transactions</span>
+                        </div>
+                        <span class="category-amount"><?php echo formatCurrency($cat['total_amount']); ?></span>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <!-- FILTER BAR -->
         <div class="filter-bar">
             <form method="GET" action="" class="filter-form">
-                <input type="hidden" name="quick" value="custom">
+                <input type="hidden" name="quick" value="<?php echo htmlspecialchars($quick); ?>">
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> From Date</label>
+                    <label><i class="fas fa-calendar-day"></i> From</label>
                     <input type="date" name="from_date" class="form-control" 
                            value="<?php echo htmlspecialchars($from_date); ?>">
                 </div>
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> To Date</label>
+                    <label><i class="fas fa-calendar-day"></i> To</label>
                     <input type="date" name="to_date" class="form-control" 
                            value="<?php echo htmlspecialchars($to_date); ?>">
                 </div>
@@ -1210,34 +1328,22 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 <?php endif; ?>
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-filter"></i> Status</label>
-                    <div class="status-tabs">
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=all" 
-                           class="status-tab <?php echo $selected_status === 'all' ? 'active' : ''; ?>">
-                            <i class="fas fa-list"></i> All
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=pending" 
-                           class="status-tab tab-pending <?php echo $selected_status === 'pending' ? 'active' : ''; ?>">
-                            <i class="fas fa-clock"></i> Pending
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=approved" 
-                           class="status-tab tab-approved <?php echo $selected_status === 'approved' ? 'active' : ''; ?>">
-                            <i class="fas fa-check-circle"></i> Approved
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=rejected" 
-                           class="status-tab tab-rejected <?php echo $selected_status === 'rejected' ? 'active' : ''; ?>">
-                            <i class="fas fa-times-circle"></i> Rejected
-                        </a>
-                    </div>
+                    <label><i class="fas fa-filter"></i> Category</label>
+                    <select name="category" class="form-control">
+                        <option value="">All Categories</option>
+                        <?php foreach ($categories as $c): ?>
+                            <option value="<?php echo htmlspecialchars($c['category_name']); ?>" 
+                                <?php echo $selected_category === $c['category_name'] ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($c['category_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
                 
                 <div class="filter-actions">
                     <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-search"></i> Apply Filter
+                        <i class="fas fa-search"></i> Apply
                     </button>
-                    <a href="index.php" class="btn btn-secondary">
-                        <i class="fas fa-undo"></i> Reset
-                    </a>
                 </div>
             </form>
         </div>
@@ -1247,8 +1353,8 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <div class="table-header">
                 <div class="table-header-left">
                     <i class="fas fa-list-alt"></i>
-                    <h3>Cash Out Records</h3>
-                    <span class="count-badge" id="totalCountBadge"><?php echo count($cashouts); ?></span>
+                    <h3>Expenses<?php echo !empty($selected_category) ? ' - ' . htmlspecialchars($selected_category) : ''; ?></h3>
+                    <span class="count-badge" id="totalCountBadge"><?php echo count($expenses); ?></span>
                 </div>
                 
                 <div class="table-header-right">
@@ -1256,7 +1362,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                         <i class="fas fa-search"></i>
                         <input type="text" 
                                id="liveSearchInput" 
-                               placeholder="Search cash out..."
+                               placeholder="Search expenses..."
                                oninput="performLiveSearch(this.value)"
                                autocomplete="off">
                         <button type="button" 
@@ -1283,80 +1389,102 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 </div>
             </div>
             
-            <?php if (count($cashouts) > 0): ?>
+            <?php if (count($expenses) > 0): ?>
                 <div class="table-wrapper" id="tableWrapper">
-                    <table class="data-table" id="cashoutsTable">
+                    <table class="data-table" id="expensesTable">
                         <thead>
                             <tr>
                                 <th style="width: 50px;">#</th>
                                 <th>Date</th>
-                                <th>Cashout #</th>
-                                <th>Reason</th>
+                                <th>Expense #</th>
+                                <th>Category</th>
+                                <th>Expense Name</th>
                                 <th class="text-right">Amount</th>
-                                <th class="text-center">Status</th>
+                                <th class="text-center">Type</th>
+                                <th>Receipt</th>
                                 <th>Branch</th>
                                 <th>Employee</th>
-                                <th class="text-center">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="cashoutsTableBody">
-                            <?php $i = 1; foreach ($cashouts as $c): 
-                                $c_date = date('d M Y', strtotime($c['cashout_date']));
-                                $c_time = date('H:i', strtotime($c['created_at']));
-                                $emp_initial = strtoupper(substr($c['employee_name'] ?? 'N', 0, 1));
-                                $emp_avatar = $c['employee_avatar'] ?? '';
-                                $status = $c['status'] ?? 'pending';
+                        <tbody id="expensesTableBody">
+                            <?php $i = 1; foreach ($expenses as $ex): 
+                                $ex_date = date('d M Y', strtotime($ex['expense_date']));
+                                $emp_initial = strtoupper(substr($ex['employee_name'] ?? 'N', 0, 1));
+                                $emp_avatar = $ex['employee_avatar'] ?? '';
+                                $is_business = !empty($ex['is_business_expense']);
+                                $is_salary = !empty($ex['is_salary_related']);
                                 
                                 $search_text = strtolower(
-                                    ($c['cashout_number'] ?? '') . ' ' . 
-                                    ($c['reason'] ?? '') . ' ' . 
-                                    ($c['taken_by'] ?? '') . ' ' .
-                                    ($c['employee_name'] ?? '') . ' ' .
-                                    ($c['branch_display_name'] ?? '') . ' ' .
-                                    $c['amount']
+                                    ($ex['expense_number'] ?? '') . ' ' . 
+                                    ($ex['expense_name'] ?? '') . ' ' . 
+                                    ($ex['category'] ?? '') . ' ' .
+                                    ($ex['description'] ?? '') . ' ' .
+                                    ($ex['employee_name'] ?? '') . ' ' .
+                                    ($ex['branch_display_name'] ?? '') . ' ' .
+                                    $ex['amount']
                                 );
                             ?>
-                                <tr class="cashout-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
+                                <tr class="expense-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
                                     <td><span class="row-number"><?php echo $i++; ?></span></td>
                                     <td>
                                         <div class="date-cell">
-                                            <span class="date-main"><?php echo $c_date; ?></span>
-                                            <span class="time-sub"><?php echo $c_time; ?></span>
+                                            <span class="date-main"><?php echo $ex_date; ?></span>
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="cashout-number"><?php echo htmlspecialchars($c['cashout_number']); ?></span>
+                                        <span class="expense-number"><?php echo htmlspecialchars($ex['expense_number']); ?></span>
                                     </td>
                                     <td>
-                                        <div class="reason-cell">
-                                            <span class="reason-text"><?php echo htmlspecialchars($c['reason']); ?></span>
-                                            <?php if (!empty($c['taken_by'])): ?>
-                                                <span class="taken-by">
-                                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($c['taken_by']); ?>
-                                                </span>
+                                        <span class="category-badge">
+                                            <i class="fas fa-tag"></i>
+                                            <?php echo htmlspecialchars($ex['category']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="expense-name-cell">
+                                            <span class="expense-name-text"><?php echo htmlspecialchars($ex['expense_name']); ?></span>
+                                            <?php if (!empty($ex['description'])): ?>
+                                                <span class="expense-desc"><?php echo htmlspecialchars($ex['description']); ?></span>
                                             <?php endif; ?>
                                         </div>
                                     </td>
                                     <td class="text-right">
-                                        <span class="amount-cashout">
-                                            <?php echo formatCurrency($c['amount']); ?>
+                                        <span class="amount-expense">
+                                            <?php echo formatCurrency($ex['amount']); ?>
                                         </span>
                                     </td>
                                     <td class="text-center">
-                                        <span class="status-badge status-<?php echo $status; ?>">
-                                            <i class="fas fa-<?php 
-                                                echo $status === 'pending' ? 'clock' : 
-                                                    ($status === 'approved' ? 'check-circle' : 
-                                                    ($status === 'rejected' ? 'times-circle' : 'ban')); 
-                                            ?>"></i>
-                                            <?php echo ucfirst($status); ?>
-                                        </span>
+                                        <?php if ($is_salary): ?>
+                                            <span class="status-badge-sm status-salary">
+                                                <i class="fas fa-user-tie"></i> Salary
+                                            </span>
+                                        <?php elseif ($is_business): ?>
+                                            <span class="status-badge-sm status-business">
+                                                <i class="fas fa-briefcase"></i> Business
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="status-badge-sm status-non-business">
+                                                <i class="fas fa-times"></i> Personal
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if (!empty($ex['receipt_path']) && file_exists('../../' . $ex['receipt_path'])): ?>
+                                            <a href="../../<?php echo htmlspecialchars($ex['receipt_path']); ?>" 
+                                               target="_blank" 
+                                               class="receipt-cell">
+                                                <i class="fas fa-paperclip"></i>
+                                                View
+                                            </a>
+                                        <?php else: ?>
+                                            <span class="no-receipt">No receipt</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <div class="branch-cell">
-                                            <span class="branch-name"><?php echo htmlspecialchars($c['branch_display_name'] ?? 'Main'); ?></span>
-                                            <?php if (!empty($c['branch_display_code'])): ?>
-                                                <span class="branch-code-sm"><?php echo htmlspecialchars($c['branch_display_code']); ?></span>
+                                            <span class="branch-name"><?php echo htmlspecialchars($ex['branch_display_name'] ?? 'Main'); ?></span>
+                                            <?php if (!empty($ex['branch_display_code'])): ?>
+                                                <span class="branch-code-sm"><?php echo htmlspecialchars($ex['branch_display_code']); ?></span>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -1368,38 +1496,14 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                                             <?php else: ?>
                                                 <div class="employee-avatar"><?php echo $emp_initial; ?></div>
                                             <?php endif; ?>
-                                            <span class="employee-name-sm"><?php echo htmlspecialchars($c['employee_name'] ?? 'N/A'); ?></span>
-                                        </div>
-                                    </td>
-                                    <td class="text-center">
-                                        <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $c['id']; ?>" 
-                                               class="action-btn action-view" 
-                                               title="View">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <?php if ($is_admin && $status === 'pending'): ?>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=approve" 
-                                                   class="action-btn action-approve" 
-                                                   title="Approve"
-                                                   onclick="return confirm('Approve this cash out?')">
-                                                    <i class="fas fa-check"></i>
-                                                </a>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=reject" 
-                                                   class="action-btn action-reject" 
-                                                   title="Reject"
-                                                   onclick="return confirm('Reject this cash out?')">
-                                                    <i class="fas fa-times"></i>
-                                                </a>
-                                            <?php endif; ?>
+                                            <span class="employee-name-sm"><?php echo htmlspecialchars($ex['employee_name'] ?? 'N/A'); ?></span>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                             
-                            <!-- TOTALS ROW -->
                             <tr class="totals-row">
-                                <td colspan="4" style="text-align:right;">GRAND TOTAL (<?php echo number_format($summary['total_count']); ?> records)</td>
+                                <td colspan="5" style="text-align:right;">TOTAL (<?php echo number_format($summary['total_count']); ?> expenses)</td>
                                 <td class="text-right">
                                     <span style="color: #DC2626; font-weight: 900; font-size: 14px;">
                                         <?php echo formatCurrency($summary['total_amount']); ?>
@@ -1411,11 +1515,10 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                     </table>
                 </div>
                 
-                <!-- NO RESULTS -->
                 <div class="empty-state" id="noSearchResults" style="display:none;">
                     <i class="fas fa-search-minus"></i>
                     <h3>No results found</h3>
-                    <p>No cash out records match your search.</p>
+                    <p>No expenses match your search.</p>
                     <button type="button" class="btn btn-secondary" onclick="clearLiveSearch()">
                         <i class="fas fa-times"></i> Clear Search
                     </button>
@@ -1424,11 +1527,11 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <?php else: ?>
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
-                    <h3>No Cash Out Records</h3>
-                    <p>No records found for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
+                    <h3>No Expenses Found</h3>
+                    <p>No expenses for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
                     <p style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
                         <i class="fas fa-info-circle"></i>
-                        Try changing the quick filter, date range, or branch filter.
+                        Try changing the quick filter, date range, branch, or category.
                     </p>
                 </div>
             <?php endif; ?>
@@ -1439,14 +1542,11 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
 </div>
 
 <script>
-// ============================================================
-// LIVE SEARCH
-// ============================================================
 function performLiveSearch(searchTerm) {
-    const tableBody = document.getElementById('cashoutsTableBody');
+    const tableBody = document.getElementById('expensesTableBody');
     if (!tableBody) return;
     
-    const rows = tableBody.querySelectorAll('tr.cashout-row');
+    const rows = tableBody.querySelectorAll('tr.expense-row');
     const clearBtn = document.getElementById('searchClearBtn');
     const countBadge = document.getElementById('searchCountBadge');
     const noResults = document.getElementById('noSearchResults');
@@ -1461,10 +1561,7 @@ function performLiveSearch(searchTerm) {
             row.classList.remove('search-match', 'search-hidden');
             removeAllMarks(row);
         });
-        if (countBadge) {
-            countBadge.style.display = 'none';
-            countBadge.textContent = '0';
-        }
+        if (countBadge) { countBadge.style.display = 'none'; countBadge.textContent = '0'; }
         if (noResults) noResults.style.display = 'none';
         if (tableWrapper) tableWrapper.style.display = '';
         return;
@@ -1475,7 +1572,6 @@ function performLiveSearch(searchTerm) {
     
     rows.forEach(row => {
         removeAllMarks(row);
-        
         const searchText = (row.getAttribute('data-search') || '').toLowerCase();
         const rowText = row.textContent.toLowerCase();
         
@@ -1518,22 +1614,18 @@ function highlightMatchesInRow(row, term) {
     const cells = row.querySelectorAll('td');
     
     cells.forEach(cell => {
-        if (cell.querySelector('button')) return;
+        if (cell.querySelector('button') || cell.querySelector('a')) return;
         if (cell.querySelector('img') && cell.textContent.trim() === '') return;
         
-        const walker = document.createTreeWalker(
-            cell,
-            NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: function(node) {
-                    if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'MARK') return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'I') return NodeFilter.FILTER_REJECT;
-                    if (node.parentNode.tagName === 'BUTTON') return NodeFilter.FILTER_REJECT;
-                    return NodeFilter.FILTER_ACCEPT;
-                }
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) {
+                if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'MARK') return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'I') return NodeFilter.FILTER_REJECT;
+                if (node.parentNode.tagName === 'BUTTON') return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
             }
-        );
+        });
         
         const textNodes = [];
         while (walker.nextNode()) textNodes.push(walker.currentNode);
@@ -1567,56 +1659,31 @@ function highlightMatchesInRow(row, term) {
 
 function clearLiveSearch() {
     const input = document.getElementById('liveSearchInput');
-    if (input) {
-        input.value = '';
-        performLiveSearch('');
-        input.focus();
-    }
+    if (input) { input.value = ''; performLiveSearch(''); input.focus(); }
 }
 
-// ============================================================
-// TABLE SCROLL
-// ============================================================
 function scrollTable(direction) {
     const wrapper = document.getElementById('tableWrapper');
     if (!wrapper) return;
-    const scrollAmount = 350;
     wrapper.scrollBy({
-        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        left: direction === 'left' ? -350 : 350,
         behavior: 'smooth'
     });
 }
 
-// ============================================================
-// KEYBOARD
-// ============================================================
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        const searchInput = document.getElementById('liveSearchInput');
-        if (searchInput && searchInput.value.length > 0) clearLiveSearch();
+        const i = document.getElementById('liveSearchInput');
+        if (i && i.value.length > 0) clearLiveSearch();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        const searchInput = document.getElementById('liveSearchInput');
-        if (searchInput) { searchInput.focus(); searchInput.select(); }
+        const i = document.getElementById('liveSearchInput');
+        if (i) { i.focus(); i.select(); }
     }
 });
 
-// ============================================================
-// INIT
-// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    var successAlert = document.querySelector('.alert-success');
-    if (successAlert) {
-        setTimeout(function() {
-            successAlert.style.transition = 'opacity 0.4s ease';
-            successAlert.style.opacity = '0';
-            setTimeout(function() {
-                if (successAlert.parentElement) successAlert.remove();
-            }, 400);
-        }, 8000);
-    }
-    
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';

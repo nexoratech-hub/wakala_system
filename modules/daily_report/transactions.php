@@ -2,10 +2,11 @@
 // ================================================================
 // FILE: modules/daily_report/transactions.php
 // WAKALA FINANCIAL SYSTEM - DEPOSITS & WITHDRAWALS
+// ✅ FIXED: Deposit → Float += & Cash +=
+// ✅ FIXED: Withdrawal → Float -= & Cash -=
 // ✅ FIXED: current_capital = TOTAL FLOAT + CASH
 // ✅ FIXED: Float = SUM ya LATEST record per provider (no double-counting)
 // ✅ FIXED: UPDATE badala ya INSERT ili kuepuka duplicates
-// ✅ FIXED: Auto-fix daily_reports values kila transaction
 // ================================================================
 
 error_reporting(E_ALL);
@@ -85,8 +86,7 @@ function getLatestDailyReport($db, $branch_id) {
 }
 
 // ============================================================
-// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
-// ✅ Inaepuka double-counting ya duplicate records
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
 // ============================================================
 function calculateTotalFloat($db, $daily_report_id) {
     $stmt = $db->prepare("
@@ -108,11 +108,9 @@ function calculateTotalFloat($db, $daily_report_id) {
 }
 
 // ============================================================
-// ✅ HELPER: Sync daily_reports totals from providers
-// Inahesabu total_deposits, total_withdrawals, current_float, current_capital
+// HELPER: Sync daily_reports totals from providers
 // ============================================================
 function syncDailyReportTotals($db, $daily_report_id, $current_cash) {
-    // Hesabu totals kutoka LATEST record per provider
     $stmt = $db->prepare("
         SELECT 
             COALESCE(SUM(latest.current_float), 0) as total_float,
@@ -138,7 +136,6 @@ function syncDailyReportTotals($db, $daily_report_id, $current_cash) {
     $total_withdrawals = floatval($totals['total_withdrawals'] ?? 0);
     $current_capital = $total_float + $current_cash;
     
-    // Update daily_reports
     $stmt = $db->prepare("
         UPDATE daily_reports 
         SET current_float = ?,
@@ -210,14 +207,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         // ------------------------------------------------------------
         $latest_dr = getLatestDailyReport($db, $branch_id);
         if (!$latest_dr) {
-            throw new Exception('Hakuna daily report yoyote. Tafadhali tengeneza daily report kwanza.');
+            throw new Exception('No daily report found. Please create a daily report first.');
         }
         
         $daily_report_id = $latest_dr['id'];
         $current_cash = floatval($latest_dr['current_cash'] ?? 0);
         
         // ------------------------------------------------------------
-        // ✅ GET LATEST record ya provider (kuepuka duplicates)
+        // GET LATEST record ya provider
         // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT * FROM daily_report_providers 
@@ -245,35 +242,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $mr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$mr_provider) {
-                throw new Exception('Hakuna float ya provider. Tafadhali tengeneza morning report kwanza.');
+                throw new Exception('No provider float found. Please create a morning report first.');
             }
             
             $current_float = floatval($mr_provider['float_balance'] ?? 0);
         }
         
-        // ------------------------------------------------------------
-        // CALCULATE NEW FLOAT & CASH
-        // Deposit:    Float += amount, Cash -= amount
-        // Withdrawal: Float -= amount, Cash += amount
-        // ------------------------------------------------------------
+        // ============================================================
+        // ✅ FIXED: CALCULATE NEW FLOAT & CASH
+        // 
+        // DEPOSIT (Mteja anaweka pesa):
+        //    Mteja anakuja NA cash → Wakala anapokea cash
+        //    → Float INAONGEZEKA (money in provider account)
+        //    → Cash INAONGEZEKA (wakala ana cash mkononi)
+        //
+        // WITHDRAWAL (Mteja anatoa pesa):
+        //    Mteja anakuja kuchukua cash → Wakala anatoa cash
+        //    → Float INAPUNGUA (money out from provider account)
+        //    → Cash INAPUNGUA (wakala anatoa cash kwa mteja)
+        // ============================================================
         if ($transaction_type === 'withdrawal') {
+            // Withdrawal: Float -= amount, Cash -= amount
             $new_float = $current_float - $amount;
-            $new_cash  = $current_cash + $amount;
-        } else {
-            $new_float = $current_float + $amount;
             $new_cash  = $current_cash - $amount;
+        } else {
+            // Deposit: Float += amount, Cash += amount
+            $new_float = $current_float + $amount;
+            $new_cash  = $current_cash + $amount;
         }
         
         // ------------------------------------------------------------
-        // VALIDATE BALANCES
+        // ✅ VALIDATE BALANCES
         // ------------------------------------------------------------
         if ($new_float < 0) {
-            throw new Exception('Float haitoshi. Current float: TSh ' . number_format($current_float, 0) . 
-                               ' | Unajaribu kutoa: TSh ' . number_format($amount, 0));
+            throw new Exception(
+                'Insufficient float! Current float: TSh ' . number_format($current_float, 0) . 
+                ' | You are trying: TSh ' . number_format($amount, 0)
+            );
         }
         if ($new_cash < 0) {
-            throw new Exception('Cash haitoshi. Current cash: TSh ' . number_format($current_cash, 0) . 
-                               ' | Unajaribu kutoa: TSh ' . number_format($amount, 0));
+            throw new Exception(
+                'Insufficient cash! Current cash: TSh ' . number_format($current_cash, 0) . 
+                ' | You are trying: TSh ' . number_format($amount, 0)
+            );
         }
         
         // ------------------------------------------------------------
@@ -312,8 +323,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $transaction_id = $db->lastInsertId();
         
         // ============================================================
-        // ✅ STEP 2: UPDATE daily_report_providers (FLOAT ya provider husika)
-        // ✅ Tumia UPDATE tu ili kuepuka duplicates
+        // STEP 2: UPDATE daily_report_providers
         // ============================================================
         if ($dr_provider) {
             $stmt = $db->prepare("
@@ -331,7 +341,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $dr_provider['id']
             ]);
         } else {
-            // INSERT mara moja tu
             $stmt = $db->prepare("
                 INSERT INTO daily_report_providers 
                 (daily_report_id, provider_id, provider_code, provider_name,
@@ -352,8 +361,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         
         // ============================================================
-        // ✅ STEP 3: UPDATE daily_reports.current_cash PEKEE
-        // ✅ Total float, capital, deposits, withdrawals zitarekebishwa na syncDailyReportTotals()
+        // STEP 3: UPDATE daily_reports.current_cash
         // ============================================================
         $stmt = $db->prepare("
             UPDATE daily_reports 
@@ -364,14 +372,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->execute([$new_cash, $daily_report_id]);
         
         // ============================================================
-        // ✅ STEP 4: SYNC daily_reports totals kutoka providers
-        // ✅ Hii inahakikisha current_float, current_capital, 
-        //    total_deposits, total_withdrawals ni SAHIHI
+        // STEP 4: SYNC daily_reports totals
         // ============================================================
         syncDailyReportTotals($db, $daily_report_id, $new_cash);
         
         // ============================================================
-        // STEP 5: LOG KWENYE daily_report_transactions
+        // STEP 5: LOG daily_report_transactions
         // ============================================================
         $stmt = $db->prepare("
             INSERT INTO daily_report_transactions 
@@ -408,8 +414,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $db->commit();
         
-        $_SESSION['success_message'] = ucfirst($transaction_type) . ' ya TSh ' . number_format($amount) . 
-            ' imefanikiwa!';
+        $_SESSION['success_message'] = ucfirst($transaction_type) . ' of TSh ' . number_format($amount) . 
+            ' completed successfully!';
         
         header('Location: transactions.php?type=' . $type . '&branch_id=' . $branch_id);
         exit();
@@ -503,7 +509,7 @@ try {
     $withdrawal_amount = floatval($wth_data['total'] ?? 0);
     
     // ============================================================
-    // ✅ CURRENT FLOAT, CASH & CAPITAL (Recalculated)
+    // CURRENT FLOAT, CASH & CAPITAL
     // ============================================================
     $current_float = 0;
     $current_cash = 0;
@@ -515,14 +521,9 @@ try {
         if ($latest_dr) {
             $latest_dr_id = $latest_dr['id'];
             $current_cash = floatval($latest_dr['current_cash'] ?? 0);
-            
-            // ✅ Hesabu float kutoka LATEST record per provider
             $current_float = calculateTotalFloat($db, $latest_dr_id);
-            
-            // ✅ Recalculate capital
             $current_capital = $current_float + $current_cash;
             
-            // ✅ Auto-fix daily_reports kama values hazipo sawa
             $db_float = floatval($latest_dr['current_float'] ?? 0);
             $db_capital = floatval($latest_dr['current_capital'] ?? 0);
             
@@ -767,7 +768,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div>
                         <h3>Add New <?php echo $page_title; ?></h3>
-                        <p>Jaza taarifa za <?php echo strtolower($page_title); ?> hapa chini</p>
+                        <p><?php echo $type === 'deposit' ? 'Customer brings cash → Float & Cash increase' : 'Customer takes cash → Float & Cash decrease'; ?></p>
                     </div>
                 </div>
                 <button type="button" class="btn-toggle-form" onclick="toggleForm()">
@@ -812,7 +813,7 @@ include_once '../../includes/admin_topbar.php';
                 
                 <div class="provider-balance-preview" id="providerPreview" style="display:none;">
                     <div class="preview-header">
-                        <i class="fas fa-eye"></i> Provider Balance Preview
+                        <i class="fas fa-eye"></i> Balance Preview
                     </div>
                     <div class="preview-grid">
                         <div class="preview-item">
@@ -830,15 +831,16 @@ include_once '../../includes/admin_topbar.php';
                         <div class="preview-item">
                             <span class="preview-label">
                                 <i class="fas fa-arrow-<?php echo $type === 'deposit' ? 'up' : 'down'; ?>"></i> 
-                                After <?php echo ucfirst($type); ?>
+                                New Float
                             </span>
                             <span class="preview-value preview-new-float" id="previewNewFloat">TSh 0</span>
                         </div>
                         <div class="preview-item">
                             <span class="preview-label">
-                                <i class="fas fa-calculator"></i> Change
+                                <i class="fas fa-money-bill-wave"></i> 
+                                New Cash
                             </span>
-                            <span class="preview-value preview-change" id="previewChange">TSh 0</span>
+                            <span class="preview-value preview-new-cash" id="previewNewCash">TSh 0</span>
                         </div>
                     </div>
                 </div>
@@ -868,7 +870,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="input-with-icon">
                         <i class="fas fa-comment input-icon"></i>
                         <textarea name="description" class="form-control" rows="2" 
-                                  placeholder="Maelezo ya transaction..."></textarea>
+                                  placeholder="Transaction notes..."></textarea>
                     </div>
                 </div>
                 
@@ -1028,7 +1030,7 @@ include_once '../../includes/admin_topbar.php';
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
                     <h3>No <?php echo strtolower($page_title); ?> found</h3>
-                    <p>Hakuna <?php echo strtolower($page_title); ?> kwenye kipindi hiki.</p>
+                    <p>No <?php echo strtolower($page_title); ?> in this period.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1727,8 +1729,8 @@ html.dark-mode .preview-value { color: #F1F5F9; }
 html.dark-mode .preview-float { color: #60A5FA; }
 .preview-new-float { color: #059669; }
 html.dark-mode .preview-new-float { color: #34D399; }
-.preview-change { color: #7C3AED; }
-html.dark-mode .preview-change { color: #A78BFA; }
+.preview-new-cash { color: #D97706; }
+html.dark-mode .preview-new-cash { color: #FBBF24; }
 
 /* BUTTONS */
 .btn {
@@ -2194,23 +2196,39 @@ function updateAmountPreview() {
     
     var selectedOption = select.options[select.selectedIndex];
     var currentFloat = parseFloat(selectedOption.getAttribute('data-float')) || 0;
+    var currentCash = <?php echo floatval($current_cash ?? 0); ?>;
     var amount = parseFloat(amountInput.value) || 0;
     var type = '<?php echo $type; ?>';
     
-    var newFloat = type === 'deposit' ? currentFloat + amount : currentFloat - amount;
+    var newFloat, newCash;
+    
+    if (type === 'withdrawal') {
+        // Withdrawal: Float -= amount, Cash -= amount
+        newFloat = currentFloat - amount;
+        newCash = currentCash - amount;
+    } else {
+        // Deposit: Float += amount, Cash += amount
+        newFloat = currentFloat + amount;
+        newCash = currentCash + amount;
+    }
     
     var newFloatEl = document.getElementById('previewNewFloat');
-    var changeEl = document.getElementById('previewChange');
+    var newCashEl = document.getElementById('previewNewCash');
     
     newFloatEl.textContent = 'TSh ' + formatMoney(newFloat);
-    changeEl.textContent = (type === 'deposit' ? '+' : '-') + ' TSh ' + formatMoney(amount);
+    newCashEl.textContent = 'TSh ' + formatMoney(newCash);
     
-    if (type === 'withdrawal' && newFloat < 0) {
+    // Show negative in red
+    if (newFloat < 0) {
         newFloatEl.style.color = '#DC2626';
-        changeEl.style.color = '#DC2626';
     } else {
         newFloatEl.style.color = '';
-        changeEl.style.color = '';
+    }
+    
+    if (newCash < 0) {
+        newCashEl.style.color = '#DC2626';
+    } else {
+        newCashEl.style.color = '';
     }
 }
 
@@ -2311,14 +2329,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (!provider.value || !amount.value || parseFloat(amount.value) <= 0) {
                 e.preventDefault();
-                alert('Tafadhali chagua provider na weka amount sahihi.');
+                alert('Please select a provider and enter a valid amount.');
                 return false;
             }
             
             var type = '<?php echo $type; ?>';
             var msg = type === 'deposit' 
-                ? 'Confirm DEPOSIT ya TSh ' + parseFloat(amount.value).toLocaleString() + '?'
-                : 'Confirm WITHDRAWAL ya TSh ' + parseFloat(amount.value).toLocaleString() + '?';
+                ? 'Confirm DEPOSIT of TSh ' + parseFloat(amount.value).toLocaleString() + '?\n\n✅ Float will INCREASE\n✅ Cash will INCREASE'
+                : 'Confirm WITHDRAWAL of TSh ' + parseFloat(amount.value).toLocaleString() + '?\n\n📉 Float will DECREASE\n📉 Cash will DECREASE';
             
             if (!confirm(msg)) {
                 e.preventDefault();

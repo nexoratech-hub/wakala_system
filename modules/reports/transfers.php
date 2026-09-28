@@ -1,12 +1,13 @@
 <?php
 // ================================================================
-// FILE: modules/store_cash_out/index.php
-// WAKALA FINANCIAL SYSTEM - STORE CASH OUT
-// 🔴 RED THEME — SCOPED CSS — SIDEBAR SAFE
-// ✅ Quick Filter Buttons: All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom
-// ✅ Detailed cash out records
-// ✅ Search + Scroll buttons
-// ✅ Export PDF / CSV / Word
+// FILE: modules/reports/transfers.php
+// WAKALA FINANCIAL SYSTEM - TRANSFERS REPORT
+// BLUE THEME — SCOPED CSS — SIDEBAR SAFE
+// ✅ Detailed transfers (cash ↔ float)
+// ✅ Summary cards + Provider breakdown
+// ✅ 🔥 QUICK FILTERS: All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom
+// ✅ Live Search + Scroll buttons
+// ✅ Export PDF
 // ================================================================
 
 require_once '../../config/config.php';
@@ -79,8 +80,8 @@ if ($quick !== '') {
             $filter_label = 'Last 1 Year';
             break;
         case 'custom':
-            $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today;
-            $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : $today;
+            $from_date = isset($_GET['from_date']) && $_GET['from_date'] !== '' ? $_GET['from_date'] : date('Y-m-01');
+            $to_date = isset($_GET['to_date']) && $_GET['to_date'] !== '' ? $_GET['to_date'] : $today;
             $filter_label = 'Custom Range';
             break;
         default:
@@ -90,8 +91,8 @@ if ($quick !== '') {
     }
 } else {
     if (isset($_GET['from_date']) || isset($_GET['to_date'])) {
-        $from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today;
-        $to_date = isset($_GET['to_date']) ? $_GET['to_date'] : $today;
+        $from_date = isset($_GET['from_date']) && $_GET['from_date'] !== '' ? $_GET['from_date'] : date('Y-m-01');
+        $to_date = isset($_GET['to_date']) && $_GET['to_date'] !== '' ? $_GET['to_date'] : $today;
         $filter_label = 'Custom Range';
         $quick = 'custom';
     } else {
@@ -103,8 +104,8 @@ if ($quick !== '') {
 }
 
 $selected_branch = isset($_GET['branch_id']) ? intval($_GET['branch_id']) : 0;
-$selected_status = isset($_GET['status']) && in_array($_GET['status'], ['all', 'pending', 'approved', 'rejected', 'cancelled']) 
-    ? $_GET['status'] : 'all';
+$selected_type = isset($_GET['type']) && in_array($_GET['type'], ['all', 'cash_to_float', 'float_to_cash']) 
+    ? $_GET['type'] : 'all';
 
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from_date)) $from_date = $today;
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to_date)) $to_date = $today;
@@ -139,77 +140,110 @@ if ($is_admin) {
 }
 
 // ============================================================
-// GET STORE CASH OUT
+// GET TRANSFERS
 // ============================================================
-$cashouts = [];
+$transfers = [];
 $summary = [
     'total_count' => 0,
-    'total_amount' => 0,
-    'pending_count' => 0,
-    'pending_amount' => 0,
-    'approved_count' => 0,
-    'approved_amount' => 0,
-    'rejected_count' => 0,
-    'rejected_amount' => 0,
+    'cash_to_float_count' => 0,
+    'float_to_cash_count' => 0,
+    'total_cash_to_float' => 0,
+    'total_float_to_cash' => 0,
+    'net_amount' => 0,
 ];
 
 try {
     $sql = "
         SELECT 
-            sco.*,
+            t.*,
+            p.provider_name,
+            p.icon_class,
+            p.color_code,
+            p.provider_type,
             b.branch_name as branch_display_name,
             b.branch_code as branch_display_code,
             e.full_name as employee_name,
             e.employee_id as employee_code,
             e.profile_pic as employee_avatar
-        FROM store_cash_out sco
-        LEFT JOIN branches b ON sco.branch_id = b.id
-        LEFT JOIN employees e ON sco.employee_id = e.id
-        WHERE sco.cashout_date BETWEEN ? AND ?
+        FROM transfers t
+        LEFT JOIN providers p ON t.provider_id = p.id
+        LEFT JOIN branches b ON t.branch_id = b.id
+        LEFT JOIN employees e ON t.employee_id = e.id
+        WHERE t.transfer_date BETWEEN ? AND ?
     ";
     $params = [$from_date, $to_date];
 
     if ($selected_branch > 0) {
-        $sql .= " AND sco.branch_id = ?";
+        $sql .= " AND t.branch_id = ?";
         $params[] = $selected_branch;
     }
 
-    if ($selected_status !== 'all') {
-        $sql .= " AND sco.status = ?";
-        $params[] = $selected_status;
+    if ($selected_type !== 'all') {
+        $sql .= " AND t.transfer_type = ?";
+        $params[] = $selected_type;
     }
 
-    $sql .= " ORDER BY sco.cashout_date DESC, sco.id DESC";
+    $sql .= " ORDER BY t.transfer_date DESC, t.id DESC";
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $transfers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Calculate summary
-    foreach ($cashouts as $c) {
-        $amount = floatval($c['amount'] ?? 0);
+    foreach ($transfers as $t) {
         $summary['total_count']++;
-        $summary['total_amount'] += $amount;
-        
-        switch ($c['status']) {
-            case 'pending':
-                $summary['pending_count']++;
-                $summary['pending_amount'] += $amount;
-                break;
-            case 'approved':
-                $summary['approved_count']++;
-                $summary['approved_amount'] += $amount;
-                break;
-            case 'rejected':
-                $summary['rejected_count']++;
-                $summary['rejected_amount'] += $amount;
-                break;
+        $amount = floatval($t['amount']);
+
+        if ($t['transfer_type'] === 'cash_to_float') {
+            $summary['cash_to_float_count']++;
+            $summary['total_cash_to_float'] += $amount;
+        } else {
+            $summary['float_to_cash_count']++;
+            $summary['total_float_to_cash'] += $amount;
         }
     }
+    $summary['net_amount'] = $summary['total_cash_to_float'] - $summary['total_float_to_cash'];
+
+    // ============================================================
+    // Provider Breakdown
+    // ============================================================
+    $sql_providers = "
+        SELECT 
+            p.id,
+            p.provider_name,
+            p.icon_class,
+            p.color_code,
+            p.provider_type,
+            COUNT(t.id) as txn_count,
+            COALESCE(SUM(CASE WHEN t.transfer_type = 'cash_to_float' THEN t.amount ELSE 0 END), 0) as total_to_float,
+            COALESCE(SUM(CASE WHEN t.transfer_type = 'float_to_cash' THEN t.amount ELSE 0 END), 0) as total_to_cash,
+            COALESCE(SUM(t.amount), 0) as total_amount
+        FROM transfers t
+        LEFT JOIN providers p ON t.provider_id = p.id
+        WHERE t.transfer_date BETWEEN ? AND ?
+    ";
+    $params_providers = [$from_date, $to_date];
+
+    if ($selected_branch > 0) {
+        $sql_providers .= " AND t.branch_id = ?";
+        $params_providers[] = $selected_branch;
+    }
+
+    if ($selected_type !== 'all') {
+        $sql_providers .= " AND t.transfer_type = ?";
+        $params_providers[] = $selected_type;
+    }
+
+    $sql_providers .= " GROUP BY p.id ORDER BY txn_count DESC LIMIT 6";
+
+    $stmt = $db->prepare($sql_providers);
+    $stmt->execute($params_providers);
+    $top_providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
-    error_log("Store cash out error: " . $e->getMessage());
-    $cashouts = [];
+    error_log("Transfers error: " . $e->getMessage());
+    $transfers = [];
+    $top_providers = [];
 }
 
 $success_message = '';
@@ -223,46 +257,35 @@ include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_sidebar.
 include_once '../../includes/' . ($is_admin ? 'admin' : 'employee') . '_topbar.php';
 ?>
 
-<style id="cashout-scoped">
+<style id="transfers-report-scoped">
 /* ============================================================
-   🔴 RED THEME VARIABLES
+   SCOPED VARIABLES
    ============================================================ */
 .main-wrapper {
-    --bg-body: #fef5f5;
+    --bg-body: #f0f4f8;
     --bg-card: #ffffff;
-    --bg-table-even: #fff5f5;
-    --bg-table-hover: #fee2e2;
-    --bg-input: #fef2f2;
+    --bg-table-even: #f8fafc;
+    --bg-table-hover: #eff6ff;
+    --bg-input: #f8fafc;
     --text-primary: #1e293b;
     --text-secondary: #334155;
     --text-muted: #64748b;
     --text-light: #94a3b8;
-    --border-color: #fecaca;
-    --shadow-color: rgba(220, 38, 38, 0.08);
-    --shadow-hover: rgba(220, 38, 38, 0.15);
-    
-    --red-primary: #DC2626;
-    --red-dark: #B91C1C;
-    --red-darker: #991B1B;
-    --red-mid: #EF4444;
-    --red-light: #F87171;
-    --red-lighter: #FEE2E2;
-    --red-lightest: #FEF2F2;
-    --red-accent: #FCA5A5;
+    --border-color: #cbd5e1;
+    --shadow-color: rgba(30, 64, 175, 0.08);
+    --shadow-hover: rgba(30, 64, 175, 0.15);
 }
 html.dark-mode .main-wrapper {
-    --bg-body: #1a0a0a;
-    --bg-card: #2a1515;
-    --bg-table-even: #2a1515;
-    --bg-table-hover: #3a1d1d;
-    --bg-input: #3a1d1d;
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-table-even: #1a2332;
+    --bg-table-hover: #2d3a4f;
+    --bg-input: #334155;
     --text-primary: #f1f5f9;
     --text-secondary: #cbd5e1;
     --text-muted: #94a3b8;
     --text-light: #64748b;
-    --border-color: #7f1d1d;
-    --red-lighter: #7F1D1D;
-    --red-lightest: #450A0A;
+    --border-color: #334155;
 }
 
 .main-wrapper, .main-wrapper *, .main-wrapper *::before, .main-wrapper *::after {
@@ -280,10 +303,10 @@ html.dark-mode .main-wrapper {
 
 /* BRANCH INDICATOR */
 .main-wrapper .branch-indicator {
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
     display: flex; justify-content: space-between; align-items: center;
-    box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
     flex-wrap: wrap; gap: 12px; color: #FFFFFF;
     position: relative; overflow: hidden;
 }
@@ -346,12 +369,12 @@ html.dark-mode .main-wrapper {
     text-transform: uppercase; letter-spacing: 0.5px;
 }
 .main-wrapper .btn-primary {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    color: #FFFFFF; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    background: linear-gradient(135deg, #1e40af, #2563eb);
+    color: #FFFFFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3);
 }
 .main-wrapper .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
+    box-shadow: 0 6px 20px rgba(30, 64, 175, 0.5);
     color: #FFFFFF;
 }
 .main-wrapper .btn-secondary {
@@ -360,147 +383,97 @@ html.dark-mode .main-wrapper {
 }
 .main-wrapper .btn-secondary:hover { background: var(--bg-card); color: var(--text-primary); }
 
-.main-wrapper .btn-add {
-    background: linear-gradient(135deg, #059669, #10B981);
-    color: #FFFFFF; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .btn-add:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
-    color: #FFFFFF;
-}
-
-/* ALERTS */
-.main-wrapper .alert {
-    padding: 14px 18px; border-radius: 10px; margin-bottom: 16px;
-    display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-.main-wrapper .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-html.dark-mode .main-wrapper .alert-success { background: #065F46; color: #D1FAE5; }
-
 /* ============================================================
-   🔥 QUICK FILTER BUTTONS - RED THEME
+   🔥 QUICK FILTER BUTTONS
    ============================================================ */
 .main-wrapper .quick-filters {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    margin-bottom: 12px; padding: 10px 14px;
-    background: var(--bg-card); border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border-radius: 12px;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .main-wrapper .quick-filters-label {
-    font-size: 11px; font-weight: 800; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.8px;
-    margin-right: 6px; display: flex; align-items: center; gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-right: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
 }
-.main-wrapper .quick-filters-label i { color: #DC2626; font-size: 12px; }
+.main-wrapper .quick-filters-label i {
+    color: #1e40af;
+    font-size: 12px;
+}
 .main-wrapper .quick-filter-btn {
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 800; cursor: pointer;
-    text-decoration: none; transition: all 0.25s ease;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.25s ease;
     border: 1.5px solid var(--border-color);
-    background: var(--bg-card); color: var(--text-secondary);
-    display: inline-flex; align-items: center; gap: 5px;
-    white-space: nowrap; font-family: 'Inter', sans-serif;
-    text-transform: uppercase; letter-spacing: 0.3px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
-.main-wrapper .quick-filter-btn i { font-size: 11px; }
+.main-wrapper .quick-filter-btn i {
+    font-size: 11px;
+}
 .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); border-color: var(--red-accent);
-    color: var(--red-dark);
+    background: #DBEAFE;
+    border-color: #93C5FD;
+    color: #1e40af;
     transform: translateY(-2px);
-    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15);
+    box-shadow: 0 4px 10px rgba(30, 64, 175, 0.15);
 }
 .main-wrapper .quick-filter-btn.active {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    border-color: #991B1B; color: #FFFFFF;
-    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+    background: linear-gradient(135deg, #1e40af, #2563eb);
+    border-color: #1e3a8a;
+    color: #FFFFFF;
+    box-shadow: 0 4px 14px rgba(30, 64, 175, 0.4);
     transform: translateY(-2px);
 }
-.main-wrapper .quick-filter-btn.active i { color: #FCD34D; }
-.main-wrapper .quick-filter-btn.active:hover {
-    background: linear-gradient(135deg, #B91C1C, #991B1B); color: #FFFFFF;
+.main-wrapper .quick-filter-btn.active i {
+    color: #FCD34D;
 }
+.main-wrapper .quick-filter-btn.active:hover {
+    background: linear-gradient(135deg, #1e3a8a, #1e40af);
+    color: #FFFFFF;
+}
+
+/* Dark mode */
 html.dark-mode .main-wrapper .quick-filter-btn {
-    background: var(--bg-card); border-color: var(--border-color);
+    background: var(--bg-card);
+    border-color: var(--border-color);
     color: var(--text-secondary);
 }
 html.dark-mode .main-wrapper .quick-filter-btn:hover {
-    background: var(--red-lighter); color: #FCA5A5; border-color: #DC2626;
+    background: #1E3A5F;
+    color: #60A5FA;
+    border-color: #3B82F6;
 }
 html.dark-mode .main-wrapper .quick-filter-btn.active {
-    background: linear-gradient(135deg, #DC2626, #991B1B);
-    color: #FFFFFF; border-color: #FCA5A5;
-}
-
-/* FILTER BAR */
-.main-wrapper .filter-bar {
-    background: var(--bg-card); border-radius: 12px;
-    padding: 14px 18px; margin-bottom: 18px;
-    border: 1.5px solid var(--border-color);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-.main-wrapper .filter-form {
-    display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
-}
-.main-wrapper .filter-group {
-    display: flex; flex-direction: column; gap: 5px;
-    min-width: 160px; flex: 1;
-}
-.main-wrapper .filter-group label {
-    font-size: 11px; font-weight: 700; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.5px;
-    display: flex; align-items: center; gap: 6px;
-}
-.main-wrapper .filter-group label i { color: #DC2626; }
-.main-wrapper .form-control {
-    padding: 10px 14px; border: 1.5px solid var(--border-color);
-    border-radius: 8px; font-size: 13px;
-    color: var(--text-primary); background: var(--bg-input);
-    transition: all 0.3s ease; font-family: 'Inter', sans-serif;
-    width: 100%;
-}
-.main-wrapper .form-control:focus {
-    outline: none; border-color: #DC2626;
-    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
-    background: var(--bg-card);
-}
-.main-wrapper .filter-actions { display: flex; gap: 8px; }
-
-/* STATUS TABS */
-.main-wrapper .status-tabs {
-    display: flex; gap: 6px; flex-wrap: wrap;
-    background: var(--bg-input);
-    padding: 5px; border-radius: 10px;
-    border: 1.5px solid var(--border-color);
-}
-.main-wrapper .status-tab {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; font-weight: 700;
-    color: var(--text-secondary);
-    text-decoration: none; transition: all 0.25s ease;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    white-space: nowrap;
-}
-.main-wrapper .status-tab:hover { background: var(--bg-card); color: var(--text-primary); }
-.main-wrapper .status-tab.active {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    background: linear-gradient(135deg, #1e40af, #1e3a8a);
     color: #FFFFFF;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-.main-wrapper .status-tab.tab-pending.active {
-    background: linear-gradient(135deg, #D97706, #F59E0B);
-    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .status-tab.tab-approved.active {
-    background: linear-gradient(135deg, #059669, #10B981);
-    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-}
-.main-wrapper .status-tab.tab-rejected.active {
-    background: linear-gradient(135deg, #DC2626, #EF4444);
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    border-color: #3B82F6;
+    box-shadow: 0 4px 14px rgba(30, 64, 175, 0.6);
 }
 
 /* SUMMARY CARDS */
@@ -520,24 +493,16 @@ html.dark-mode .main-wrapper .quick-filter-btn.active {
 }
 .main-wrapper .summary-card:hover {
     transform: translateY(-4px);
-    box-shadow: 0 12px 28px rgba(220, 38, 38, 0.15);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
 }
 .main-wrapper .summary-card-blue {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
+    background: rgba(37, 99, 235, 0.08); border-color: rgba(37, 99, 235, 0.2);
 }
 .main-wrapper .summary-card-blue .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
+    background: rgba(37, 99, 235, 0.15); color: #2563EB;
+    border: 1.5px solid rgba(37, 99, 235, 0.3);
 }
-.main-wrapper .summary-card-blue .summary-value { color: #991B1B; }
-.main-wrapper .summary-card-orange {
-    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
-}
-.main-wrapper .summary-card-orange .summary-icon {
-    background: rgba(217, 119, 6, 0.15); color: #D97706;
-    border: 1.5px solid rgba(217, 119, 6, 0.3);
-}
-.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
+.main-wrapper .summary-card-blue .summary-value { color: #1D4ED8; }
 .main-wrapper .summary-card-green {
     background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2);
 }
@@ -546,24 +511,30 @@ html.dark-mode .main-wrapper .quick-filter-btn.active {
     border: 1.5px solid rgba(5, 150, 105, 0.3);
 }
 .main-wrapper .summary-card-green .summary-value { color: #047857; }
-.main-wrapper .summary-card-red {
-    background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2);
+.main-wrapper .summary-card-orange {
+    background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.2);
 }
-.main-wrapper .summary-card-red .summary-icon {
-    background: rgba(220, 38, 38, 0.15); color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
+.main-wrapper .summary-card-orange .summary-icon {
+    background: rgba(217, 119, 6, 0.15); color: #D97706;
+    border: 1.5px solid rgba(217, 119, 6, 0.3);
 }
-.main-wrapper .summary-card-red .summary-value { color: #B91C1C; }
-
-html.dark-mode .main-wrapper .summary-card-blue { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
+.main-wrapper .summary-card-orange .summary-value { color: #B45309; }
+.main-wrapper .summary-card-purple {
+    background: rgba(124, 58, 237, 0.08); border-color: rgba(124, 58, 237, 0.2);
+}
+.main-wrapper .summary-card-purple .summary-icon {
+    background: rgba(124, 58, 237, 0.15); color: #7C3AED;
+    border: 1.5px solid rgba(124, 58, 237, 0.3);
+}
+.main-wrapper .summary-card-purple .summary-value { color: #6D28D9; }
+html.dark-mode .main-wrapper .summary-card-blue { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
 html.dark-mode .main-wrapper .summary-card-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
-html.dark-mode .main-wrapper .summary-card-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .main-wrapper .summary-card-blue .summary-value { color: #FCA5A5; }
-html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
+html.dark-mode .main-wrapper .summary-card-orange { background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
+html.dark-mode .main-wrapper .summary-card-purple { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html.dark-mode .main-wrapper .summary-card-blue .summary-value { color: #60A5FA; }
 html.dark-mode .main-wrapper .summary-card-green .summary-value { color: #34D399; }
-html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; }
-
+html.dark-mode .main-wrapper .summary-card-orange .summary-value { color: #FBBF24; }
+html.dark-mode .main-wrapper .summary-card-purple .summary-value { color: #C4B5FD; }
 .main-wrapper .summary-icon {
     width: 50px; height: 50px; border-radius: 13px;
     display: flex; align-items: center; justify-content: center;
@@ -588,6 +559,147 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
 }
 
+/* TOP PROVIDERS */
+.main-wrapper .providers-section {
+    background: var(--bg-card); border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    padding: 18px 20px; margin-bottom: 18px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.main-wrapper .providers-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.main-wrapper .providers-section-title {
+    font-size: 14px; font-weight: 800; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.main-wrapper .providers-section-title i { color: #1e40af; }
+.main-wrapper .providers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+.main-wrapper .provider-card-mini {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    transition: all 0.25s ease;
+    min-width: 0;
+}
+.main-wrapper .provider-card-mini:hover {
+    transform: translateY(-2px);
+    border-color: #3b82f6;
+    box-shadow: 0 4px 14px rgba(59, 130, 246, 0.12);
+}
+.main-wrapper .provider-card-mini-icon {
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 18px; flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.main-wrapper .provider-card-mini-info {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 3px;
+}
+.main-wrapper .provider-card-mini-name {
+    font-size: 13px; font-weight: 800; color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.main-wrapper .provider-card-mini-stats {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    font-size: 10px; font-weight: 700;
+}
+.main-wrapper .mini-stat-in {
+    color: #059669; font-family: 'Courier New', monospace;
+}
+.main-wrapper .mini-stat-out {
+    color: #D97706; font-family: 'Courier New', monospace;
+}
+.main-wrapper .mini-count-badge {
+    font-size: 10px; font-weight: 800; padding: 3px 10px;
+    background: #DBEAFE; color: #1D4ED8; border-radius: 6px;
+    border: 1.5px solid #93C5FD;
+    white-space: nowrap;
+}
+html.dark-mode .main-wrapper .mini-count-badge {
+    background: #1E3A5F; color: #60A5FA; border-color: #3B82F6;
+}
+
+/* FILTER BAR */
+.main-wrapper .filter-bar {
+    background: var(--bg-card); border-radius: 12px;
+    padding: 14px 18px; margin-bottom: 18px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.main-wrapper .filter-form {
+    display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+}
+.main-wrapper .filter-group {
+    display: flex; flex-direction: column; gap: 5px;
+    min-width: 160px; flex: 1;
+}
+.main-wrapper .filter-group label {
+    font-size: 11px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 6px;
+}
+.main-wrapper .filter-group label i { color: #1e40af; }
+.main-wrapper .form-control {
+    padding: 10px 14px; border: 1.5px solid var(--border-color);
+    border-radius: 8px; font-size: 13px;
+    color: var(--text-primary); background: var(--bg-input);
+    transition: all 0.3s ease; font-family: 'Inter', sans-serif;
+    width: 100%;
+}
+.main-wrapper .form-control:focus {
+    outline: none; border-color: #1e40af;
+    box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+}
+.main-wrapper .filter-actions { display: flex; gap: 8px; }
+
+/* TYPE TABS */
+.main-wrapper .type-tabs {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    background: var(--bg-input);
+    padding: 5px; border-radius: 10px;
+    border: 1.5px solid var(--border-color);
+}
+.main-wrapper .type-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all 0.25s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.main-wrapper .type-tab:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+.main-wrapper .type-tab.active {
+    background: linear-gradient(135deg, #1e40af, #2563eb);
+    color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3);
+}
+.main-wrapper .type-tab.tab-cash-to-float.active {
+    background: linear-gradient(135deg, #059669, #10B981);
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+}
+.main-wrapper .type-tab.tab-float-to-cash.active {
+    background: linear-gradient(135deg, #D97706, #F59E0B);
+    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+}
+
 /* TABLE CONTAINER */
 .main-wrapper .table-container {
     background: var(--bg-card); border-radius: 14px;
@@ -598,7 +710,7 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
 
 /* TABLE HEADER */
 .main-wrapper .table-header {
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
     padding: 16px 20px; color: #FFFFFF;
     display: flex; justify-content: space-between; align-items: center;
     flex-wrap: wrap; gap: 12px;
@@ -655,7 +767,7 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
 }
 .main-wrapper .table-search-live > i {
-    color: #DC2626; font-size: 13px; flex-shrink: 0;
+    color: #1e40af; font-size: 13px; flex-shrink: 0;
 }
 .main-wrapper .table-search-live input {
     flex: 1; border: none; background: transparent;
@@ -687,7 +799,7 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
 .main-wrapper .scroll-btn {
     width: 38px; height: 38px; border-radius: 10px;
     border: 2px solid #FFFFFF; background: #FFFFFF;
-    color: #DC2626; cursor: pointer;
+    color: #1e40af; cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 15px; font-weight: 800;
     transition: all 0.2s ease;
@@ -715,14 +827,14 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
     background: var(--bg-table-even); border-radius: 4px;
 }
 .main-wrapper .table-wrapper::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    background: linear-gradient(135deg, #1e40af, #2563eb);
     border-radius: 4px;
 }
 
 /* DATA TABLE */
 .main-wrapper .data-table {
     width: 100%; border-collapse: collapse;
-    font-size: 12px; min-width: 1200px;
+    font-size: 12px; min-width: 1300px;
 }
 .main-wrapper .data-table thead tr { background: var(--bg-table-even); }
 .main-wrapper .data-table thead th {
@@ -748,6 +860,7 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
 .main-wrapper .data-table tbody td.text-right { text-align: right; }
 .main-wrapper .data-table tbody td.text-center { text-align: center; }
 
+/* SEARCH MATCH */
 .main-wrapper .data-table tbody tr.search-match {
     background: linear-gradient(135deg, rgba(252, 211, 77, 0.18), rgba(252, 211, 77, 0.08)) !important;
     border-left: 4px solid #F59E0B;
@@ -763,11 +876,8 @@ html.dark-mode .main-wrapper .summary-card-red .summary-value { color: #FCA5A5; 
 .main-wrapper .row-number {
     display: inline-flex; align-items: center; justify-content: center;
     width: 26px; height: 26px; border-radius: 50%;
-    background: var(--red-lighter); font-size: 11px; font-weight: 800;
-    color: var(--red-dark); border: 1.5px solid var(--red-accent);
-}
-html.dark-mode .main-wrapper .row-number {
-    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+    background: var(--bg-input); font-size: 11px; font-weight: 800;
+    color: var(--text-secondary); border: 1.5px solid var(--border-color);
 }
 
 /* DATE CELL */
@@ -779,24 +889,121 @@ html.dark-mode .main-wrapper .row-number {
 .main-wrapper .date-main {
     font-family: 'Inter', 'Courier New', monospace;
     font-size: 12px; font-weight: 800;
-    color: #DC2626;
+    color: #1e40af;
 }
-html.dark-mode .main-wrapper .date-main { color: #FCA5A5; }
+html.dark-mode .main-wrapper .date-main { color: #60A5FA; }
 .main-wrapper .time-sub {
     font-size: 10px; color: var(--text-muted);
 }
 
-/* CASHOUT NUMBER */
-.main-wrapper .cashout-number {
+/* TRANSFER NUMBER */
+.main-wrapper .transfer-number {
     font-family: 'Courier New', monospace;
     font-size: 11px; font-weight: 800;
-    color: #DC2626; background: #FEE2E2;
+    color: #1e40af; background: #DBEAFE;
     padding: 3px 10px; border-radius: 6px;
     white-space: nowrap;
-    border: 1.5px solid #FCA5A5;
+    border: 1.5px solid #93C5FD;
 }
-html.dark-mode .main-wrapper .cashout-number {
-    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
+html.dark-mode .main-wrapper .transfer-number {
+    background: #1E3A5F; color: #60A5FA; border-color: #3B82F6;
+}
+
+/* TYPE BADGE */
+.main-wrapper .type-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 12px; border-radius: 8px;
+    font-size: 10px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.main-wrapper .type-badge-cash-to-float {
+    background: #DCFCE7; color: #15803D;
+    border: 1.5px solid #86EFAC;
+}
+.main-wrapper .type-badge-float-to-cash {
+    background: #FEF3C7; color: #B45309;
+    border: 1.5px solid #FCD34D;
+}
+html.dark-mode .main-wrapper .type-badge-cash-to-float {
+    background: #14532D; color: #4ADE80; border-color: #16A34A;
+}
+html.dark-mode .main-wrapper .type-badge-float-to-cash {
+    background: #5F3A1E; color: #FBBF24; border-color: #D97706;
+}
+
+/* PROVIDER CELL */
+.main-wrapper .provider-cell { display: flex; align-items: center; gap: 10px; }
+.main-wrapper .provider-icon {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 13px; flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.main-wrapper .provider-name {
+    font-size: 12px; font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 160px;
+}
+
+/* CODE BADGE */
+.main-wrapper .code-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    background: #DBEAFE; color: #1D4ED8;
+    border-radius: 6px;
+    font-size: 10px; font-weight: 800;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    border: 1.5px solid #93C5FD;
+}
+html.dark-mode .main-wrapper .code-badge {
+    background: #1E3A5F; color: #60A5FA; border-color: #3B82F6;
+}
+
+/* AMOUNT */
+.main-wrapper .amount-txn {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: 8px;
+    font-weight: 900; font-size: 12px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+}
+.main-wrapper .amount-cash-to-float {
+    background: #DCFCE7; color: #15803D;
+    border: 1.5px solid #86EFAC;
+}
+.main-wrapper .amount-float-to-cash {
+    background: #FEF3C7; color: #B45309;
+    border: 1.5px solid #FCD34D;
+}
+html.dark-mode .main-wrapper .amount-cash-to-float {
+    background: #14532D; color: #4ADE80; border-color: #16A34A;
+}
+html.dark-mode .main-wrapper .amount-float-to-cash {
+    background: #5F3A1E; color: #FBBF24; border-color: #D97706;
+}
+
+/* FLOAT CHANGE */
+.main-wrapper .float-change-cell {
+    display: flex; flex-direction: column; gap: 3px;
+    font-size: 11px; font-family: 'Courier New', monospace;
+    white-space: nowrap;
+}
+.main-wrapper .float-before, .main-wrapper .float-after {
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.main-wrapper .float-before {
+    color: var(--text-muted);
+}
+.main-wrapper .float-after {
+    color: #1e40af; font-weight: 800;
+}
+html.dark-mode .main-wrapper .float-after { color: #60A5FA; }
+.main-wrapper .arrow-change {
+    color: #64748b; font-size: 9px; margin: 0 3px;
 }
 
 /* BRANCH CELL */
@@ -811,12 +1018,12 @@ html.dark-mode .main-wrapper .cashout-number {
 }
 .main-wrapper .branch-code-sm {
     font-size: 9px; font-weight: 700;
-    color: #DC2626; font-family: 'Courier New', monospace;
-    background: #FEE2E2; padding: 1px 6px;
+    color: #1e40af; font-family: 'Courier New', monospace;
+    background: #DBEAFE; padding: 1px 6px;
     border-radius: 4px; align-self: flex-start;
 }
 html.dark-mode .main-wrapper .branch-code-sm {
-    background: #7F1D1D; color: #FCA5A5;
+    background: #1E3A5F; color: #93C5FD;
 }
 
 /* EMPLOYEE CELL */
@@ -829,8 +1036,8 @@ html.dark-mode .main-wrapper .branch-code-sm {
     display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-size: 12px; color: #FFFFFF;
     flex-shrink: 0;
-    background: linear-gradient(135deg, #DC2626, #B91C1C);
-    border: 2px solid #FCA5A5;
+    background: linear-gradient(135deg, #1e40af, #2563eb);
+    border: 2px solid #93c5fd;
     object-fit: cover;
 }
 .main-wrapper .employee-name-sm {
@@ -840,121 +1047,22 @@ html.dark-mode .main-wrapper .branch-code-sm {
     text-overflow: ellipsis; max-width: 120px;
 }
 
-/* REASON CELL */
-.main-wrapper .reason-cell {
-    display: flex; flex-direction: column; gap: 2px;
-    min-width: 0;
-}
-.main-wrapper .reason-text {
-    font-size: 12px; font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-.main-wrapper .taken-by {
-    font-size: 10px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 220px;
-}
-
-/* AMOUNT */
-.main-wrapper .amount-cashout {
-    display: inline-flex; align-items: center;
-    padding: 4px 12px; border-radius: 8px;
-    font-weight: 900; font-size: 12px;
+/* REFERENCE */
+.main-wrapper .ref-number {
     font-family: 'Courier New', monospace;
-    white-space: nowrap;
-    background: #FEE2E2; color: #991B1B;
-    border: 1.5px solid #FCA5A5;
-}
-html.dark-mode .main-wrapper .amount-cashout {
-    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
-}
-
-/* STATUS BADGE */
-.main-wrapper .status-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 8px;
-    font-size: 10px; font-weight: 800;
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 11px;
+    color: var(--text-secondary);
     white-space: nowrap;
 }
-.main-wrapper .status-pending {
-    background: #FEF3C7; color: #B45309;
-    border: 1.5px solid #FCD34D;
-}
-.main-wrapper .status-approved {
-    background: #DCFCE7; color: #15803D;
-    border: 1.5px solid #86EFAC;
-}
-.main-wrapper .status-rejected {
-    background: #FEE2E2; color: #991B1B;
-    border: 1.5px solid #FCA5A5;
-}
-.main-wrapper .status-cancelled {
-    background: #E5E7EB; color: #4B5563;
-    border: 1.5px solid #9CA3AF;
-}
-html.dark-mode .main-wrapper .status-pending { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
-html.dark-mode .main-wrapper .status-approved { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .status-rejected { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
-html.dark-mode .main-wrapper .status-cancelled { background: #374151; color: #9CA3AF; border-color: #6B7280; }
-
-/* ACTION BUTTONS */
-.main-wrapper .action-buttons {
-    display: flex;
-    gap: 6px;
-    justify-content: center;
-}
-.main-wrapper .action-btn {
-    width: 32px; height: 32px;
-    border-radius: 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    text-decoration: none;
-    transition: all 0.2s ease;
-    border: 1.5px solid;
-    cursor: pointer;
-    padding: 0;
-}
-.main-wrapper .action-view {
-    background: #DBEAFE; color: #1D4ED8;
-    border-color: #93C5FD;
-}
-.main-wrapper .action-view:hover {
-    background: #1D4ED8; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-.main-wrapper .action-approve {
-    background: #DCFCE7; color: #15803D;
-    border-color: #86EFAC;
-}
-.main-wrapper .action-approve:hover {
-    background: #059669; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-.main-wrapper .action-reject {
-    background: #FEE2E2; color: #991B1B;
-    border-color: #FCA5A5;
-}
-.main-wrapper .action-reject:hover {
-    background: #DC2626; color: #FFFFFF;
-    transform: translateY(-2px);
-}
-html.dark-mode .main-wrapper .action-view { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
-html.dark-mode .main-wrapper .action-approve { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .main-wrapper .action-reject { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
 
 /* TOTALS ROW */
 .main-wrapper .data-table tbody tr.totals-row {
-    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%) !important;
-    border-top: 3px solid #DC2626;
-    border-bottom: 3px solid #DC2626;
+    background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important;
+    border-top: 3px solid #1e40af;
+    border-bottom: 3px solid #1e40af;
 }
 html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
-    background: linear-gradient(135deg, #450A0A 0%, #7F1D1D 100%) !important;
+    background: linear-gradient(135deg, #334155 0%, #1e293b 100%) !important;
 }
 .main-wrapper .data-table tbody tr.totals-row td {
     padding: 14px 12px;
@@ -1003,11 +1111,11 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
     .main-wrapper .filter-group { min-width: 100%; }
     .main-wrapper .filter-actions { width: 100%; }
     .main-wrapper .filter-actions .btn { flex: 1; justify-content: center; }
+    .main-wrapper .type-tabs { width: 100%; }
+    .main-wrapper .type-tab { flex: 1; justify-content: center; }
     .main-wrapper .data-table { min-width: 1000px; }
     .main-wrapper .quick-filters { padding: 8px 10px; gap: 5px; }
     .main-wrapper .quick-filter-btn { padding: 7px 12px; font-size: 11px; flex: 1; justify-content: center; }
-    .main-wrapper .status-tabs { width: 100%; }
-    .main-wrapper .status-tab { flex: 1; justify-content: center; }
 }
 @media (max-width: 480px) {
     .main-wrapper .summary-value { font-size: 16px; }
@@ -1026,10 +1134,10 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
-                    <i class="fas fa-money-bill-wave"></i>
+                    <i class="fas fa-arrows-alt-h"></i>
                 </div>
                 <div class="branch-info">
-                    <span class="branch-indicator-label">Store Cash Out</span>
+                    <span class="branch-indicator-label">Transfers Report</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
                     <?php if ($branch_code): ?>
                         <span class="branch-indicator-code"><?php echo htmlspecialchars($branch_code); ?></span>
@@ -1047,7 +1155,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
         <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-money-bill-wave" style="color:#DC2626;"></i> Store Cash Out</h2>
+                <h2><i class="fas fa-arrows-alt-h" style="color:#1E40AF;"></i> Transfers Report</h2>
                 <p class="text-muted">
                     <i class="fas fa-calendar"></i>
                     <?php echo date('d M Y', strtotime($from_date)); ?> — <?php echo date('d M Y', strtotime($to_date)); ?>
@@ -1056,88 +1164,27 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                     <?php echo htmlspecialchars($filter_label); ?>
                     •
                     <i class="fas fa-list"></i>
-                    <?php echo number_format($summary['total_count']); ?> records
+                    <?php echo number_format($summary['total_count']); ?> transfers
                 </p>
             </div>
             <div class="header-right">
-                <a href="create.php" class="btn btn-add">
-                    <i class="fas fa-plus-circle"></i> Add New
-                </a>
-                <a href="../reports/export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&format=pdf" 
+                <a href="export.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&format=pdf" 
                    class="btn btn-primary" target="_blank">
                     <i class="fas fa-file-pdf"></i> Export
                 </a>
-                <a href="../reports/index.php" class="btn btn-secondary">
+                <a href="index.php?from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>" 
+                   class="btn btn-secondary">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
         </div>
 
         <?php if (!empty($success_message)): ?>
-            <div class="alert alert-success">
+            <div class="alert alert-success" style="padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; display: flex; align-items: center; gap: 12px;">
                 <i class="fas fa-check-circle"></i>
                 <span><?php echo htmlspecialchars($success_message); ?></span>
             </div>
         <?php endif; ?>
-
-        <!-- SUMMARY CARDS -->
-        <div class="summary-cards">
-            <div class="summary-card summary-card-blue">
-                <div class="summary-icon">
-                    <i class="fas fa-list"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Total Records</span>
-                    <span class="summary-value"><?php echo number_format($summary['total_count']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-money-bill"></i>
-                        <?php echo formatCurrency($summary['total_amount']); ?>
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-orange">
-                <div class="summary-icon">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Pending</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['pending_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['pending_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-green">
-                <div class="summary-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Approved</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['approved_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['approved_count']); ?> records
-                    </span>
-                </div>
-            </div>
-            
-            <div class="summary-card summary-card-red">
-                <div class="summary-icon">
-                    <i class="fas fa-times-circle"></i>
-                </div>
-                <div class="summary-info">
-                    <span class="summary-label">Rejected</span>
-                    <span class="summary-value"><?php echo formatCurrency($summary['rejected_amount']); ?></span>
-                    <span class="summary-sub">
-                        <i class="fas fa-list"></i>
-                        <?php echo number_format($summary['rejected_count']); ?> records
-                    </span>
-                </div>
-            </div>
-        </div>
 
         <!-- 🔥 QUICK FILTER BUTTONS -->
         <div class="quick-filters">
@@ -1160,13 +1207,16 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             ];
             
             foreach ($quick_options as $opt):
-                $url = '?' . http_build_query([
+                $url_params = [
                     'quick' => $opt['key'],
                     'branch_id' => $selected_branch,
-                    'status' => $selected_status,
-                    'from_date' => ($opt['key'] === 'custom') ? $from_date : '',
-                    'to_date'   => ($opt['key'] === 'custom') ? $to_date : '',
-                ]);
+                    'type' => $selected_type,
+                ];
+                if ($opt['key'] === 'custom') {
+                    $url_params['from_date'] = $from_date;
+                    $url_params['to_date'] = $to_date;
+                }
+                $url = '?' . http_build_query($url_params);
                 $is_active = ($quick === $opt['key']);
             ?>
                 <a href="<?php echo $url; ?>" 
@@ -1178,19 +1228,112 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <?php endforeach; ?>
         </div>
 
+        <!-- SUMMARY CARDS -->
+        <div class="summary-cards">
+            <div class="summary-card summary-card-blue">
+                <div class="summary-icon">
+                    <i class="fas fa-arrows-alt-h"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Total Transfers</span>
+                    <span class="summary-value"><?php echo number_format($summary['total_count']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['cash_to_float_count']); ?> to float •
+                        <?php echo number_format($summary['float_to_cash_count']); ?> to cash
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-green">
+                <div class="summary-icon">
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Cash → Float</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_cash_to_float']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['cash_to_float_count']); ?> transfers
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-orange">
+                <div class="summary-icon">
+                    <i class="fas fa-arrow-left"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Float → Cash</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['total_float_to_cash']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-list"></i>
+                        <?php echo number_format($summary['float_to_cash_count']); ?> transfers
+                    </span>
+                </div>
+            </div>
+            
+            <div class="summary-card summary-card-purple">
+                <div class="summary-icon">
+                    <i class="fas fa-balance-scale"></i>
+                </div>
+                <div class="summary-info">
+                    <span class="summary-label">Net Amount</span>
+                    <span class="summary-value"><?php echo formatCurrency($summary['net_amount']); ?></span>
+                    <span class="summary-sub">
+                        <i class="fas fa-calculator"></i>
+                        Cash→Float − Float→Cash
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOP PROVIDERS -->
+        <?php if (count($top_providers) > 0): ?>
+        <div class="providers-section">
+            <div class="providers-section-header">
+                <div class="providers-section-title">
+                    <i class="fas fa-trophy"></i>
+                    Top Providers by Transfers
+                </div>
+                <span class="mini-count-badge"><?php echo count($top_providers); ?> providers</span>
+            </div>
+            <div class="providers-grid">
+                <?php foreach ($top_providers as $p): 
+                    $p_color = $p['color_code'] ?? '#0B5ED7';
+                    $p_icon = $p['icon_class'] ?? 'fas fa-university';
+                ?>
+                    <div class="provider-card-mini">
+                        <div class="provider-card-mini-icon" style="background: <?php echo htmlspecialchars($p_color); ?>;">
+                            <i class="<?php echo htmlspecialchars($p_icon); ?>"></i>
+                        </div>
+                        <div class="provider-card-mini-info">
+                            <span class="provider-card-mini-name"><?php echo htmlspecialchars($p['provider_name']); ?></span>
+                            <div class="provider-card-mini-stats">
+                                <span class="mini-stat-in">→ Float: <?php echo formatCurrency($p['total_to_float']); ?></span>
+                                <span class="mini-stat-out">→ Cash: <?php echo formatCurrency($p['total_to_cash']); ?></span>
+                            </div>
+                        </div>
+                        <span class="mini-count-badge"><?php echo intval($p['txn_count']); ?> txn</span>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <!-- FILTER BAR -->
         <div class="filter-bar">
             <form method="GET" action="" class="filter-form">
-                <input type="hidden" name="quick" value="custom">
+                <input type="hidden" name="quick" value="<?php echo htmlspecialchars($quick); ?>">
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> From Date</label>
+                    <label><i class="fas fa-calendar-day"></i> From</label>
                     <input type="date" name="from_date" class="form-control" 
                            value="<?php echo htmlspecialchars($from_date); ?>">
                 </div>
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-calendar-day"></i> To Date</label>
+                    <label><i class="fas fa-calendar-day"></i> To</label>
                     <input type="date" name="to_date" class="form-control" 
                            value="<?php echo htmlspecialchars($to_date); ?>">
                 </div>
@@ -1210,34 +1353,27 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 <?php endif; ?>
                 
                 <div class="filter-group">
-                    <label><i class="fas fa-filter"></i> Status</label>
-                    <div class="status-tabs">
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=all" 
-                           class="status-tab <?php echo $selected_status === 'all' ? 'active' : ''; ?>">
+                    <label><i class="fas fa-filter"></i> Transfer Type</label>
+                    <div class="type-tabs">
+                        <a href="?quick=<?php echo $quick; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&type=all" 
+                           class="type-tab <?php echo $selected_type === 'all' ? 'active' : ''; ?>">
                             <i class="fas fa-list"></i> All
                         </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=pending" 
-                           class="status-tab tab-pending <?php echo $selected_status === 'pending' ? 'active' : ''; ?>">
-                            <i class="fas fa-clock"></i> Pending
+                        <a href="?quick=<?php echo $quick; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&type=cash_to_float" 
+                           class="type-tab tab-cash-to-float <?php echo $selected_type === 'cash_to_float' ? 'active' : ''; ?>">
+                            <i class="fas fa-arrow-right"></i> Cash → Float
                         </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=approved" 
-                           class="status-tab tab-approved <?php echo $selected_status === 'approved' ? 'active' : ''; ?>">
-                            <i class="fas fa-check-circle"></i> Approved
-                        </a>
-                        <a href="?quick=<?php echo htmlspecialchars($quick); ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&status=rejected" 
-                           class="status-tab tab-rejected <?php echo $selected_status === 'rejected' ? 'active' : ''; ?>">
-                            <i class="fas fa-times-circle"></i> Rejected
+                        <a href="?quick=<?php echo $quick; ?>&from_date=<?php echo urlencode($from_date); ?>&to_date=<?php echo urlencode($to_date); ?>&branch_id=<?php echo $selected_branch; ?>&type=float_to_cash" 
+                           class="type-tab tab-float-to-cash <?php echo $selected_type === 'float_to_cash' ? 'active' : ''; ?>">
+                            <i class="fas fa-arrow-left"></i> Float → Cash
                         </a>
                     </div>
                 </div>
                 
                 <div class="filter-actions">
                     <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-search"></i> Apply Filter
+                        <i class="fas fa-search"></i> Apply
                     </button>
-                    <a href="index.php" class="btn btn-secondary">
-                        <i class="fas fa-undo"></i> Reset
-                    </a>
                 </div>
             </form>
         </div>
@@ -1247,16 +1383,17 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <div class="table-header">
                 <div class="table-header-left">
                     <i class="fas fa-list-alt"></i>
-                    <h3>Cash Out Records</h3>
-                    <span class="count-badge" id="totalCountBadge"><?php echo count($cashouts); ?></span>
+                    <h3>Transfers</h3>
+                    <span class="count-badge" id="totalCountBadge"><?php echo count($transfers); ?></span>
                 </div>
                 
                 <div class="table-header-right">
+                    <!-- LIVE SEARCH -->
                     <div class="table-search-live">
                         <i class="fas fa-search"></i>
                         <input type="text" 
                                id="liveSearchInput" 
-                               placeholder="Search cash out..."
+                               placeholder="Search transfers..."
                                oninput="performLiveSearch(this.value)"
                                autocomplete="off">
                         <button type="button" 
@@ -1272,6 +1409,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                               style="display:none;">0</span>
                     </div>
                     
+                    <!-- SCROLL BUTTONS -->
                     <div class="table-scroll-buttons">
                         <button type="button" class="scroll-btn" onclick="scrollTable('left')" title="Scroll Left">
                             <i class="fas fa-chevron-left"></i>
@@ -1283,80 +1421,96 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 </div>
             </div>
             
-            <?php if (count($cashouts) > 0): ?>
+            <?php if (count($transfers) > 0): ?>
                 <div class="table-wrapper" id="tableWrapper">
-                    <table class="data-table" id="cashoutsTable">
+                    <table class="data-table" id="transfersTable">
                         <thead>
                             <tr>
                                 <th style="width: 50px;">#</th>
                                 <th>Date</th>
-                                <th>Cashout #</th>
-                                <th>Reason</th>
+                                <th>Transfer #</th>
+                                <th>Type</th>
+                                <th>Provider</th>
+                                <th>Code</th>
                                 <th class="text-right">Amount</th>
-                                <th class="text-center">Status</th>
+                                <th>Float Change</th>
                                 <th>Branch</th>
                                 <th>Employee</th>
-                                <th class="text-center">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="cashoutsTableBody">
-                            <?php $i = 1; foreach ($cashouts as $c): 
-                                $c_date = date('d M Y', strtotime($c['cashout_date']));
-                                $c_time = date('H:i', strtotime($c['created_at']));
-                                $emp_initial = strtoupper(substr($c['employee_name'] ?? 'N', 0, 1));
-                                $emp_avatar = $c['employee_avatar'] ?? '';
-                                $status = $c['status'] ?? 'pending';
+                        <tbody id="transfersTableBody">
+                            <?php $i = 1; foreach ($transfers as $t): 
+                                $is_cash_to_float = $t['transfer_type'] === 'cash_to_float';
+                                $type_label = $is_cash_to_float ? 'Cash → Float' : 'Float → Cash';
+                                $type_class = $is_cash_to_float ? 'cash-to-float' : 'float-to-cash';
+                                
+                                $txn_date = date('d M Y', strtotime($t['transfer_date']));
+                                $txn_time = date('H:i', strtotime($t['transfer_time'] ?? $t['created_at']));
+                                $emp_initial = strtoupper(substr($t['employee_name'] ?? 'N', 0, 1));
+                                $emp_avatar = $t['employee_avatar'] ?? '';
                                 
                                 $search_text = strtolower(
-                                    ($c['cashout_number'] ?? '') . ' ' . 
-                                    ($c['reason'] ?? '') . ' ' . 
-                                    ($c['taken_by'] ?? '') . ' ' .
-                                    ($c['employee_name'] ?? '') . ' ' .
-                                    ($c['branch_display_name'] ?? '') . ' ' .
-                                    $c['amount']
+                                    ($t['transfer_number'] ?? '') . ' ' . 
+                                    ($t['provider_name'] ?? '') . ' ' . 
+                                    ($t['provider_code'] ?? '') . ' ' .
+                                    ($t['reference_number'] ?? '') . ' ' .
+                                    ($t['employee_name'] ?? '') . ' ' .
+                                    ($t['branch_display_name'] ?? '') . ' ' .
+                                    $t['amount']
                                 );
                             ?>
-                                <tr class="cashout-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
+                                <tr class="transfer-row" data-search="<?php echo htmlspecialchars($search_text); ?>">
                                     <td><span class="row-number"><?php echo $i++; ?></span></td>
                                     <td>
                                         <div class="date-cell">
-                                            <span class="date-main"><?php echo $c_date; ?></span>
-                                            <span class="time-sub"><?php echo $c_time; ?></span>
+                                            <span class="date-main"><?php echo $txn_date; ?></span>
+                                            <span class="time-sub"><?php echo $txn_time; ?></span>
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="cashout-number"><?php echo htmlspecialchars($c['cashout_number']); ?></span>
+                                        <span class="transfer-number"><?php echo htmlspecialchars($t['transfer_number']); ?></span>
                                     </td>
                                     <td>
-                                        <div class="reason-cell">
-                                            <span class="reason-text"><?php echo htmlspecialchars($c['reason']); ?></span>
-                                            <?php if (!empty($c['taken_by'])): ?>
-                                                <span class="taken-by">
-                                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($c['taken_by']); ?>
-                                                </span>
-                                            <?php endif; ?>
+                                        <span class="type-badge type-badge-<?php echo $type_class; ?>">
+                                            <i class="fas fa-arrow-<?php echo $is_cash_to_float ? 'right' : 'left'; ?>"></i>
+                                            <?php echo $type_label; ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="provider-cell">
+                                            <div class="provider-icon" style="background:<?php echo htmlspecialchars($t['color_code'] ?? '#0B5ED7'); ?>;">
+                                                <i class="<?php echo htmlspecialchars($t['icon_class'] ?? 'fas fa-university'); ?>"></i>
+                                            </div>
+                                            <span class="provider-name"><?php echo htmlspecialchars($t['provider_name'] ?? 'N/A'); ?></span>
                                         </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-badge">
+                                            <i class="fas fa-barcode"></i>
+                                            <?php echo htmlspecialchars($t['provider_code'] ?? '-'); ?>
+                                        </span>
                                     </td>
                                     <td class="text-right">
-                                        <span class="amount-cashout">
-                                            <?php echo formatCurrency($c['amount']); ?>
+                                        <span class="amount-txn amount-<?php echo $type_class; ?>">
+                                            <?php echo formatCurrency($t['amount']); ?>
                                         </span>
                                     </td>
-                                    <td class="text-center">
-                                        <span class="status-badge status-<?php echo $status; ?>">
-                                            <i class="fas fa-<?php 
-                                                echo $status === 'pending' ? 'clock' : 
-                                                    ($status === 'approved' ? 'check-circle' : 
-                                                    ($status === 'rejected' ? 'times-circle' : 'ban')); 
-                                            ?>"></i>
-                                            <?php echo ucfirst($status); ?>
-                                        </span>
+                                    <td>
+                                        <div class="float-change-cell">
+                                            <span class="float-before">
+                                                <?php echo formatCurrency($t['before_float'] ?? 0); ?>
+                                                <i class="fas fa-arrow-right arrow-change"></i>
+                                            </span>
+                                            <span class="float-after">
+                                                <?php echo formatCurrency($t['after_float'] ?? 0); ?>
+                                            </span>
+                                        </div>
                                     </td>
                                     <td>
                                         <div class="branch-cell">
-                                            <span class="branch-name"><?php echo htmlspecialchars($c['branch_display_name'] ?? 'Main'); ?></span>
-                                            <?php if (!empty($c['branch_display_code'])): ?>
-                                                <span class="branch-code-sm"><?php echo htmlspecialchars($c['branch_display_code']); ?></span>
+                                            <span class="branch-name"><?php echo htmlspecialchars($t['branch_display_name'] ?? 'Main'); ?></span>
+                                            <?php if (!empty($t['branch_display_code'])): ?>
+                                                <span class="branch-code-sm"><?php echo htmlspecialchars($t['branch_display_code']); ?></span>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -1368,30 +1522,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                                             <?php else: ?>
                                                 <div class="employee-avatar"><?php echo $emp_initial; ?></div>
                                             <?php endif; ?>
-                                            <span class="employee-name-sm"><?php echo htmlspecialchars($c['employee_name'] ?? 'N/A'); ?></span>
-                                        </div>
-                                    </td>
-                                    <td class="text-center">
-                                        <div class="action-buttons">
-                                            <a href="view.php?id=<?php echo $c['id']; ?>" 
-                                               class="action-btn action-view" 
-                                               title="View">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <?php if ($is_admin && $status === 'pending'): ?>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=approve" 
-                                                   class="action-btn action-approve" 
-                                                   title="Approve"
-                                                   onclick="return confirm('Approve this cash out?')">
-                                                    <i class="fas fa-check"></i>
-                                                </a>
-                                                <a href="approve.php?id=<?php echo $c['id']; ?>&action=reject" 
-                                                   class="action-btn action-reject" 
-                                                   title="Reject"
-                                                   onclick="return confirm('Reject this cash out?')">
-                                                    <i class="fas fa-times"></i>
-                                                </a>
-                                            <?php endif; ?>
+                                            <span class="employee-name-sm"><?php echo htmlspecialchars($t['employee_name'] ?? 'N/A'); ?></span>
                                         </div>
                                     </td>
                                 </tr>
@@ -1399,13 +1530,15 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                             
                             <!-- TOTALS ROW -->
                             <tr class="totals-row">
-                                <td colspan="4" style="text-align:right;">GRAND TOTAL (<?php echo number_format($summary['total_count']); ?> records)</td>
+                                <td colspan="5" style="text-align:right;">TOTAL (<?php echo number_format($summary['total_count']); ?> transfers)</td>
+                                <td colspan="1"></td>
                                 <td class="text-right">
-                                    <span style="color: #DC2626; font-weight: 900; font-size: 14px;">
-                                        <?php echo formatCurrency($summary['total_amount']); ?>
-                                    </span>
+                                    <span style="color: #059669; font-weight: 900;">→ <?php echo formatCurrency($summary['total_cash_to_float']); ?></span><br>
+                                    <span style="color: #D97706; font-weight: 900;">← <?php echo formatCurrency($summary['total_float_to_cash']); ?></span>
                                 </td>
-                                <td colspan="4"></td>
+                                <td colspan="3" style="text-align:right;">
+                                    <span style="color: #7C3AED; font-weight: 900;">Net: <?php echo formatCurrency($summary['net_amount']); ?></span>
+                                </td>
                             </tr>
                         </tbody>
                     </table>
@@ -1415,7 +1548,7 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
                 <div class="empty-state" id="noSearchResults" style="display:none;">
                     <i class="fas fa-search-minus"></i>
                     <h3>No results found</h3>
-                    <p>No cash out records match your search.</p>
+                    <p>No transfers match your search.</p>
                     <button type="button" class="btn btn-secondary" onclick="clearLiveSearch()">
                         <i class="fas fa-times"></i> Clear Search
                     </button>
@@ -1424,11 +1557,11 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
             <?php else: ?>
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
-                    <h3>No Cash Out Records</h3>
-                    <p>No records found for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
+                    <h3>No Transfers Found</h3>
+                    <p>No transfers for this period (<?php echo htmlspecialchars($filter_label); ?>).</p>
                     <p style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
                         <i class="fas fa-info-circle"></i>
-                        Try changing the quick filter, date range, or branch filter.
+                        Try changing the quick filter, date range, branch, or transfer type.
                     </p>
                 </div>
             <?php endif; ?>
@@ -1443,10 +1576,10 @@ html.dark-mode .main-wrapper .data-table tbody tr.totals-row {
 // LIVE SEARCH
 // ============================================================
 function performLiveSearch(searchTerm) {
-    const tableBody = document.getElementById('cashoutsTableBody');
+    const tableBody = document.getElementById('transfersTableBody');
     if (!tableBody) return;
     
-    const rows = tableBody.querySelectorAll('tr.cashout-row');
+    const rows = tableBody.querySelectorAll('tr.transfer-row');
     const clearBtn = document.getElementById('searchClearBtn');
     const countBadge = document.getElementById('searchCountBadge');
     const noResults = document.getElementById('noSearchResults');
@@ -1606,17 +1739,6 @@ document.addEventListener('keydown', function(e) {
 // INIT
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    var successAlert = document.querySelector('.alert-success');
-    if (successAlert) {
-        setTimeout(function() {
-            successAlert.style.transition = 'opacity 0.4s ease';
-            successAlert.style.opacity = '0';
-            setTimeout(function() {
-                if (successAlert.parentElement) successAlert.remove();
-            }, 400);
-        }, 8000);
-    }
-    
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';

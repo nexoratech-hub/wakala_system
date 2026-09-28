@@ -1,15 +1,18 @@
 <?php
 // ================================================================
 // FILE: modules/morning_report/index.php
-// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (ADMIN) - FINAL
+// WAKALA FINANCIAL SYSTEM - MORNING REPORTS (ADMIN) - FINAL FIXED
 // 
 // ✅ BLUE THEME
 // ✅ Summary Cards: 2x2 GRID + SOFT BACKGROUND (60% opacity)
-// ✅ "AWAITING STOCK" badge for dates not yet reached (ENGLISH)
+// ✅ "AWAITING STOCK" badge - INAANGALIA TAREHE YA LEO TU
 // ✅ Report Card Design
 // ✅ View/Edit/Delete on Report Header
 // ✅ Provider rows + Footer totals
 // ✅ ALL INSTRUCTIONS IN ENGLISH
+// 
+// 🔧 FIX: Default from_date/to_date = date('Y-m-d') - tarehe ya leo TU
+// 🔧 FIX: "AWAITING STOCK" inaangalia tarehe ya leo TU (sio jana)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -71,17 +74,21 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// FILTERS
+// ✅ FILTERS - DEFAULT = TAREHE YA LEO TU (FIXED!)
 // ============================================================
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-01');
-$to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
+$today_date = date('Y-m-d');
+
+// ✅ FIX: Default from_date = to_date = date('Y-m-d')
+// Hii inaonyesha report za tarehe ya leo TU
+$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today_date;
+$to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : $today_date;
 $search    = isset($_GET['search'])    ? trim($_GET['search']) : '';
 
 // ============================================================
-// TODAY - For "AWAITING STOCK" check
+// ✅ AWAITING STOCK CHECK - TAREHE YA LEO TU (FIXED!)
 // ============================================================
-$today_date = date('Y-m-d');
-$yesterday_date = date('Y-m-d', strtotime('-1 day'));
+$awaiting_today = true;
+$awaiting_branch_name = '';
 
 // ============================================================
 // FETCH MORNING REPORTS
@@ -161,44 +168,49 @@ try {
 }
 
 // ============================================================
-// CHECK IF "AWAITING STOCK" TODAY
+// ✅ CHECK "AWAITING STOCK" - TAREHE YA LEO TU
 // ============================================================
-$awaiting_today = true;
-$awaiting_branch_name = '';
+// Tunaangalia kama branch iliyochaguliwa ina morning report ya LEO
+// Kama haina, tunaonyesha "AWAITING STOCK" banner
 
 if ($selected_branch > 0) {
-    // Check for today
+    // Branch moja - angalia kama ina report ya LEO
     $stmt = $db->prepare("
         SELECT COUNT(*) FROM morning_reports 
         WHERE branch_id = ? AND report_date = ?
     ");
     $stmt->execute([$selected_branch, $today_date]);
+    
     if ($stmt->fetchColumn() > 0) {
+        // Ina report ya leo - haipo awaiting
         $awaiting_today = false;
     } else {
-        // Check for yesterday
-        $stmt->execute([$selected_branch, $yesterday_date]);
-        if ($stmt->fetchColumn() > 0) {
-            $awaiting_today = false;
-        }
+        // Haina report ya leo - ipo awaiting
+        $awaiting_today = true;
+        $awaiting_branch_name = $branch_name;
     }
-    $awaiting_branch_name = $branch_name;
 } else {
-    // All branches - check if each branch has a report for today/yesterday
+    // All branches - angalia kama KILA branch ina report ya LEO
     $awaiting_branches = [];
     foreach ($branches as $b) {
         $stmt = $db->prepare("
             SELECT COUNT(*) FROM morning_reports 
-            WHERE branch_id = ? AND report_date IN (?, ?)
+            WHERE branch_id = ? AND report_date = ?
         ");
-        $stmt->execute([$b['id'], $today_date, $yesterday_date]);
+        $stmt->execute([$b['id'], $today_date]);
+        
         if ($stmt->fetchColumn() == 0) {
+            // Branch hii haina report ya leo
             $awaiting_branches[] = $b['branch_name'];
         }
     }
+    
     if (empty($awaiting_branches)) {
+        // Branch zote zina report za leo
         $awaiting_today = false;
     } else {
+        // Kuna branch ambazo hazina report za leo
+        $awaiting_today = true;
         $awaiting_branch_name = implode(', ', $awaiting_branches);
     }
 }
@@ -295,7 +307,7 @@ include_once '../../includes/admin_topbar.php';
         <?php endif; ?>
 
         <!-- ============================================================
-             AWAITING STOCK BANNER — ENGLISH
+             ✅ AWAITING STOCK BANNER - INAONEKANA KAMA HAKUNA REPORT YA LEO
              ============================================================ -->
         <?php if ($awaiting_today): ?>
             <div class="awaiting-banner">
@@ -640,7 +652,7 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-sun"></i>
                 <h3>No Morning Reports</h3>
-                <p>No morning reports found in the selected period.</p>
+                <p>No morning reports found for today (<?php echo date('d M Y'); ?>).</p>
                 <button type="button" class="btn-add" onclick="openAddPicker()">
                     <i class="fas fa-plus-circle"></i> Create First Report
                 </button>
@@ -924,7 +936,6 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
     overflow: hidden;
 }
 
-/* ✅ BACKGROUND COLORS - 60% OPACITY (soft, not full) */
 .summary-blue {
     background: linear-gradient(135deg, rgba(219, 234, 254, 0.6) 0%, rgba(191, 219, 254, 0.6) 100%);
     border-color: rgba(59, 130, 246, 0.4);
@@ -942,7 +953,6 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
     border-color: rgba(139, 92, 246, 0.4);
 }
 
-/* DARK MODE - 60% opacity */
 html.dark-mode .summary-blue {
     background: linear-gradient(135deg, rgba(30, 58, 95, 0.6) 0%, rgba(30, 64, 175, 0.6) 100%);
     border-color: rgba(59, 130, 246, 0.5);
@@ -965,7 +975,6 @@ html.dark-mode .summary-purple {
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
-/* Background Icon (decorative, faded) */
 .sc-bg-icon {
     position: absolute;
     right: -10px;
@@ -1019,7 +1028,6 @@ html.dark-mode .sc-bg-purple { color: #a78bfa; }
     font-family: 'Inter', 'Courier New', monospace;
 }
 
-/* Text colors per card */
 .summary-blue .sc-label { color: #1e40af; }
 .summary-blue .sc-value { color: #1e3a8a; }
 .summary-green .sc-label { color: #047857; }
