@@ -4,6 +4,7 @@
 // WAKALA SYSTEM - ADMIN SIDEBAR WITH RED #bb0404
 // FIXED: Maintains scroll position after menu click
 // + TRANSFER MENU ADDED
+// ✅ FIXED: Order = Morning Report → Daily Report → Evening Stock
 // ================================================================
 
 // ============================================================
@@ -16,7 +17,7 @@ try {
     if (isset($db)) {
         $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'");
         $stmt->execute();
-        $result = $stmt->fetch();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($result && !empty($result['setting_value'])) {
             $company_name = $result['setting_value'];
         }
@@ -505,23 +506,29 @@ SIDEBAR HTML
             </a>
         </div>
         
-        <!-- Reports Section -->
+        <!-- ============================================================
+             ✅ REPORTS SECTION - FIXED ORDER
+             Morning Report → Daily Report → Evening Stock
+             ============================================================ -->
         <div class="nav-section">
             <div class="section-title">Reports</div>
             
+            <!-- 1. MORNING REPORT -->
             <a href="../morning_report/index.php" class="nav-item <?php echo $current_dir == 'morning_report' ? 'active' : ''; ?>">
                 <i class="fas fa-sun"></i>
                 <span>Morning Report</span>
             </a>
             
-            <a href="../evening_stock/index.php" class="nav-item <?php echo $current_dir == 'evening_stock' ? 'active' : ''; ?>">
-                <i class="fas fa-moon"></i>
-                <span>Evening Stock</span>
-            </a>
-            
+            <!-- 2. DAILY REPORT -->
             <a href="../daily_report/index.php" class="nav-item <?php echo $current_dir == 'daily_report' ? 'active' : ''; ?>">
                 <i class="fas fa-file-alt"></i>
                 <span>Daily Report</span>
+            </a>
+            
+            <!-- 3. EVENING STOCK -->
+            <a href="../evening_stock/index.php" class="nav-item <?php echo $current_dir == 'evening_stock' ? 'active' : ''; ?>">
+                <i class="fas fa-moon"></i>
+                <span>Evening Stock</span>
             </a>
         </div>
         
@@ -544,9 +551,7 @@ SIDEBAR HTML
                 <span>Cash Out</span>
             </a>
             
-            <!-- ============================================================
-            ✅ NEW: TRANSFER MENU
-            ============================================================ -->
+            <!-- ✅ NEW: TRANSFER MENU -->
             <a href="../transfers/index.php" class="nav-item <?php echo $current_dir == 'transfers' ? 'active' : ''; ?>">
                 <i class="fas fa-exchange-alt"></i>
                 <span>Transfer</span>
@@ -792,7 +797,7 @@ document.addEventListener('DOMContentLoaded', function() {
         saveSidebarScroll();
     });
     
-    console.log('%c 🏪 Admin Sidebar Loaded - Transfer Menu Added',
+    console.log('%c 🏪 Admin Sidebar Loaded - Order: Morning → Daily → Evening',
         'background:#8B0000; color:white; padding:4px 12px; border-radius:4px; font-size:12px;');
 });
 </script>

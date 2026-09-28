@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: modules/daily_report/view_provider_transactions.php
 // WAKALA FINANCIAL SYSTEM - VIEW PROVIDER TRANSACTIONS
-// ✅ FIXED: current_float inachukuliwa kutoka LATEST record
+// ✅ FIXED: Inafanya kazi kwa EMPLOYEE, ADMIN, na SUPER_ADMIN
+// ✅ FIXED: current_float kutoka LATEST record
+// ✅ FIXED: Layout sahihi (haipiti nyuma ya sidebar)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -21,10 +23,12 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'employee';
 
-if ($role !== 'admin' && $role !== 'super_admin') {
-    header('Location: ../dashboard/employee.php');
+if (!in_array($role, ['employee', 'admin', 'super_admin'])) {
+    header('Location: ../../login.php');
     exit();
 }
+
+$is_employee = ($role === 'employee');
 
 // ============================================================
 // GET PARAMETERS
@@ -36,8 +40,20 @@ $report_date = isset($_GET['report_date']) ? $_GET['report_date'] : date('Y-m-d'
 
 if ($provider_id <= 0 || $branch_id <= 0) {
     $_SESSION['error_message'] = 'Invalid provider or branch.';
-    header('Location: index.php');
+    header('Location: ' . ($is_employee ? 'index_employee.php' : 'index.php'));
     exit();
+}
+
+if ($is_employee) {
+    $stmt = $db->prepare("SELECT branch_id FROM employees WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $emp_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$emp_data || intval($emp_data['branch_id']) !== $branch_id) {
+        $_SESSION['error_message'] = 'You do not have permission for this branch.';
+        header('Location: index_employee.php');
+        exit();
+    }
 }
 
 // ============================================================
@@ -50,7 +66,7 @@ try {
 
     if (!$provider) {
         $_SESSION['error_message'] = 'Provider not found.';
-        header('Location: index.php?branch_id=' . $branch_id);
+        header('Location: ' . ($is_employee ? 'index_employee.php' : 'index.php?branch_id=' . $branch_id));
         exit();
     }
 
@@ -68,7 +84,6 @@ try {
     $bp = $stmt->fetch(PDO::FETCH_ASSOC);
     $provider_branch_code = $bp['provider_code'] ?? $provider['provider_code'];
 
-    // GET ALL TRANSACTIONS
     $stmt = $db->prepare("
         SELECT t.*, e.full_name as employee_name, e.profile_pic as employee_pic,
                b.branch_name as txn_branch_name, b.branch_code as txn_branch_code
@@ -76,12 +91,12 @@ try {
         LEFT JOIN employees e ON t.employee_id = e.id
         LEFT JOIN branches b ON t.branch_id = b.id
         WHERE t.provider_id = ? AND t.branch_id = ?
+        AND DATE(t.transaction_date) = ?
         ORDER BY t.created_at DESC, t.id DESC
     ");
-    $stmt->execute([$provider_id, $branch_id]);
+    $stmt->execute([$provider_id, $branch_id, $report_date]);
     $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // CALCULATE SUMMARY
     $total_deposits = 0;
     $total_withdrawals = 0;
     $total_deposit_count = 0;
@@ -111,19 +126,17 @@ try {
         $employee_summary[$emp_name]['count']++;
     }
 
-    // ============================================================
-    // ✅ GET CURRENT FLOAT - LATEST record per provider
-    // ============================================================
     $stmt = $db->prepare("
         SELECT drp.current_float, drp.current_cash, drp.morning_float,
                drp.total_deposits, drp.total_withdrawals, dr.report_date
         FROM daily_report_providers drp
         INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
         WHERE drp.provider_id = ? AND dr.branch_id = ?
+        AND dr.report_date = ?
         ORDER BY dr.report_date DESC, dr.id DESC, drp.id DESC
         LIMIT 1
     ");
-    $stmt->execute([$provider_id, $branch_id]);
+    $stmt->execute([$provider_id, $branch_id, $report_date]);
     $current = $stmt->fetch(PDO::FETCH_ASSOC);
 
     $current_float = floatval($current['current_float'] ?? 0);
@@ -133,21 +146,1054 @@ try {
 } catch (PDOException $e) {
     error_log("Error: " . $e->getMessage());
     $_SESSION['error_message'] = 'Database error.';
-    header('Location: index.php?branch_id=' . $branch_id);
+    header('Location: ' . ($is_employee ? 'index_employee.php' : 'index.php?branch_id=' . $branch_id));
     exit();
 }
 
-include_once '../../includes/admin_header.php';
-include_once '../../includes/admin_sidebar.php';
-include_once '../../includes/admin_topbar.php';
+$back_url = $is_employee ? 'index_employee.php' : 'index.php?branch_id=' . $branch_id;
+
+if ($is_employee) {
+    include_once '../../includes/employee_header.php';
+    include_once '../../includes/employee_sidebar.php';
+    include_once '../../includes/employee_topbar.php';
+} else {
+    include_once '../../includes/admin_header.php';
+    include_once '../../includes/admin_sidebar.php';
+    include_once '../../includes/admin_topbar.php';
+}
 ?>
+
+<style id="view-provider-txn-scoped">
+/* ============================================================
+   ✅ LAYOUT FIX - Content haipiti nyuma ya sidebar
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { width: 100%; overflow-x: hidden; }
+body { width: 100%; overflow-x: hidden; margin: 0; padding: 0; }
+
+:root {
+    --bg-body: #f3f4f6;
+    --bg-card: #ffffff;
+    --bg-input: #f9fafb;
+    --text-primary: #1f2937;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --text-light: #9ca3af;
+    --border-color: #e5e7eb;
+    --shadow-color: rgba(0,0,0,0.06);
+    --shadow-hover: rgba(0,0,0,0.12);
+}
+
+html.dark-mode {
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+}
+
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+
+/* ✅ MAIN WRAPPER - SIDEBAR SAFE */
+.main-wrapper {
+    margin-left: 240px;
+    width: calc(100% - 240px);
+    padding-top: 56px;
+    min-height: 100vh;
+    background: var(--bg-body) !important;
+    transition: margin-left 0.3s ease, width 0.3s ease;
+    overflow-x: hidden;
+    position: relative;
+}
+
+.main-wrapper .main-content {
+    padding: 20px 24px;
+    background: var(--bg-body) !important;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
+/* ✅ RESPONSIVE */
+@media (max-width: 1024px) {
+    .main-wrapper {
+        margin-left: 240px;
+        width: calc(100% - 240px);
+    }
+    .main-wrapper .main-content { padding: 16px 18px; }
+}
+
+@media (max-width: 768px) {
+    .main-wrapper {
+        margin-left: 0;
+        width: 100%;
+        padding-top: 50px;
+    }
+    .main-wrapper .main-content { padding: 16px 14px; }
+}
+
+@media (max-width: 480px) {
+    .main-wrapper { padding-top: 44px; }
+    .main-wrapper .main-content { padding: 12px 10px; }
+}
+
+/* ============================================================
+   PROVIDER HEADER CARD
+   ============================================================ */
+.main-wrapper .provider-header-card {
+    border-radius: 16px;
+    padding: 24px 28px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+    position: relative;
+    overflow: hidden;
+    color: #FFFFFF;
+}
+
+.main-wrapper .provider-header-card::before {
+    content: '';
+    position: absolute;
+    top: -60%; right: -5%;
+    width: 300px; height: 300px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.main-wrapper .provider-header-card::after {
+    content: '';
+    position: absolute;
+    bottom: -50%; left: 10%;
+    width: 200px; height: 200px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.main-wrapper .provider-header-left {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+    flex: 1;
+    position: relative;
+    z-index: 1;
+}
+
+.main-wrapper .provider-header-icon {
+    width: 68px; height: 68px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: #FFFFFF;
+    flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+}
+
+.main-wrapper .provider-header-info {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.main-wrapper .provider-header-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.main-wrapper .provider-header-name {
+    font-size: 26px;
+    font-weight: 900;
+    color: #FFFFFF;
+    margin: 0;
+    letter-spacing: 0.3px;
+    line-height: 1.1;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    word-break: break-word;
+}
+
+.main-wrapper .provider-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.main-wrapper .provider-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.15);
+    padding: 4px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(4px);
+}
+
+.main-wrapper .provider-meta-item i { font-size: 11px; opacity: 0.9; }
+
+.main-wrapper .btn-back-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: rgba(255, 255, 255, 0.18);
+    color: #FFFFFF;
+    border-radius: 10px;
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    transition: all 0.25s ease;
+    backdrop-filter: blur(8px);
+    position: relative;
+    z-index: 1;
+    white-space: nowrap;
+}
+
+.main-wrapper .btn-back-header:hover {
+    background: #FFFFFF;
+    color: #1F2937;
+    transform: translateX(-4px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* ============================================================
+   STATS GRID
+   ============================================================ */
+.main-wrapper .stats-grid-soft {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.main-wrapper .stat-card-soft {
+    position: relative;
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0;
+    overflow: hidden;
+    border: 1.5px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.main-wrapper .stat-card-soft:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
+}
+
+.main-wrapper .stat-card-soft-float {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.2);
+}
+.main-wrapper .stat-card-soft-float .stat-icon-soft {
+    background: rgba(37, 99, 235, 0.15);
+    color: #2563EB;
+    border: 1.5px solid rgba(37, 99, 235, 0.3);
+}
+.main-wrapper .stat-card-soft-float .stat-value-soft { color: #1D4ED8; }
+
+.main-wrapper .stat-card-soft-deposit {
+    background: rgba(5, 150, 105, 0.08);
+    border-color: rgba(5, 150, 105, 0.2);
+}
+.main-wrapper .stat-card-soft-deposit .stat-icon-soft {
+    background: rgba(5, 150, 105, 0.15);
+    color: #059669;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+.main-wrapper .stat-card-soft-deposit .stat-value-soft { color: #047857; }
+
+.main-wrapper .stat-card-soft-withdraw {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.2);
+}
+.main-wrapper .stat-card-soft-withdraw .stat-icon-soft {
+    background: rgba(220, 38, 38, 0.15);
+    color: #DC2626;
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+}
+.main-wrapper .stat-card-soft-withdraw .stat-value-soft { color: #B91C1C; }
+
+.main-wrapper .stat-card-soft-count {
+    background: rgba(124, 58, 237, 0.08);
+    border-color: rgba(124, 58, 237, 0.2);
+}
+.main-wrapper .stat-card-soft-count .stat-icon-soft {
+    background: rgba(124, 58, 237, 0.15);
+    color: #7C3AED;
+    border: 1.5px solid rgba(124, 58, 237, 0.3);
+}
+.main-wrapper .stat-card-soft-count .stat-value-soft { color: #6D28D9; }
+
+html.dark-mode .main-wrapper .stat-card-soft-float { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
+html.dark-mode .main-wrapper .stat-card-soft-deposit { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html.dark-mode .main-wrapper .stat-card-soft-withdraw { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html.dark-mode .main-wrapper .stat-card-soft-count { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html.dark-mode .main-wrapper .stat-card-soft-float .stat-value-soft { color: #60A5FA; }
+html.dark-mode .main-wrapper .stat-card-soft-deposit .stat-value-soft { color: #34D399; }
+html.dark-mode .main-wrapper .stat-card-soft-withdraw .stat-value-soft { color: #FCA5A5; }
+html.dark-mode .main-wrapper .stat-card-soft-count .stat-value-soft { color: #C4B5FD; }
+
+.main-wrapper .stat-icon-soft {
+    width: 50px; height: 50px;
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.main-wrapper .stat-card-soft:hover .stat-icon-soft {
+    transform: scale(1.08) rotate(-4deg);
+}
+
+.main-wrapper .stat-info-soft {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+    gap: 2px;
+}
+
+.main-wrapper .stat-label-soft {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.main-wrapper .stat-value-soft {
+    font-size: 18px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    line-height: 1.2;
+    word-break: break-word;
+}
+
+.main-wrapper .stat-sub-soft {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.main-wrapper .stat-sub-soft i {
+    font-size: 9px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
+.main-wrapper .stat-decoration-soft {
+    position: absolute;
+    top: -30px; right: -30px;
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+}
+
+/* ============================================================
+   SECTION HEADER
+   ============================================================ */
+.main-wrapper .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .section-header h2 {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: 0.2px;
+}
+
+.main-wrapper .section-header h2 i {
+    color: #2563EB;
+    font-size: 18px;
+}
+
+.main-wrapper .section-count {
+    font-size: 12px;
+    font-weight: 800;
+    background: #DBEAFE;
+    color: #1D4ED8;
+    padding: 4px 12px;
+    border-radius: 12px;
+    margin-left: 6px;
+}
+
+html.dark-mode .main-wrapper .section-count {
+    background: #1E3A5F;
+    color: #60A5FA;
+}
+
+/* ============================================================
+   EMPLOYEE SUMMARY
+   ============================================================ */
+.main-wrapper .employee-summary-section {
+    background: var(--bg-card);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin-bottom: 20px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.main-wrapper .employee-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.main-wrapper .employee-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-input);
+    border-radius: 10px;
+    border: 1.5px solid var(--border-color);
+    transition: all 0.25s ease;
+}
+
+.main-wrapper .employee-card:hover {
+    border-color: #2563EB;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+}
+
+.main-wrapper .employee-avatar {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.main-wrapper .employee-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.main-wrapper .employee-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.main-wrapper .employee-stats {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .employee-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.main-wrapper .employee-stat i { font-size: 9px; }
+
+.main-wrapper .employee-stat.deposit-stat {
+    background: #DCFCE7;
+    color: #15803D;
+    border: 1px solid #BBF7D0;
+}
+.main-wrapper .employee-stat.withdrawal-stat {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+.main-wrapper .employee-stat.count-stat {
+    background: #DBEAFE;
+    color: #1D4ED8;
+    border: 1px solid #BFDBFE;
+}
+
+html.dark-mode .main-wrapper .employee-stat.deposit-stat { background: #14532D; color: #4ADE80; border-color: #16A34A; }
+html.dark-mode .main-wrapper .employee-stat.withdrawal-stat { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .main-wrapper .employee-stat.count-stat { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+
+/* ============================================================
+   TRANSACTIONS SECTION
+   ============================================================ */
+.main-wrapper .transactions-section {
+    background: var(--bg-card);
+    border-radius: 14px;
+    padding: 20px 22px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.main-wrapper .transactions-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .filter-btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+}
+
+.main-wrapper .filter-btn:hover {
+    background: var(--bg-body);
+    border-color: #94A3B8;
+}
+
+.main-wrapper .filter-btn.active {
+    background: linear-gradient(135deg, #1E40AF, #2563EB);
+    color: #FFFFFF;
+    border-color: #2563EB;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.main-wrapper .filter-btn-deposit.active {
+    background: linear-gradient(135deg, #059669, #10B981);
+    border-color: #10B981;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.main-wrapper .filter-btn-withdrawal.active {
+    background: linear-gradient(135deg, #DC2626, #EF4444);
+    border-color: #EF4444;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+
+.main-wrapper .transactions-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .search-input-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    padding: 8px 14px;
+    flex: 1;
+    max-width: 500px;
+    transition: all 0.25s ease;
+}
+
+.main-wrapper .search-input-group:focus-within {
+    border-color: #2563EB;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.main-wrapper .search-input-group > i {
+    color: #2563EB;
+    font-size: 13px;
+}
+
+.main-wrapper .search-input-group input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    color: var(--text-primary);
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    min-width: 0;
+}
+
+.main-wrapper .search-input-group input::placeholder {
+    color: var(--text-light);
+}
+
+.main-wrapper .search-input-group button {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #FEE2E2;
+    color: #DC2626;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.main-wrapper .search-input-group button:hover {
+    background: #DC2626;
+    color: #FFFFFF;
+}
+
+.main-wrapper .txn-count {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--bg-input);
+    padding: 8px 16px;
+    border-radius: 10px;
+    border: 1.5px solid var(--border-color);
+    white-space: nowrap;
+}
+
+/* TRANSACTION ITEM */
+.main-wrapper .transactions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.main-wrapper .txn-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px 18px;
+    background: var(--bg-input);
+    border-radius: 12px;
+    border: 1.5px solid var(--border-color);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.25s ease;
+}
+
+.main-wrapper .txn-item::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0;
+    width: 5px; height: 100%;
+}
+
+.main-wrapper .txn-item-deposit::before { background: #10B981; }
+.main-wrapper .txn-item-withdrawal::before { background: #EF4444; }
+
+.main-wrapper .txn-item:hover {
+    background: var(--bg-card);
+    transform: translateX(4px);
+    box-shadow: 0 6px 20px var(--shadow-color);
+}
+
+.main-wrapper .txn-item.hidden-by-filter { display: none !important; }
+
+.main-wrapper .txn-item-icon {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    border: 2px solid;
+}
+
+.main-wrapper .txn-item-deposit .txn-item-icon {
+    background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
+    color: #15803D;
+    border-color: #10B981;
+}
+
+.main-wrapper .txn-item-withdrawal .txn-item-icon {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    color: #991B1B;
+    border-color: #EF4444;
+}
+
+html.dark-mode .main-wrapper .txn-item-deposit .txn-item-icon {
+    background: linear-gradient(135deg, #14532D, #166534);
+    color: #4ADE80;
+}
+
+html.dark-mode .main-wrapper .txn-item-withdrawal .txn-item-icon {
+    background: linear-gradient(135deg, #7F1D1D, #991B1B);
+    color: #FCA5A5;
+}
+
+.main-wrapper .txn-item-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.main-wrapper .txn-item-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .txn-item-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.main-wrapper .txn-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+
+.main-wrapper .txn-badge-deposit {
+    background: #DCFCE7;
+    color: #15803D;
+    border: 1.5px solid #10B981;
+}
+
+.main-wrapper .txn-badge-withdrawal {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1.5px solid #EF4444;
+}
+
+html.dark-mode .main-wrapper .txn-badge-deposit { background: #14532D; color: #4ADE80; border-color: #10B981; }
+html.dark-mode .main-wrapper .txn-badge-withdrawal { background: #7F1D1D; color: #FCA5A5; border-color: #EF4444; }
+
+.main-wrapper .txn-number {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 800;
+    color: #1D4ED8;
+    background: #DBEAFE;
+    padding: 4px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+html.dark-mode .main-wrapper .txn-number { background: #1E3A5F; color: #60A5FA; }
+
+.main-wrapper .txn-item-amount {
+    font-family: 'Inter', 'Courier New', monospace;
+    font-size: 20px;
+    font-weight: 900;
+    white-space: nowrap;
+    letter-spacing: -0.3px;
+}
+
+.main-wrapper .txn-amount-deposit { color: #15803D; }
+.main-wrapper .txn-amount-withdrawal { color: #991B1B; }
+html.dark-mode .main-wrapper .txn-amount-deposit { color: #4ADE80; }
+html.dark-mode .main-wrapper .txn-amount-withdrawal { color: #FCA5A5; }
+
+.main-wrapper .txn-item-bottom {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.main-wrapper .txn-meta {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.main-wrapper .txn-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.main-wrapper .txn-meta-item i {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.main-wrapper .txn-employee {
+    background: #FEF3C7;
+    color: #92400E;
+    padding: 3px 10px;
+    border-radius: 8px;
+    font-weight: 700;
+    border: 1px solid #FDE68A;
+}
+
+.main-wrapper .txn-employee i {
+    color: #D97706;
+    font-size: 11px;
+}
+
+html.dark-mode .main-wrapper .txn-employee { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
+html.dark-mode .main-wrapper .txn-employee i { color: #FBBF24; }
+
+.main-wrapper .txn-description,
+.main-wrapper .txn-notes {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    padding: 6px 10px;
+    background: var(--bg-card);
+    border-radius: 8px;
+    border-left: 3px solid #2563EB;
+}
+
+.main-wrapper .txn-description i,
+.main-wrapper .txn-notes i {
+    font-size: 11px;
+    color: #2563EB;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.main-wrapper .txn-notes {
+    border-left-color: #F59E0B;
+}
+
+.main-wrapper .txn-notes i {
+    color: #F59E0B;
+}
+
+.main-wrapper .txn-item-status {
+    flex-shrink: 0;
+}
+
+.main-wrapper .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    white-space: nowrap;
+}
+
+.main-wrapper .status-badge.status-approved {
+    background: #D1FAE5;
+    color: #065F46;
+    border: 1.5px solid #10B981;
+}
+
+.main-wrapper .status-badge.status-pending {
+    background: #FEF3C7;
+    color: #92400E;
+    border: 1.5px solid #F59E0B;
+}
+
+.main-wrapper .status-badge.status-rejected,
+.main-wrapper .status-badge.status-cancelled {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1.5px solid #EF4444;
+}
+
+html.dark-mode .main-wrapper .status-badge.status-approved { background: #065F46; color: #D1FAE5; }
+html.dark-mode .main-wrapper .status-badge.status-pending { background: #5F3A1E; color: #FBBF24; }
+html.dark-mode .main-wrapper .status-badge.status-rejected,
+html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1D; color: #FEE2E2; }
+
+/* EMPTY / NO RESULTS */
+.main-wrapper .empty-state,
+.main-wrapper .no-results {
+    text-align: center;
+    padding: 60px 20px;
+}
+
+.main-wrapper .empty-state i,
+.main-wrapper .no-results i {
+    font-size: 64px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 16px;
+}
+
+.main-wrapper .empty-state h3,
+.main-wrapper .no-results h3 {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 8px 0;
+}
+
+.main-wrapper .empty-state p,
+.main-wrapper .no-results p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 20px 0;
+}
+
+.main-wrapper .btn {
+    padding: 10px 22px;
+    border: none;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+}
+
+.main-wrapper .btn-primary {
+    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.main-wrapper .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+    color: #FFFFFF;
+}
+
+.main-wrapper .btn-secondary {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+
+.main-wrapper .btn-secondary:hover {
+    background: var(--bg-body);
+    color: var(--text-primary);
+}
+
+/* RESPONSIVE */
+@media (max-width: 1200px) {
+    .main-wrapper .stats-grid-soft { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 768px) {
+    .main-wrapper .provider-header-card {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 20px;
+    }
+    .main-wrapper .provider-header-name { font-size: 20px; }
+    .main-wrapper .provider-header-icon { width: 56px; height: 56px; font-size: 22px; }
+    .main-wrapper .btn-back-header { width: 100%; justify-content: center; }
+    .main-wrapper .stats-grid-soft { grid-template-columns: 1fr; }
+    .main-wrapper .section-header { flex-direction: column; align-items: flex-start; }
+    .main-wrapper .transactions-filters { width: 100%; }
+    .main-wrapper .filter-btn { flex: 1; justify-content: center; }
+    .main-wrapper .txn-item {
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px;
+    }
+    .main-wrapper .txn-item-top { flex-direction: column; align-items: flex-start; }
+    .main-wrapper .txn-item-amount { font-size: 17px; }
+    .main-wrapper .txn-meta { gap: 8px; }
+    .main-wrapper .transactions-search-bar { flex-direction: column; align-items: stretch; }
+    .main-wrapper .search-input-group { max-width: 100%; }
+    .main-wrapper .txn-count { text-align: center; }
+}
+
+@media (max-width: 480px) {
+    .main-wrapper .provider-header-name { font-size: 17px; }
+    .main-wrapper .provider-meta-item { font-size: 10px; padding: 3px 9px; }
+    .main-wrapper .stat-value-soft { font-size: 16px; }
+    .main-wrapper .stat-icon-soft { width: 44px; height: 44px; font-size: 18px; }
+    .main-wrapper .employee-grid { grid-template-columns: 1fr; }
+    .main-wrapper .txn-number { font-size: 10px; padding: 3px 8px; }
+    .main-wrapper .txn-badge { font-size: 9px; padding: 3px 9px; }
+    .main-wrapper .txn-item-amount { font-size: 15px; }
+}
+</style>
 
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ============================================================
-        PROVIDER HEADER CARD
-        ============================================================ -->
+        <!-- PROVIDER HEADER CARD -->
         <div class="provider-header-card" style="background: linear-gradient(135deg, <?php echo htmlspecialchars($provider['color_code'] ?? '#0B5ED7'); ?> 0%, <?php echo htmlspecialchars($provider['color_code'] ?? '#0B5ED7'); ?>dd 100%);">
             <div class="provider-header-left">
                 <div class="provider-header-icon">
@@ -173,18 +1219,15 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
             <div class="provider-header-right">
-                <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn-back-header">
+                <a href="<?php echo $back_url; ?>" class="btn-back-header">
                     <i class="fas fa-arrow-left"></i>
                     <span>Back to Reports</span>
                 </a>
             </div>
         </div>
 
-        <!-- ============================================================
-        STATS CARDS - SOFT BACKGROUND (kama files nyingine)
-        ============================================================ -->
+        <!-- STATS CARDS -->
         <div class="stats-grid-soft">
-            <!-- Current Float -->
             <div class="stat-card-soft stat-card-soft-float">
                 <div class="stat-icon-soft">
                     <i class="fas fa-coins"></i>
@@ -200,7 +1243,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="stat-decoration-soft"></div>
             </div>
             
-            <!-- Total Deposits -->
             <div class="stat-card-soft stat-card-soft-deposit">
                 <div class="stat-icon-soft">
                     <i class="fas fa-arrow-down"></i>
@@ -216,7 +1258,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="stat-decoration-soft"></div>
             </div>
             
-            <!-- Total Withdrawals -->
             <div class="stat-card-soft stat-card-soft-withdraw">
                 <div class="stat-icon-soft">
                     <i class="fas fa-arrow-up"></i>
@@ -232,7 +1273,6 @@ include_once '../../includes/admin_topbar.php';
                 <div class="stat-decoration-soft"></div>
             </div>
             
-            <!-- Total Transactions -->
             <div class="stat-card-soft stat-card-soft-count">
                 <div class="stat-icon-soft">
                     <i class="fas fa-receipt"></i>
@@ -249,9 +1289,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        EMPLOYEE SUMMARY
-        ============================================================ -->
+        <!-- EMPLOYEE SUMMARY -->
         <?php if (count($employee_summary) > 0): ?>
         <div class="employee-summary-section">
             <div class="section-header">
@@ -294,9 +1332,7 @@ include_once '../../includes/admin_topbar.php';
         </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        TRANSACTIONS LIST
-        ============================================================ -->
+        <!-- TRANSACTIONS LIST -->
         <div class="transactions-section">
             <div class="section-header">
                 <h2>
@@ -318,7 +1354,6 @@ include_once '../../includes/admin_topbar.php';
             </div>
 
             <?php if (count($transactions) > 0): ?>
-                <!-- Search Bar -->
                 <div class="transactions-search-bar">
                     <div class="search-input-group">
                         <i class="fas fa-search"></i>
@@ -353,12 +1388,10 @@ include_once '../../includes/admin_topbar.php';
                              data-type="<?php echo $t['transaction_type']; ?>"
                              data-search="<?php echo htmlspecialchars($search_text); ?>">
                             
-                            <!-- Icon -->
                             <div class="txn-item-icon">
                                 <i class="fas fa-arrow-<?php echo $is_deposit ? 'down' : 'up'; ?>"></i>
                             </div>
                             
-                            <!-- Main Content -->
                             <div class="txn-item-content">
                                 <div class="txn-item-top">
                                     <div class="txn-item-left">
@@ -411,7 +1444,6 @@ include_once '../../includes/admin_topbar.php';
                                 </div>
                             </div>
                             
-                            <!-- Status -->
                             <div class="txn-item-status">
                                 <span class="status-badge status-<?php echo htmlspecialchars($t['status'] ?? 'approved'); ?>">
                                     <i class="fas fa-check-circle"></i>
@@ -434,8 +1466,8 @@ include_once '../../includes/admin_topbar.php';
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
                     <h3>No transactions yet</h3>
-                    <p>Provider huyu hajafanya transactions yoyote bado.</p>
-                    <a href="index.php?branch_id=<?php echo $branch_id; ?>" class="btn btn-primary">
+                    <p>Provider huyu hajafanya transactions yoyote kwa tarehe hii.</p>
+                    <a href="<?php echo $back_url; ?>" class="btn btn-primary">
                         <i class="fas fa-arrow-left"></i> Back to Reports
                     </a>
                 </div>
@@ -443,1040 +1475,18 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
     </div>
-    <?php include_once '../../includes/admin_footer.php'; ?>
+    <?php 
+    if ($is_employee) {
+        include_once '../../includes/employee_footer.php';
+    } else {
+        include_once '../../includes/admin_footer.php';
+    }
+    ?>
 </div>
-
-<style>
-/* ============================================================
-   GLOBAL
-   ============================================================ */
-*, *::before, *::after { box-sizing: border-box; }
-html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
-.main-content {
-    overflow-x: hidden !important; max-width: 100% !important;
-    width: 100% !important; padding: 16px 20px !important;
-}
-
-:root {
-    --bg-body: #f3f4f6;
-    --bg-card: #ffffff;
-    --bg-input: #f9fafb;
-    --text-primary: #1f2937;
-    --text-secondary: #374151;
-    --text-muted: #6b7280;
-    --text-light: #9ca3af;
-    --border-color: #e5e7eb;
-    --shadow-color: rgba(0,0,0,0.06);
-    --shadow-hover: rgba(0,0,0,0.12);
-}
-
-html.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
-    --border-color: #334155;
-}
-
-body { background: var(--bg-body) !important; color: var(--text-primary); }
-.main-wrapper, .main-content { background: var(--bg-body) !important; }
-
-/* ============================================================
-   PROVIDER HEADER CARD
-   ============================================================ */
-.provider-header-card {
-    border-radius: 16px;
-    padding: 24px 28px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-    flex-wrap: wrap;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
-    position: relative;
-    overflow: hidden;
-    color: #FFFFFF;
-}
-
-.provider-header-card::before {
-    content: '';
-    position: absolute;
-    top: -60%;
-    right: -5%;
-    width: 300px;
-    height: 300px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.provider-header-card::after {
-    content: '';
-    position: absolute;
-    bottom: -50%;
-    left: 10%;
-    width: 200px;
-    height: 200px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.provider-header-left {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    min-width: 0;
-    flex: 1;
-    position: relative;
-    z-index: 1;
-}
-
-.provider-header-icon {
-    width: 68px;
-    height: 68px;
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.2);
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    color: #FFFFFF;
-    flex-shrink: 0;
-    backdrop-filter: blur(8px);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-}
-
-.provider-header-info {
-    min-width: 0;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.provider-header-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: rgba(255, 255, 255, 0.75);
-}
-
-.provider-header-name {
-    font-size: 26px;
-    font-weight: 900;
-    color: #FFFFFF;
-    margin: 0;
-    letter-spacing: 0.3px;
-    line-height: 1.1;
-    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    word-break: break-word;
-}
-
-.provider-header-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 6px;
-}
-
-.provider-meta-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
-    background: rgba(255, 255, 255, 0.15);
-    padding: 4px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    backdrop-filter: blur(4px);
-}
-
-.provider-meta-item i {
-    font-size: 11px;
-    opacity: 0.9;
-}
-
-.btn-back-header {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.18);
-    color: #FFFFFF;
-    border-radius: 10px;
-    border: 1.5px solid rgba(255, 255, 255, 0.25);
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 700;
-    transition: all 0.25s ease;
-    backdrop-filter: blur(8px);
-    position: relative;
-    z-index: 1;
-    white-space: nowrap;
-}
-
-.btn-back-header:hover {
-    background: #FFFFFF;
-    color: #1F2937;
-    transform: translateX(-4px);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-}
-
-/* ============================================================
-   STATS GRID - SOFT BACKGROUND
-   ============================================================ */
-.stats-grid-soft {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-}
-
-.stat-card-soft {
-    position: relative;
-    border-radius: 14px;
-    padding: 18px 20px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 0;
-    overflow: hidden;
-    border: 1.5px solid transparent;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-
-.stat-card-soft:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
-}
-
-/* SOFT BLUE - Current Float */
-.stat-card-soft-float {
-    background: rgba(37, 99, 235, 0.08);
-    border-color: rgba(37, 99, 235, 0.2);
-}
-.stat-card-soft-float .stat-icon-soft {
-    background: rgba(37, 99, 235, 0.15);
-    color: #2563EB;
-    border: 1.5px solid rgba(37, 99, 235, 0.3);
-}
-.stat-card-soft-float .stat-value-soft { color: #1D4ED8; }
-
-/* SOFT GREEN - Deposits */
-.stat-card-soft-deposit {
-    background: rgba(5, 150, 105, 0.08);
-    border-color: rgba(5, 150, 105, 0.2);
-}
-.stat-card-soft-deposit .stat-icon-soft {
-    background: rgba(5, 150, 105, 0.15);
-    color: #059669;
-    border: 1.5px solid rgba(5, 150, 105, 0.3);
-}
-.stat-card-soft-deposit .stat-value-soft { color: #047857; }
-
-/* SOFT RED - Withdrawals */
-.stat-card-soft-withdraw {
-    background: rgba(220, 38, 38, 0.08);
-    border-color: rgba(220, 38, 38, 0.2);
-}
-.stat-card-soft-withdraw .stat-icon-soft {
-    background: rgba(220, 38, 38, 0.15);
-    color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
-.stat-card-soft-withdraw .stat-value-soft { color: #B91C1C; }
-
-/* SOFT PURPLE - Total Transactions */
-.stat-card-soft-count {
-    background: rgba(124, 58, 237, 0.08);
-    border-color: rgba(124, 58, 237, 0.2);
-}
-.stat-card-soft-count .stat-icon-soft {
-    background: rgba(124, 58, 237, 0.15);
-    color: #7C3AED;
-    border: 1.5px solid rgba(124, 58, 237, 0.3);
-}
-.stat-card-soft-count .stat-value-soft { color: #6D28D9; }
-
-/* Dark mode */
-html.dark-mode .stat-card-soft-float { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
-html.dark-mode .stat-card-soft-deposit { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
-html.dark-mode .stat-card-soft-withdraw { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
-html.dark-mode .stat-card-soft-count { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
-html.dark-mode .stat-card-soft-float .stat-value-soft { color: #60A5FA; }
-html.dark-mode .stat-card-soft-deposit .stat-value-soft { color: #34D399; }
-html.dark-mode .stat-card-soft-withdraw .stat-value-soft { color: #FCA5A5; }
-html.dark-mode .stat-card-soft-count .stat-value-soft { color: #C4B5FD; }
-
-.stat-icon-soft {
-    width: 50px;
-    height: 50px;
-    border-radius: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    flex-shrink: 0;
-    transition: all 0.3s ease;
-}
-
-.stat-card-soft:hover .stat-icon-soft {
-    transform: scale(1.08) rotate(-4deg);
-}
-
-.stat-info-soft {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    flex: 1;
-    gap: 2px;
-}
-
-.stat-label-soft {
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.stat-value-soft {
-    font-size: 18px;
-    font-weight: 900;
-    font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px;
-    line-height: 1.2;
-    word-break: break-word;
-}
-
-.stat-sub-soft {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.stat-sub-soft i {
-    font-size: 9px;
-    color: var(--text-light);
-    flex-shrink: 0;
-}
-
-.stat-decoration-soft {
-    position: absolute;
-    top: -30px;
-    right: -30px;
-    width: 100px;
-    height: 100px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.15);
-    pointer-events: none;
-}
-
-/* ============================================================
-   SECTION HEADER
-   ============================================================ */
-.section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-}
-
-.section-header h2 {
-    font-size: 17px;
-    font-weight: 800;
-    color: var(--text-primary);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    letter-spacing: 0.2px;
-}
-
-.section-header h2 i {
-    color: #2563EB;
-    font-size: 18px;
-}
-
-.section-count {
-    font-size: 12px;
-    font-weight: 800;
-    background: #DBEAFE;
-    color: #1D4ED8;
-    padding: 4px 12px;
-    border-radius: 12px;
-    margin-left: 6px;
-}
-
-html.dark-mode .section-count {
-    background: #1E3A5F;
-    color: #60A5FA;
-}
-
-/* ============================================================
-   EMPLOYEE SUMMARY
-   ============================================================ */
-.employee-summary-section {
-    background: var(--bg-card);
-    border-radius: 14px;
-    padding: 20px 22px;
-    margin-bottom: 20px;
-    border: 1.5px solid var(--border-color);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-.employee-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 12px;
-}
-
-.employee-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: var(--bg-input);
-    border-radius: 10px;
-    border: 1.5px solid var(--border-color);
-    transition: all 0.25s ease;
-}
-
-.employee-card:hover {
-    border-color: #2563EB;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
-}
-
-.employee-avatar {
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
-    color: #FFFFFF;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-}
-
-.employee-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.employee-name {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.employee-stats {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-
-.employee-stat {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 10px;
-    border-radius: 8px;
-    font-size: 11px;
-    font-weight: 700;
-    white-space: nowrap;
-}
-
-.employee-stat i {
-    font-size: 9px;
-}
-
-.employee-stat.deposit-stat {
-    background: #DCFCE7;
-    color: #15803D;
-    border: 1px solid #BBF7D0;
-}
-
-.employee-stat.withdrawal-stat {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1px solid #FECACA;
-}
-
-.employee-stat.count-stat {
-    background: #DBEAFE;
-    color: #1D4ED8;
-    border: 1px solid #BFDBFE;
-}
-
-html.dark-mode .employee-stat.deposit-stat { background: #14532D; color: #4ADE80; border-color: #16A34A; }
-html.dark-mode .employee-stat.withdrawal-stat { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
-html.dark-mode .employee-stat.count-stat { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
-
-/* ============================================================
-   TRANSACTIONS SECTION
-   ============================================================ */
-.transactions-section {
-    background: var(--bg-card);
-    border-radius: 14px;
-    padding: 20px 22px;
-    border: 1.5px solid var(--border-color);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-.transactions-filters {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-
-.filter-btn {
-    padding: 7px 14px;
-    border-radius: 8px;
-    border: 1.5px solid var(--border-color);
-    background: var(--bg-input);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.25s ease;
-    font-family: 'Inter', sans-serif;
-}
-
-.filter-btn:hover {
-    background: var(--bg-body);
-    border-color: #94A3B8;
-}
-
-.filter-btn.active {
-    background: linear-gradient(135deg, #1E40AF, #2563EB);
-    color: #FFFFFF;
-    border-color: #2563EB;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-}
-
-.filter-btn-deposit.active {
-    background: linear-gradient(135deg, #059669, #10B981);
-    border-color: #10B981;
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-}
-
-.filter-btn-withdrawal.active {
-    background: linear-gradient(135deg, #DC2626, #EF4444);
-    border-color: #EF4444;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-
-/* Search Bar */
-.transactions-search-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-}
-
-.search-input-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg-input);
-    border: 1.5px solid var(--border-color);
-    border-radius: 10px;
-    padding: 8px 14px;
-    flex: 1;
-    max-width: 500px;
-    transition: all 0.25s ease;
-}
-
-.search-input-group:focus-within {
-    border-color: #2563EB;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-}
-
-.search-input-group > i {
-    color: #2563EB;
-    font-size: 13px;
-}
-
-.search-input-group input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    font-size: 13px;
-    color: var(--text-primary);
-    outline: none;
-    font-family: 'Inter', sans-serif;
-    min-width: 0;
-}
-
-.search-input-group input::placeholder {
-    color: var(--text-light);
-}
-
-.search-input-group button {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: #FEE2E2;
-    color: #DC2626;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    transition: all 0.2s ease;
-    flex-shrink: 0;
-}
-
-.search-input-group button:hover {
-    background: #DC2626;
-    color: #FFFFFF;
-}
-
-.txn-count {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-muted);
-    background: var(--bg-input);
-    padding: 8px 16px;
-    border-radius: 10px;
-    border: 1.5px solid var(--border-color);
-    white-space: nowrap;
-}
-
-/* ============================================================
-   TRANSACTION ITEM
-   ============================================================ */
-.transactions-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.txn-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 16px 18px;
-    background: var(--bg-input);
-    border-radius: 12px;
-    border: 1.5px solid var(--border-color);
-    position: relative;
-    overflow: hidden;
-    transition: all 0.25s ease;
-}
-
-.txn-item::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 5px;
-    height: 100%;
-}
-
-.txn-item-deposit::before { background: #10B981; }
-.txn-item-withdrawal::before { background: #EF4444; }
-
-.txn-item:hover {
-    background: var(--bg-card);
-    transform: translateX(4px);
-    box-shadow: 0 6px 20px var(--shadow-color);
-}
-
-.txn-item.hidden-by-filter {
-    display: none !important;
-}
-
-.txn-item-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    flex-shrink: 0;
-    border: 2px solid;
-}
-
-.txn-item-deposit .txn-item-icon {
-    background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
-    color: #15803D;
-    border-color: #10B981;
-}
-
-.txn-item-withdrawal .txn-item-icon {
-    background: linear-gradient(135deg, #FEE2E2, #FECACA);
-    color: #991B1B;
-    border-color: #EF4444;
-}
-
-html.dark-mode .txn-item-deposit .txn-item-icon {
-    background: linear-gradient(135deg, #14532D, #166534);
-    color: #4ADE80;
-}
-
-html.dark-mode .txn-item-withdrawal .txn-item-icon {
-    background: linear-gradient(135deg, #7F1D1D, #991B1B);
-    color: #FCA5A5;
-}
-
-.txn-item-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.txn-item-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.txn-item-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    min-width: 0;
-}
-
-.txn-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 12px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 1px;
-    white-space: nowrap;
-}
-
-.txn-badge-deposit {
-    background: #DCFCE7;
-    color: #15803D;
-    border: 1.5px solid #10B981;
-}
-
-.txn-badge-withdrawal {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1.5px solid #EF4444;
-}
-
-html.dark-mode .txn-badge-deposit { background: #14532D; color: #4ADE80; border-color: #10B981; }
-html.dark-mode .txn-badge-withdrawal { background: #7F1D1D; color: #FCA5A5; border-color: #EF4444; }
-
-.txn-number {
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    font-weight: 800;
-    color: #1D4ED8;
-    background: #DBEAFE;
-    padding: 4px 12px;
-    border-radius: 8px;
-    white-space: nowrap;
-}
-
-html.dark-mode .txn-number { background: #1E3A5F; color: #60A5FA; }
-
-.txn-item-amount {
-    font-family: 'Inter', 'Courier New', monospace;
-    font-size: 20px;
-    font-weight: 900;
-    white-space: nowrap;
-    letter-spacing: -0.3px;
-}
-
-.txn-amount-deposit { color: #15803D; }
-.txn-amount-withdrawal { color: #991B1B; }
-html.dark-mode .txn-amount-deposit { color: #4ADE80; }
-html.dark-mode .txn-amount-withdrawal { color: #FCA5A5; }
-
-.txn-item-bottom {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.txn-meta {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-}
-
-.txn-meta-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-
-.txn-meta-item i {
-    font-size: 10px;
-    color: var(--text-muted);
-}
-
-.txn-employee {
-    background: #FEF3C7;
-    color: #92400E;
-    padding: 3px 10px;
-    border-radius: 8px;
-    font-weight: 700;
-    border: 1px solid #FDE68A;
-}
-
-.txn-employee i {
-    color: #D97706;
-    font-size: 11px;
-}
-
-html.dark-mode .txn-employee { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
-html.dark-mode .txn-employee i { color: #FBBF24; }
-
-.txn-description,
-.txn-notes {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    padding: 6px 10px;
-    background: var(--bg-card);
-    border-radius: 8px;
-    border-left: 3px solid #2563EB;
-}
-
-.txn-description i,
-.txn-notes i {
-    font-size: 11px;
-    color: #2563EB;
-    margin-top: 2px;
-    flex-shrink: 0;
-}
-
-.txn-notes {
-    border-left-color: #F59E0B;
-}
-
-.txn-notes i {
-    color: #F59E0B;
-}
-
-.txn-item-status {
-    flex-shrink: 0;
-}
-
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    border-radius: 10px;
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
-}
-
-.status-badge.status-approved {
-    background: #D1FAE5;
-    color: #065F46;
-    border: 1.5px solid #10B981;
-}
-
-.status-badge.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-    border: 1.5px solid #F59E0B;
-}
-
-.status-badge.status-rejected,
-.status-badge.status-cancelled {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1.5px solid #EF4444;
-}
-
-html.dark-mode .status-badge.status-approved { background: #065F46; color: #D1FAE5; }
-html.dark-mode .status-badge.status-pending { background: #5F3A1E; color: #FBBF24; }
-html.dark-mode .status-badge.status-rejected,
-html.dark-mode .status-badge.status-cancelled { background: #7F1D1D; color: #FEE2E2; }
-
-/* ============================================================
-   EMPTY / NO RESULTS
-   ============================================================ */
-.empty-state, .no-results {
-    text-align: center;
-    padding: 60px 20px;
-}
-
-.empty-state i, .no-results i {
-    font-size: 64px;
-    color: var(--text-light);
-    opacity: 0.4;
-    display: block;
-    margin-bottom: 16px;
-}
-
-.empty-state h3, .no-results h3 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 8px 0;
-}
-
-.empty-state p, .no-results p {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin: 0 0 20px 0;
-}
-
-.btn {
-    padding: 10px 22px;
-    border: none;
-    border-radius: 10px;
-    font-weight: 700;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    white-space: nowrap;
-}
-
-.btn-primary {
-    background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
-    color: #FFFFFF;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-}
-
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
-    color: #FFFFFF;
-}
-
-.btn-secondary {
-    background: var(--bg-input);
-    color: var(--text-secondary);
-    border: 1.5px solid var(--border-color);
-}
-
-.btn-secondary:hover {
-    background: var(--bg-body);
-    color: var(--text-primary);
-}
-
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
-@media (max-width: 1200px) {
-    .stats-grid-soft {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (max-width: 768px) {
-    .provider-header-card {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 20px;
-    }
-    
-    .provider-header-name { font-size: 20px; }
-    .provider-header-icon { width: 56px; height: 56px; font-size: 22px; }
-    .btn-back-header { width: 100%; justify-content: center; }
-    
-    .stats-grid-soft { grid-template-columns: 1fr; }
-    
-    .section-header { flex-direction: column; align-items: flex-start; }
-    
-    .transactions-filters { width: 100%; }
-    .filter-btn { flex: 1; justify-content: center; }
-    
-    .txn-item {
-        flex-direction: column;
-        gap: 12px;
-        padding: 14px;
-    }
-    
-    .txn-item-top { flex-direction: column; align-items: flex-start; }
-    .txn-item-amount { font-size: 17px; }
-    .txn-meta { gap: 8px; }
-    
-    .transactions-search-bar { flex-direction: column; align-items: stretch; }
-    .search-input-group { max-width: 100%; }
-    .txn-count { text-align: center; }
-}
-
-@media (max-width: 480px) {
-    .provider-header-name { font-size: 17px; }
-    .provider-meta-item { font-size: 10px; padding: 3px 9px; }
-    .stat-value-soft { font-size: 16px; }
-    .stat-icon-soft { width: 44px; height: 44px; font-size: 18px; }
-    .employee-grid { grid-template-columns: 1fr; }
-    .txn-number { font-size: 10px; padding: 3px 8px; }
-    .txn-badge { font-size: 9px; padding: 3px 9px; }
-    .txn-item-amount { font-size: 15px; }
-}
-</style>
 
 <script>
 // ============================================================
-// FILTER TRANSACTIONS (All / Deposit / Withdrawal)
+// FILTER TRANSACTIONS
 // ============================================================
 function filterTransactions(type, btn) {
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));

@@ -2,13 +2,12 @@
 // ================================================================
 // FILE: modules/daily_report/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE DAILY REPORTS
-// ✅ FIXED: Date-aware summary (no yesterday data)
-// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
-// ✅ FIXED: total_cash inachukuliwa kutoka report ya TAREHE husika
-// ✅ FIXED: current_capital = total_float + total_cash
-// ✅ Employee sees OWN transactions only
-// ✅ Sees BRANCH-wide float/cash
-// ✅ Export dropdown (PDF, CSV, Word)
+// ✅ Deposit → Cash inaongezeka, Float inapungua
+// ✅ Withdrawal → Cash inapungua, Float inaongezeka
+// ✅ AJAX save BILA PAGE RELOAD (0 sec)
+// ✅ Search bar iko NDANI ya table header
+// ✅ Highlight ya search term kwenye results
+// ✅ View provider inafungua NEW PAGE
 // ================================================================
 
 require_once '../../config/config.php';
@@ -33,24 +32,18 @@ if ($role !== 'employee') {
 }
 
 // ============================================================
-// ✅ HELPER: Get daily report for a SPECIFIC DATE
-// ✅ Inarudisha null kama hakuna report ya tarehe hiyo
+// HELPER FUNCTIONS
 // ============================================================
 function getDailyReportByDate($db, $branch_id, $report_date) {
     $stmt = $db->prepare("
         SELECT * FROM daily_reports 
-        WHERE branch_id = ? 
-          AND report_date = ?
-        ORDER BY id DESC 
-        LIMIT 1
+        WHERE branch_id = ? AND report_date = ?
+        ORDER BY id DESC LIMIT 1
     ");
     $stmt->execute([$branch_id, $report_date]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// ============================================================
-// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
-// ============================================================
 function calculateTotalFloat($db, $daily_report_id) {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(latest.current_float), 0) as total_float
@@ -91,9 +84,7 @@ if (isset($_POST['ajax_action'])) {
     header('Content-Type: application/json');
     
     try {
-        // ============================================================
-        // GET PROVIDER FLOAT - ✅ TAREHE YA LEO PEKEE
-        // ============================================================
+        // GET PROVIDER FLOAT
         if ($_POST['ajax_action'] === 'get_provider_float') {
             $provider_id = intval($_POST['provider_id'] ?? 0);
             $branch_id = intval($_POST['branch_id'] ?? 0);
@@ -108,15 +99,12 @@ if (isset($_POST['ajax_action'])) {
                 exit();
             }
             
-            // ✅ Tumia report ya LEO pekee
             $today = date('Y-m-d');
             $latest_dr = getDailyReportByDate($db, $branch_id, $today);
             
             if (!$latest_dr) {
                 echo json_encode([
-                    'success' => true,
-                    'float' => 0,
-                    'cash' => 0,
+                    'success' => true, 'float' => 0, 'cash' => 0,
                     'formatted_float' => formatCurrency(0),
                     'formatted_cash' => formatCurrency(0),
                     'message' => 'Hakuna daily report ya leo'
@@ -125,8 +113,7 @@ if (isset($_POST['ajax_action'])) {
             }
             
             $stmt = $db->prepare("
-                SELECT current_float 
-                FROM daily_report_providers 
+                SELECT current_float FROM daily_report_providers 
                 WHERE daily_report_id = ? AND provider_id = ?
                 ORDER BY id DESC LIMIT 1
             ");
@@ -145,9 +132,51 @@ if (isset($_POST['ajax_action'])) {
             exit();
         }
         
-        // ============================================================
-        // ADD TRANSACTION - ✅ TAREHE YA LEO PEKEE
-        // ============================================================
+        // GET MY TRANSACTIONS
+        if ($_POST['ajax_action'] === 'get_my_transactions') {
+            $from_date = $_POST['from_date'] ?? date('Y-m-01');
+            $to_date = $_POST['to_date'] ?? date('Y-m-d');
+            
+            $stmt = $db->prepare("
+                SELECT t.*, p.provider_name, p.icon_class, p.color_code
+                FROM transactions t
+                LEFT JOIN providers p ON t.provider_id = p.id
+                WHERE t.branch_id = ? AND t.employee_id = ?
+                AND DATE(t.transaction_date) BETWEEN ? AND ?
+                ORDER BY t.created_at DESC LIMIT 200
+            ");
+            $stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
+            $txns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $html = '';
+            $i = 1;
+            foreach ($txns as $txn) {
+                $is_deposit = $txn['transaction_type'] === 'deposit';
+                $color = $txn['color_code'] ?? '#0B5ED7';
+                $icon = $txn['icon_class'] ?? 'fas fa-university';
+                $txn_datetime = $txn['created_at'] ?? $txn['transaction_date'];
+                $txn_search = strtolower(
+                    ($txn['provider_name'] ?? '') . ' ' . ($txn['reference_number'] ?? '') . ' ' .
+                    ($txn['description'] ?? '') . ' ' . ($txn['transaction_number'] ?? '') . ' ' .
+                    $txn['amount'] . ' ' . $txn['transaction_type']
+                );
+                
+                $html .= '<tr class="txn-row-my" data-search="' . htmlspecialchars($txn_search) . '">';
+                $html .= '<td class="row-num-my">' . $i++ . '</td>';
+                $html .= '<td><span class="txn-date-my"><i class="far fa-calendar"></i> ' . date('d M Y', strtotime($txn_datetime)) . '<br><small>' . date('h:i A', strtotime($txn_datetime)) . '</small></span></td>';
+                $html .= '<td><div class="txn-provider-cell-my"><div class="txn-provider-icon-my" style="background:' . $color . ';"><i class="' . $icon . '"></i></div><span>' . htmlspecialchars($txn['provider_name'] ?? 'N/A') . '</span></div></td>';
+                $html .= '<td><span class="txn-type-badge-my ' . ($is_deposit ? 'deposit' : 'withdrawal') . '"><i class="fas fa-arrow-' . ($is_deposit ? 'down' : 'up') . '"></i> ' . ($is_deposit ? 'Deposit' : 'Withdrawal') . '</span></td>';
+                $html .= '<td class="text-right"><span class="txn-amount-my ' . ($is_deposit ? 'deposit' : 'withdrawal') . '">' . ($is_deposit ? '+' : '-') . ' ' . formatCurrency($txn['amount']) . '</span></td>';
+                $html .= '<td><span class="txn-ref-my">' . htmlspecialchars($txn['reference_number'] ?: '-') . '</span></td>';
+                $html .= '<td><div class="txn-actions-my"><a href="view_my_transaction.php?id=' . $txn['id'] . '" class="btn-txn-view-my" title="View Transaction"><i class="fas fa-eye"></i></a></div></td>';
+                $html .= '</tr>';
+            }
+            
+            echo json_encode(['success' => true, 'html' => $html, 'count' => count($txns)]);
+            exit();
+        }
+        
+        // ADD TRANSACTION
         if ($_POST['ajax_action'] === 'add_transaction') {
             $branch_id = intval($_POST['branch_id'] ?? 0);
             $provider_id = intval($_POST['provider_id'] ?? 0);
@@ -164,6 +193,9 @@ if (isset($_POST['ajax_action'])) {
             }
             if ($provider_id <= 0) throw new Exception('Please select a provider.');
             if ($amount <= 0) throw new Exception('Amount must be greater than 0.');
+            if (!in_array($transaction_type, ['deposit', 'withdrawal'])) {
+                throw new Exception('Invalid transaction type.');
+            }
             
             $db->beginTransaction();
             
@@ -182,7 +214,6 @@ if (isset($_POST['ajax_action'])) {
             $branch = $stmt->fetch(PDO::FETCH_ASSOC);
             $branch_name_db = $branch['branch_name'] ?? 'Main';
             
-            // ✅ Get daily report ya LEO PEKEE
             $today = date('Y-m-d');
             $latest_dr = getDailyReportByDate($db, $branch_id, $today);
             
@@ -204,14 +235,11 @@ if (isset($_POST['ajax_action'])) {
             if ($dr_provider) {
                 $current_float = floatval($dr_provider['current_float'] ?? 0);
             } else {
-                // ✅ Fallback: chukua kutoka morning_report_providers ya LEO PEKEE
                 $stmt = $db->prepare("
                     SELECT mrp.float_balance 
                     FROM morning_report_providers mrp
                     INNER JOIN morning_reports mr ON mrp.report_id = mr.id
-                    WHERE mr.branch_id = ? 
-                      AND mrp.provider_id = ?
-                      AND mr.report_date = ?
+                    WHERE mr.branch_id = ? AND mrp.provider_id = ? AND mr.report_date = ?
                     ORDER BY mr.id DESC LIMIT 1
                 ");
                 $stmt->execute([$branch_id, $provider_id, $today]);
@@ -220,12 +248,12 @@ if (isset($_POST['ajax_action'])) {
                 $current_float = floatval($mr_provider['float_balance'] ?? 0);
             }
             
-            if ($transaction_type === 'withdrawal') {
-                $new_float = $current_float - $amount;
+            if ($transaction_type === 'deposit') {
                 $new_cash = $current_cash + $amount;
+                $new_float = $current_float - $amount;
             } else {
-                $new_float = $current_float + $amount;
                 $new_cash = $current_cash - $amount;
+                $new_float = $current_float + $amount;
             }
             
             if ($new_float < 0) throw new Exception('Insufficient float. Current: TSh ' . number_format($current_float, 0));
@@ -234,7 +262,6 @@ if (isset($_POST['ajax_action'])) {
             $prefix = $transaction_type === 'deposit' ? 'DEP' : 'WTH';
             $transaction_number = $prefix . '-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
-            // STEP 1: INSERT TRANSACTION
             $stmt = $db->prepare("
                 INSERT INTO transactions 
                 (transaction_number, transaction_type, employee_id, branch_id, branch,
@@ -251,7 +278,6 @@ if (isset($_POST['ajax_action'])) {
             
             $transaction_id = $db->lastInsertId();
             
-            // STEP 2: UPDATE/INSERT daily_report_providers
             if ($dr_provider) {
                 $stmt = $db->prepare("
                     UPDATE daily_report_providers 
@@ -283,11 +309,9 @@ if (isset($_POST['ajax_action'])) {
                 ]);
             }
             
-            // STEP 3: UPDATE daily_reports.current_cash
             $stmt = $db->prepare("UPDATE daily_reports SET current_cash = ?, updated_at = NOW() WHERE id = ?");
             $stmt->execute([$new_cash, $daily_report_id]);
             
-            // STEP 4: SYNC TOTALS - recalculate from LATEST record per provider
             $stmt = $db->prepare("
                 SELECT COALESCE(SUM(latest.current_float), 0) as tf,
                        COALESCE(SUM(latest.total_deposits), 0) as td,
@@ -320,7 +344,6 @@ if (isset($_POST['ajax_action'])) {
             ");
             $stmt->execute([$total_float, $new_capital, $total_deposits, $total_withdrawals, $daily_report_id]);
             
-            // STEP 5: LOG
             $stmt = $db->prepare("
                 INSERT INTO daily_report_transactions 
                 (daily_report_id, provider_id, provider_code, transaction_type,
@@ -334,8 +357,10 @@ if (isset($_POST['ajax_action'])) {
                 $transaction_date, date('H:i:s'), $user_id
             ]);
             
-            logActivity($user_id, 'Add ' . ucfirst($transaction_type), 'Transactions', $transaction_id, '', 
-                ucfirst($transaction_type) . ' of TSh ' . number_format($amount));
+            if (function_exists('logActivity')) {
+                logActivity($user_id, 'Add ' . ucfirst($transaction_type), 'Transactions', $transaction_id, '', 
+                    ucfirst($transaction_type) . ' of TSh ' . number_format($amount));
+            }
             
             $db->commit();
             
@@ -346,9 +371,13 @@ if (isset($_POST['ajax_action'])) {
                     'id' => $transaction_id,
                     'new_float' => $new_float,
                     'new_cash' => $new_cash,
+                    'new_total_float' => $total_float,
+                    'new_capital' => $new_capital,
                     'formatted_amount' => formatCurrency($amount),
                     'formatted_float' => formatCurrency($new_float),
-                    'formatted_cash' => formatCurrency($new_cash)
+                    'formatted_cash' => formatCurrency($new_cash),
+                    'formatted_total_float' => formatCurrency($total_float),
+                    'formatted_capital' => formatCurrency($new_capital)
                 ]
             ]);
             exit();
@@ -478,17 +507,12 @@ try {
     }
     $my_transactions_count = count($my_transactions);
 
-    // ============================================================
-    // ✅ CURRENT FLOAT/CASH - DATE-AWARE
-    // ✅ Inaonyesha data ya TAREHE ya filter (to_date) pekee
-    // ============================================================
+    // CURRENT FLOAT/CASH - DATE-AWARE
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
     
-    // ✅ Tumia tarehe ya MWISHO ya filter
     $summary_date = $to_date;
-    
     $latest_dr = getDailyReportByDate($db, $employee_branch_id, $summary_date);
     
     if ($latest_dr) {
@@ -496,7 +520,6 @@ try {
         $total_cash = floatval($latest_dr['current_cash'] ?? 0);
         $total_capital = $total_float + $total_cash;
     }
-    // Kama hakuna report ya tarehe hiyo → inabaki 0 ✅
 
     // PROVIDERS FOR MODAL
     $providers_for_modal = [];
@@ -516,17 +539,10 @@ try {
 
 } catch (PDOException $e) {
     error_log("Error: " . $e->getMessage());
-    $reports = [];
-    $providers_for_modal = [];
-    $my_transactions = [];
-    $my_transactions_count = 0;
-    $my_total_deposits = 0;
-    $my_total_withdrawals = 0;
-    $my_deposit_count = 0;
-    $my_withdrawal_count = 0;
-    $total_float = 0;
-    $total_cash = 0;
-    $total_capital = 0;
+    $reports = []; $providers_for_modal = []; $my_transactions = [];
+    $my_transactions_count = 0; $my_total_deposits = 0; $my_total_withdrawals = 0;
+    $my_deposit_count = 0; $my_withdrawal_count = 0;
+    $total_float = 0; $total_cash = 0; $total_capital = 0;
     $summary_date = $to_date;
 }
 
@@ -538,12 +554,9 @@ include_once '../../includes/employee_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- Branch Card -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
-                <div class="branch-icon-wrapper">
-                    <i class="fas fa-store-alt"></i>
-                </div>
+                <div class="branch-icon-wrapper"><i class="fas fa-store-alt"></i></div>
                 <div class="branch-info">
                     <span class="branch-indicator-label">My Branch</span>
                     <span class="branch-indicator-name"><?php echo htmlspecialchars($branch_name); ?></span>
@@ -552,65 +565,40 @@ include_once '../../includes/employee_topbar.php';
                     <?php endif; ?>
                 </div>
                 <?php if ($branch_location): ?>
-                    <div class="branch-location">
-                        <i class="fas fa-map-marker-alt"></i>
-                        <span><?php echo htmlspecialchars($branch_location); ?></span>
-                    </div>
+                    <div class="branch-location"><i class="fas fa-map-marker-alt"></i><span><?php echo htmlspecialchars($branch_location); ?></span></div>
                 <?php endif; ?>
             </div>
             <div class="branch-indicator-right">
-                <span class="date-display">
-                    <i class="far fa-calendar-alt"></i> 
-                    <?php echo date('d M Y'); ?>
-                </span>
+                <span class="date-display"><i class="far fa-calendar-alt"></i> <?php echo date('d M Y'); ?></span>
             </div>
         </div>
 
-        <!-- Capital Card - ✅ DATE-AWARE -->
+        <!-- CAPITAL CARD -->
         <div class="capital-card-compact">
-            <div class="capital-compact-icon">
-                <i class="fas fa-university"></i>
-            </div>
+            <div class="capital-compact-icon"><i class="fas fa-university"></i></div>
             <div class="capital-compact-content">
                 <div class="capital-compact-item">
-                    <span class="capital-compact-label">
-                        <i class="fas fa-coins"></i> Branch Float
-                    </span>
-                    <span class="capital-compact-value capital-float-value" id="totalFloatDisplay">
-                        <?php echo formatCurrency($total_float); ?>
-                    </span>
+                    <span class="capital-compact-label"><i class="fas fa-coins"></i> Branch Float</span>
+                    <span class="capital-compact-value capital-float-value" id="totalFloatDisplay"><?php echo formatCurrency($total_float); ?></span>
                 </div>
                 <div class="capital-compact-item">
-                    <span class="capital-compact-label">
-                        <i class="fas fa-money-bill-wave"></i> Branch Cash
-                    </span>
-                    <span class="capital-compact-value capital-cash-value" id="totalCashDisplay">
-                        <?php echo formatCurrency($total_cash); ?>
-                    </span>
+                    <span class="capital-compact-label"><i class="fas fa-money-bill-wave"></i> Branch Cash</span>
+                    <span class="capital-compact-value capital-cash-value" id="totalCashDisplay"><?php echo formatCurrency($total_cash); ?></span>
                 </div>
                 <div class="capital-compact-item">
-                    <span class="capital-compact-label">
-                        <i class="fas fa-building"></i> Total Capital
-                    </span>
-                    <span class="capital-compact-value capital-capital-value" id="totalCapitalDisplay">
-                        <?php echo formatCurrency($total_capital); ?>
-                    </span>
+                    <span class="capital-compact-label"><i class="fas fa-building"></i> Total Capital</span>
+                    <span class="capital-compact-value capital-capital-value" id="totalCapitalDisplay"><?php echo formatCurrency($total_capital); ?></span>
                 </div>
             </div>
             <div class="capital-compact-badge">
                 <i class="fas fa-store"></i> Branch
-                <span style="opacity:0.7;font-weight:500;margin-left:4px;">
-                    (<?php echo date('d M', strtotime($summary_date)); ?>)
-                </span>
+                <span style="opacity:0.7;font-weight:500;margin-left:4px;">(<?php echo date('d M', strtotime($summary_date)); ?>)</span>
             </div>
         </div>
 
         <!-- TIME FILTER BAR -->
         <div class="time-filter-bar">
-            <div class="time-filter-left">
-                <i class="fas fa-calendar-alt"></i>
-                <span class="time-filter-label">Period:</span>
-            </div>
+            <div class="time-filter-left"><i class="fas fa-calendar-alt"></i><span class="time-filter-label">Period:</span></div>
             <div class="time-filter-buttons">
                 <a href="?filter=all" class="time-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">All</a>
                 <a href="?filter=today" class="time-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">Today</a>
@@ -631,26 +619,17 @@ include_once '../../includes/employee_topbar.php';
         <div class="filter-bar-main">
             <form method="GET" action="" class="filter-form-main">
                 <input type="hidden" name="filter" value="custom">
-                
                 <div class="filter-item">
                     <label><i class="fas fa-calendar-day"></i> From</label>
-                    <input type="date" name="from_date" class="filter-input" 
-                           value="<?php echo htmlspecialchars($from_date); ?>">
+                    <input type="date" name="from_date" class="filter-input" value="<?php echo htmlspecialchars($from_date); ?>">
                 </div>
-                
                 <div class="filter-item">
                     <label><i class="fas fa-calendar-day"></i> To</label>
-                    <input type="date" name="to_date" class="filter-input" 
-                           value="<?php echo htmlspecialchars($to_date); ?>">
+                    <input type="date" name="to_date" class="filter-input" value="<?php echo htmlspecialchars($to_date); ?>">
                 </div>
-                
                 <div class="filter-actions">
-                    <button type="submit" class="btn-filter-main">
-                        <i class="fas fa-search"></i> Filter
-                    </button>
-                    <a href="index_employee.php" class="btn-reset-main">
-                        <i class="fas fa-undo"></i> Reset
-                    </a>
+                    <button type="submit" class="btn-filter-main"><i class="fas fa-search"></i> Filter</button>
+                    <a href="index_employee.php" class="btn-reset-main"><i class="fas fa-undo"></i> Reset</a>
                 </div>
             </form>
         </div>
@@ -658,71 +637,44 @@ include_once '../../includes/employee_topbar.php';
         <!-- SUMMARY CARDS -->
         <div class="summary-cards-soft">
             <div class="summary-card-soft summary-card-soft-purple">
-                <div class="summary-icon-soft">
-                    <i class="fas fa-exchange-alt"></i>
-                </div>
+                <div class="summary-icon-soft"><i class="fas fa-exchange-alt"></i></div>
                 <div class="summary-info-soft">
                     <span class="summary-label-soft">My Transactions</span>
-                    <span class="summary-value-soft">
-                        <?php echo number_format($my_transactions_count); ?>
-                    </span>
-                    <span class="summary-sub-soft">
-                        <i class="fas fa-user"></i> Only mine
-                    </span>
+                    <span class="summary-value-soft" id="myTxnCountDisplay"><?php echo number_format($my_transactions_count); ?></span>
+                    <span class="summary-sub-soft"><i class="fas fa-user"></i> Only mine</span>
                 </div>
                 <div class="summary-decoration-soft"></div>
             </div>
-            
             <div class="summary-card-soft summary-card-soft-green">
-                <div class="summary-icon-soft">
-                    <i class="fas fa-arrow-down"></i>
-                </div>
+                <div class="summary-icon-soft"><i class="fas fa-arrow-down"></i></div>
                 <div class="summary-info-soft">
                     <span class="summary-label-soft">My Deposits</span>
-                    <span class="summary-value-soft">
-                        <?php echo formatCurrency($my_total_deposits); ?>
-                    </span>
-                    <span class="summary-sub-soft">
-                        <i class="fas fa-list"></i> <?php echo number_format($my_deposit_count); ?> transactions
-                    </span>
+                    <span class="summary-value-soft" id="myDepositsDisplay"><?php echo formatCurrency($my_total_deposits); ?></span>
+                    <span class="summary-sub-soft" id="myDepositCountDisplay"><i class="fas fa-list"></i> <?php echo number_format($my_deposit_count); ?> transactions</span>
                 </div>
                 <div class="summary-decoration-soft"></div>
             </div>
-            
             <div class="summary-card-soft summary-card-soft-red">
-                <div class="summary-icon-soft">
-                    <i class="fas fa-arrow-up"></i>
-                </div>
+                <div class="summary-icon-soft"><i class="fas fa-arrow-up"></i></div>
                 <div class="summary-info-soft">
                     <span class="summary-label-soft">My Withdrawals</span>
-                    <span class="summary-value-soft">
-                        <?php echo formatCurrency($my_total_withdrawals); ?>
-                    </span>
-                    <span class="summary-sub-soft">
-                        <i class="fas fa-list"></i> <?php echo number_format($my_withdrawal_count); ?> transactions
-                    </span>
+                    <span class="summary-value-soft" id="myWithdrawalsDisplay"><?php echo formatCurrency($my_total_withdrawals); ?></span>
+                    <span class="summary-sub-soft" id="myWithdrawalCountDisplay"><i class="fas fa-list"></i> <?php echo number_format($my_withdrawal_count); ?> transactions</span>
                 </div>
                 <div class="summary-decoration-soft"></div>
             </div>
-            
             <div class="summary-card-soft summary-card-soft-blue">
-                <div class="summary-icon-soft">
-                    <i class="fas fa-file-alt"></i>
-                </div>
+                <div class="summary-icon-soft"><i class="fas fa-file-alt"></i></div>
                 <div class="summary-info-soft">
                     <span class="summary-label-soft">Branch Reports</span>
-                    <span class="summary-value-soft">
-                        <?php echo number_format(count($reports)); ?>
-                    </span>
-                    <span class="summary-sub-soft">
-                        <i class="fas fa-store"></i> In this period
-                    </span>
+                    <span class="summary-value-soft" id="branchReportsCount"><?php echo number_format(count($reports)); ?></span>
+                    <span class="summary-sub-soft"><i class="fas fa-store"></i> In this period</span>
                 </div>
                 <div class="summary-decoration-soft"></div>
             </div>
         </div>
 
-        <!-- PAGE HEADER WITH BIGGER BUTTONS + EXPORT -->
+        <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-file-alt" style="color:#bb0404;"></i> Branch Daily Reports</h2>
@@ -733,43 +685,28 @@ include_once '../../includes/employee_topbar.php';
             </div>
             <div class="header-right">
                 <button type="button" class="btn-action-big btn-action-deposit" onclick="openTransactionModal('deposit')">
-                    <i class="fas fa-arrow-down"></i>
-                    <span>Add Deposit</span>
+                    <i class="fas fa-arrow-down"></i><span>Add Deposit</span>
                 </button>
-                
                 <button type="button" class="btn-action-big btn-action-withdrawal" onclick="openTransactionModal('withdrawal')">
-                    <i class="fas fa-arrow-up"></i>
-                    <span>Add Withdrawal</span>
+                    <i class="fas fa-arrow-up"></i><span>Add Withdrawal</span>
                 </button>
-                
-                <!-- ✅ EXPORT DROPDOWN -->
                 <div class="dropdown export-dropdown">
                     <button type="button" class="btn-action-big btn-action-export dropdown-toggle" onclick="toggleExportDropdown(event)">
-                        <i class="fas fa-file-export"></i>
-                        <span>Export</span>
+                        <i class="fas fa-file-export"></i><span>Export</span>
                         <i class="fas fa-chevron-down dropdown-arrow"></i>
                     </button>
                     <div class="dropdown-menu" id="exportDropdownMenu">
                         <a href="#" onclick="exportData('pdf'); return false;">
                             <i class="fas fa-file-pdf" style="color:#DC2626;"></i>
-                            <div>
-                                <span class="dropdown-item-title">Export as PDF</span>
-                                <span class="dropdown-item-desc">Print-ready document</span>
-                            </div>
+                            <div><span class="dropdown-item-title">Export as PDF</span><span class="dropdown-item-desc">Print-ready document</span></div>
                         </a>
                         <a href="#" onclick="exportData('csv'); return false;">
                             <i class="fas fa-file-csv" style="color:#059669;"></i>
-                            <div>
-                                <span class="dropdown-item-title">Export as CSV</span>
-                                <span class="dropdown-item-desc">Excel compatible</span>
-                            </div>
+                            <div><span class="dropdown-item-title">Export as CSV</span><span class="dropdown-item-desc">Excel compatible</span></div>
                         </a>
                         <a href="#" onclick="exportData('word'); return false;">
                             <i class="fas fa-file-word" style="color:#2563EB;"></i>
-                            <div>
-                                <span class="dropdown-item-title">Export as Word</span>
-                                <span class="dropdown-item-desc">Microsoft Word document</span>
-                            </div>
+                            <div><span class="dropdown-item-title">Export as Word</span><span class="dropdown-item-desc">Microsoft Word document</span></div>
                         </a>
                     </div>
                 </div>
@@ -782,24 +719,17 @@ include_once '../../includes/employee_topbar.php';
                 <h3>
                     <i class="fas fa-user-circle"></i>
                     My Transactions
-                    <span class="section-count-my-red"><?php echo count($my_transactions); ?></span>
+                    <span class="section-count-my-red" id="myTxnHeaderCount"><?php echo count($my_transactions); ?></span>
                 </h3>
-                
                 <div class="search-input-group-my-red">
                     <i class="fas fa-search"></i>
-                    <input type="text" 
-                           id="myTxnSearchInput" 
-                           placeholder="Search provider, reference, amount..."
-                           oninput="onMyTxnSearch(this)">
-                    <button type="button" id="myTxnSearchClear" onclick="clearMyTxnSearch()" style="display:none;">
-                        <i class="fas fa-times"></i>
-                    </button>
+                    <input type="text" id="myTxnSearchInput" placeholder="Search provider, reference, amount..." oninput="onMyTxnSearch(this)">
+                    <button type="button" id="myTxnSearchClear" onclick="clearMyTxnSearch()" style="display:none;"><i class="fas fa-times"></i></button>
                     <span class="search-count-my-red" id="myTxnSearchCount" style="display:none;">0</span>
                 </div>
             </div>
             
-            <?php if (count($my_transactions) > 0): ?>
-            <div class="txn-table-wrapper">
+            <div class="txn-table-wrapper" id="myTxnTableWrapper" <?php echo count($my_transactions) > 0 ? '' : 'style="display:none;"'; ?>>
                 <table class="txn-table">
                     <thead>
                         <tr>
@@ -818,14 +748,10 @@ include_once '../../includes/employee_topbar.php';
                             $color = $txn['color_code'] ?? '#0B5ED7';
                             $icon = $txn['icon_class'] ?? 'fas fa-university';
                             $txn_datetime = $txn['created_at'] ?? $txn['transaction_date'];
-                            
                             $txn_search = strtolower(
-                                ($txn['provider_name'] ?? '') . ' ' .
-                                ($txn['reference_number'] ?? '') . ' ' .
-                                ($txn['description'] ?? '') . ' ' .
-                                ($txn['transaction_number'] ?? '') . ' ' .
-                                $txn['amount'] . ' ' .
-                                $txn['transaction_type']
+                                ($txn['provider_name'] ?? '') . ' ' . ($txn['reference_number'] ?? '') . ' ' .
+                                ($txn['description'] ?? '') . ' ' . ($txn['transaction_number'] ?? '') . ' ' .
+                                $txn['amount'] . ' ' . $txn['transaction_type']
                             );
                         ?>
                             <tr class="txn-row-my" data-search="<?php echo htmlspecialchars($txn_search); ?>">
@@ -854,18 +780,13 @@ include_once '../../includes/employee_topbar.php';
                                 </td>
                                 <td class="text-right">
                                     <span class="txn-amount-my <?php echo $is_deposit ? 'deposit' : 'withdrawal'; ?>">
-                                        <?php echo $is_deposit ? '+' : '-'; ?> 
-                                        <?php echo formatCurrency($txn['amount']); ?>
+                                        <?php echo $is_deposit ? '+' : '-'; ?> <?php echo formatCurrency($txn['amount']); ?>
                                     </span>
                                 </td>
-                                <td>
-                                    <span class="txn-ref-my"><?php echo htmlspecialchars($txn['reference_number'] ?: '-'); ?></span>
-                                </td>
+                                <td><span class="txn-ref-my"><?php echo htmlspecialchars($txn['reference_number'] ?: '-'); ?></span></td>
                                 <td>
                                     <div class="txn-actions-my">
-                                        <a href="view_my_transaction.php?id=<?php echo $txn['id']; ?>" 
-                                           class="btn-txn-view-my" 
-                                           title="View Transaction">
+                                        <a href="view_my_transaction.php?id=<?php echo $txn['id']; ?>" class="btn-txn-view-my" title="View Transaction">
                                             <i class="fas fa-eye"></i>
                                         </a>
                                     </div>
@@ -874,25 +795,20 @@ include_once '../../includes/employee_topbar.php';
                         <?php endforeach; ?>
                     </tbody>
                 </table>
-                
                 <div class="no-txn-results-my" id="noMyTxnResults" style="display:none;">
                     <i class="fas fa-search-minus"></i>
                     <p>No transactions match your search</p>
-                    <button type="button" class="btn btn-reset" onclick="clearMyTxnSearch()">
-                        <i class="fas fa-times"></i> Clear Search
-                    </button>
+                    <button type="button" class="btn btn-reset" onclick="clearMyTxnSearch()"><i class="fas fa-times"></i> Clear Search</button>
                 </div>
             </div>
-            <?php else: ?>
-                <div class="empty-txn-my">
-                    <i class="fas fa-inbox"></i>
-                    <p>No transactions found in this period.</p>
-                    <p style="margin-top: 8px; font-size: 12px; color: var(--text-light);">
-                        <i class="fas fa-info-circle"></i> 
-                        Start by clicking "Add Deposit" or "Add Withdrawal"
-                    </p>
-                </div>
-            <?php endif; ?>
+            
+            <div class="empty-txn-my" id="myTxnEmptyState" <?php echo count($my_transactions) > 0 ? 'style="display:none;"' : ''; ?>>
+                <i class="fas fa-inbox"></i>
+                <p>No transactions found in this period.</p>
+                <p style="margin-top: 8px; font-size: 12px; color: var(--text-light);">
+                    <i class="fas fa-info-circle"></i> Start by clicking "Add Deposit" or "Add Withdrawal"
+                </p>
+            </div>
         </div>
 
         <!-- BRANCH REPORTS SECTION -->
@@ -900,7 +816,7 @@ include_once '../../includes/employee_topbar.php';
         <div class="section-title-bar">
             <i class="fas fa-file-alt"></i>
             <span>Branch Reports (View Only)</span>
-            <span class="count-badge-bar"><?php echo count($reports); ?></span>
+            <span class="count-badge-bar" id="branchReportsHeaderCount"><?php echo count($reports); ?></span>
         </div>
         
         <div id="reportsContainer">
@@ -909,6 +825,7 @@ include_once '../../includes/employee_topbar.php';
                 $search_data = strtolower(
                     ($report['report_number'] ?? '') . ' ' .
                     ($report['employee_name'] ?? '') . ' ' .
+                    ($report['branch_name'] ?? '') . ' ' .
                     implode(' ', $provider_names) . ' ' .
                     date('d M Y', strtotime($report['report_date'] ?? 'now'))
                 );
@@ -916,26 +833,17 @@ include_once '../../includes/employee_topbar.php';
                 <div class="report-group" 
                      data-report-id="<?php echo $report['id']; ?>"
                      data-search="<?php echo htmlspecialchars($search_data); ?>">
-                    
                     <div class="report-group-header">
                         <div class="report-header-left">
-                            <div class="report-icon">
-                                <i class="fas fa-file-alt"></i>
-                            </div>
+                            <div class="report-icon"><i class="fas fa-file-alt"></i></div>
                             <div class="report-header-info">
                                 <div class="report-header-title">
                                     <span class="report-label">Report:</span>
                                     <span class="report-number"><?php echo htmlspecialchars($report['report_number']); ?></span>
                                 </div>
                                 <div class="report-header-meta">
-                                    <span class="meta-item">
-                                        <i class="fas fa-calendar"></i>
-                                        <?php echo date('d M Y', strtotime($report['report_date'])); ?>
-                                    </span>
-                                    <span class="meta-item">
-                                        <i class="fas fa-user"></i>
-                                        <?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?>
-                                    </span>
+                                    <span class="meta-item"><i class="fas fa-calendar"></i><?php echo date('d M Y', strtotime($report['report_date'])); ?></span>
+                                    <span class="meta-item"><i class="fas fa-user"></i><?php echo htmlspecialchars($report['employee_name'] ?? 'N/A'); ?></span>
                                 </div>
                             </div>
                         </div>
@@ -945,9 +853,7 @@ include_once '../../includes/employee_topbar.php';
                                 <span class="stat-value"><?php echo count($report['providers']); ?></span>
                             </div>
                             <div class="report-header-actions">
-                                <a href="view_employee.php?id=<?php echo $report['id']; ?>" class="btn-view-report">
-                                    <i class="fas fa-eye"></i> View
-                                </a>
+                                <a href="view_employee.php?id=<?php echo $report['id']; ?>" class="btn-view-report"><i class="fas fa-eye"></i> View</a>
                             </div>
                         </div>
                     </div>
@@ -955,7 +861,32 @@ include_once '../../includes/employee_topbar.php';
                     <?php if (!empty($report['providers'])): ?>
                     <div class="providers-table-wrapper">
                         <table class="providers-table">
+                            <!-- ✅ SEARCH BAR NDANI YA TABLE HEADER -->
                             <thead>
+                                <tr class="table-search-row">
+                                    <th colspan="8" class="table-search-cell">
+                                        <div class="table-search-content">
+                                            <div class="table-search-input-group">
+                                                <i class="fas fa-search"></i>
+                                                <input type="text" 
+                                                       class="table-search-input" 
+                                                       data-report-id="<?php echo $report['id']; ?>"
+                                                       placeholder="Search provider in this report (e.g. CRDB)..."
+                                                       oninput="onTableSearch(this, <?php echo $report['id']; ?>)">
+                                                <button type="button" 
+                                                        class="table-search-clear" 
+                                                        data-report-id="<?php echo $report['id']; ?>"
+                                                        onclick="clearTableSearch(<?php echo $report['id']; ?>)" 
+                                                        style="display:none;">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <span class="table-search-count" 
+                                                      data-report-id="<?php echo $report['id']; ?>" 
+                                                      style="display:none;">0</span>
+                                            </div>
+                                        </div>
+                                    </th>
+                                </tr>
                                 <tr>
                                     <th style="width: 50px;">#</th>
                                     <th>Provider</th>
@@ -967,54 +898,45 @@ include_once '../../includes/employee_topbar.php';
                                     <th style="width: 80px;">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody data-report-tbody="<?php echo $report['id']; ?>">
                                 <?php 
-                                $i = 1; 
-                                $sum_float = 0;
-                                $sum_current_float = 0;
-                                $sum_deposits = 0;
-                                $sum_withdrawals = 0;
+                                $i = 1; $sum_float = 0; $sum_current_float = 0; $sum_deposits = 0; $sum_withdrawals = 0;
                                 foreach ($report['providers'] as $p): 
                                     $sum_float += floatval($p['morning_float']);
                                     $sum_current_float += floatval($p['current_float']);
                                     $sum_deposits += floatval($p['total_deposits']);
                                     $sum_withdrawals += floatval($p['total_withdrawals']);
-                                    
                                     $provider_color = $p['color_code'] ?? '#3B82F6';
                                     $provider_icon = $p['icon_class'] ?? 'fas fa-university';
+                                    $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code']);
                                 ?>
-                                    <tr>
+                                    <tr class="provider-row" 
+                                        data-provider-id="<?php echo $p['provider_id']; ?>"
+                                        data-provider-row-id="<?php echo $p['id']; ?>"
+                                        data-report-id="<?php echo $report['id']; ?>"
+                                        data-search="<?php echo htmlspecialchars($provider_search); ?>">
                                         <td class="row-number"><?php echo $i++; ?></td>
                                         <td>
                                             <div class="provider-cell">
                                                 <div class="provider-icon-circle" style="background: <?php echo htmlspecialchars($provider_color); ?>;">
                                                     <i class="<?php echo htmlspecialchars($provider_icon); ?>"></i>
                                                 </div>
-                                                <span class="provider-name-text">
-                                                    <?php echo htmlspecialchars($p['provider_name']); ?>
-                                                </span>
+                                                <span class="provider-name-text"><?php echo htmlspecialchars($p['provider_name']); ?></span>
                                             </div>
                                         </td>
-                                        <td>
-                                            <span class="code-badge"><?php echo htmlspecialchars($p['provider_code']); ?></span>
-                                        </td>
-                                        <td class="text-right">
-                                            <span class="amount-float"><?php echo formatCurrency($p['morning_float']); ?></span>
-                                        </td>
-                                        <td class="text-right">
-                                            <span class="amount-float-bold"><?php echo formatCurrency($p['current_float']); ?></span>
-                                        </td>
-                                        <td class="text-right">
-                                            <span class="amount-deposit">+ <?php echo formatCurrency($p['total_deposits']); ?></span>
-                                        </td>
-                                        <td class="text-right">
-                                            <span class="amount-withdrawal">- <?php echo formatCurrency($p['total_withdrawals']); ?></span>
-                                        </td>
+                                        <td><span class="code-badge"><?php echo htmlspecialchars($p['provider_code']); ?></span></td>
+                                        <td class="text-right"><span class="amount-float"><?php echo formatCurrency($p['morning_float']); ?></span></td>
+                                        <td class="text-right"><span class="amount-float-bold"><?php echo formatCurrency($p['current_float']); ?></span></td>
+                                        <td class="text-right"><span class="amount-deposit">+ <?php echo formatCurrency($p['total_deposits']); ?></span></td>
+                                        <td class="text-right"><span class="amount-withdrawal">- <?php echo formatCurrency($p['total_withdrawals']); ?></span></td>
                                         <td>
                                             <div class="provider-actions">
+                                                <!-- ✅ VIEW BUTTON - NEW PAGE -->
                                                 <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
                                                    class="btn-provider btn-provider-view" 
-                                                   title="View Transactions">
+                                                   title="View Provider Transactions"
+                                                   target="_blank"
+                                                   rel="noopener noreferrer">
                                                     <i class="fas fa-eye"></i>
                                                 </a>
                                             </div>
@@ -1031,11 +953,34 @@ include_once '../../includes/employee_topbar.php';
                                 </tr>
                             </tbody>
                         </table>
+                        
+                        <!-- NO TABLE SEARCH RESULTS -->
+                        <div class="no-table-search-results" 
+                             data-report-id="<?php echo $report['id']; ?>" 
+                             style="display:none;">
+                            <i class="fas fa-search-minus"></i>
+                            <p>No providers match your search</p>
+                            <button type="button" class="btn btn-secondary btn-sm" 
+                                    onclick="clearTableSearch(<?php echo $report['id']; ?>)">
+                                <i class="fas fa-times"></i> Clear
+                            </button>
+                        </div>
                     </div>
                     <?php endif; ?>
                 </div>
             <?php endforeach; ?>
         </div>
+        
+        <!-- NO BRANCH SEARCH RESULTS -->
+        <div class="no-branch-search-results" id="noBranchReportsResults" style="display:none;">
+            <i class="fas fa-search-minus"></i>
+            <h3>No reports match your search</h3>
+            <p>Try a different keyword or clear the search.</p>
+            <button type="button" class="btn btn-secondary" onclick="clearGlobalSearch()">
+                <i class="fas fa-times"></i> Clear Search
+            </button>
+        </div>
+        
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-inbox"></i>
@@ -1053,16 +998,12 @@ include_once '../../includes/employee_topbar.php';
     <div class="txn-modal" onclick="event.stopPropagation()">
         
         <div class="txn-modal-header" id="txnModalHeader">
-            <div class="txn-modal-header-icon" id="txnModalIcon">
-                <i class="fas fa-arrow-down"></i>
-            </div>
+            <div class="txn-modal-header-icon" id="txnModalIcon"><i class="fas fa-arrow-down"></i></div>
             <div class="txn-modal-header-content">
                 <h3 id="txnModalTitle">Add Deposit</h3>
                 <p id="txnModalSubtitle">Select provider and enter amount</p>
             </div>
-            <button type="button" class="txn-modal-close" onclick="closeTransactionModal()">
-                <i class="fas fa-times"></i>
-            </button>
+            <button type="button" class="txn-modal-close" onclick="closeTransactionModal()"><i class="fas fa-times"></i></button>
         </div>
         
         <div class="txn-modal-body">
@@ -1070,9 +1011,7 @@ include_once '../../includes/employee_topbar.php';
             <div id="txnModalMessage" class="txn-modal-message" style="display:none;"></div>
             
             <div class="txn-provider-info" id="txnProviderInfo" style="display:none;">
-                <div class="txn-provider-icon" id="txnProviderIcon">
-                    <i class="fas fa-university"></i>
-                </div>
+                <div class="txn-provider-icon" id="txnProviderIcon"><i class="fas fa-university"></i></div>
                 <div class="txn-provider-details">
                     <span class="txn-provider-label">Selected Provider</span>
                     <span class="txn-provider-name" id="txnProviderName">-</span>
@@ -1095,70 +1034,63 @@ include_once '../../includes/employee_topbar.php';
                                     data-code="<?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?>"
                                     data-icon="<?php echo htmlspecialchars($p['icon_class'] ?? 'fas fa-university'); ?>"
                                     data-color="<?php echo htmlspecialchars($p['color_code'] ?? '#0B5ED7'); ?>">
-                                <?php echo htmlspecialchars($p['provider_name']); ?> 
-                                (<?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?>)
+                                <?php echo htmlspecialchars($p['provider_name']); ?> (<?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 
                 <div class="txn-balance-preview" id="txnBalancePreview" style="display:none;">
-                    <div class="txn-balance-item">
-                        <span class="txn-balance-label">
-                            <i class="fas fa-coins"></i> Current Float
-                        </span>
-                        <span class="txn-balance-value txn-float-value" id="txnCurrentFloat">TSh 0</span>
+                    <div class="txn-balance-row">
+                        <div class="txn-balance-row-label"><i class="fas fa-coins"></i><span>Float</span></div>
+                        <div class="txn-balance-row-values">
+                            <div class="txn-balance-box">
+                                <span class="txn-balance-box-label">Current</span>
+                                <span class="txn-balance-box-value txn-float-value" id="txnCurrentFloat">TSh 0</span>
+                            </div>
+                            <div class="txn-balance-arrow"><i class="fas fa-arrow-right"></i></div>
+                            <div class="txn-balance-box txn-balance-box-after">
+                                <span class="txn-balance-box-label">After</span>
+                                <span class="txn-balance-box-value txn-after-value" id="txnAfterFloat">TSh 0</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="txn-balance-item">
-                        <span class="txn-balance-label">
-                            <i class="fas fa-money-bill-wave"></i> Current Cash
-                        </span>
-                        <span class="txn-balance-value txn-cash-value" id="txnCurrentCash">TSh 0</span>
-                    </div>
-                    <div class="txn-balance-item">
-                        <span class="txn-balance-label">
-                            <i class="fas fa-arrow-right"></i> After
-                        </span>
-                        <span class="txn-balance-value txn-after-value" id="txnAfterFloat">TSh 0</span>
+                    <div class="txn-balance-row">
+                        <div class="txn-balance-row-label"><i class="fas fa-money-bill-wave"></i><span>Cash</span></div>
+                        <div class="txn-balance-row-values">
+                            <div class="txn-balance-box">
+                                <span class="txn-balance-box-label">Current</span>
+                                <span class="txn-balance-box-value txn-cash-value" id="txnCurrentCash">TSh 0</span>
+                            </div>
+                            <div class="txn-balance-arrow"><i class="fas fa-arrow-right"></i></div>
+                            <div class="txn-balance-box txn-balance-box-after">
+                                <span class="txn-balance-box-label">After</span>
+                                <span class="txn-balance-box-value txn-after-cash-value" id="txnAfterCash">TSh 0</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
                 <div class="txn-form-group">
                     <label>Amount (TSh) <span class="required">*</span></label>
-                    <input type="text" 
-                           name="amount" 
-                           id="txnAmount" 
-                           class="txn-form-control txn-amount-input" 
-                           placeholder="1,000,000" 
-                           inputmode="numeric"
-                           autocomplete="off"
-                           required
+                    <input type="text" name="amount" id="txnAmount" class="txn-form-control txn-amount-input" 
+                           placeholder="1,000,000" inputmode="numeric" autocomplete="off" required
                            oninput="formatMoneyInput(this); updateBalancePreview();">
                 </div>
                 
                 <div class="txn-form-group">
                     <label>Transaction Date <span class="required">*</span></label>
-                    <input type="date" 
-                           name="transaction_date" 
-                           class="txn-form-control" 
-                           value="<?php echo date('Y-m-d'); ?>" 
-                           required>
+                    <input type="date" name="transaction_date" class="txn-form-control" value="<?php echo date('Y-m-d'); ?>" required>
                 </div>
                 
                 <div class="txn-form-group">
                     <label>Reference Number</label>
-                    <input type="text" 
-                           name="reference_number" 
-                           class="txn-form-control" 
-                           placeholder="Optional">
+                    <input type="text" name="reference_number" class="txn-form-control" placeholder="Optional">
                 </div>
                 
                 <div class="txn-form-group">
                     <label>Description</label>
-                    <textarea name="description" 
-                              class="txn-form-control" 
-                              rows="2" 
-                              placeholder="Optional notes..."></textarea>
+                    <textarea name="description" class="txn-form-control" rows="2" placeholder="Optional notes..."></textarea>
                 </div>
                 
                 <div class="txn-form-actions">
@@ -1198,7 +1130,6 @@ body { width: 100%; overflow-x: hidden; margin: 0; padding: 0; }
     max-width: 100%;
     overflow-x: hidden;
 }
-
 @media (max-width: 1024px) {
     .main-wrapper { margin-left: 240px; width: calc(100% - 240px); padding-top: 56px; }
     .main-content { padding: 16px 18px; }
@@ -1213,29 +1144,21 @@ body { width: 100%; overflow-x: hidden; margin: 0; padding: 0; }
 }
 
 :root {
-    --bg-body: #f3f4f6;
-    --bg-card: #ffffff;
-    --bg-table-even: #fafafa;
-    --bg-table-hover: #f3f4f6;
+    --bg-body: #f3f4f6; --bg-card: #ffffff;
+    --bg-table-even: #fafafa; --bg-table-hover: #f3f4f6;
     --bg-input: #f9fafb;
-    --text-primary: #1f2937;
-    --text-secondary: #374151;
-    --text-muted: #6b7280;
-    --text-light: #9ca3af;
+    --text-primary: #1f2937; --text-secondary: #374151;
+    --text-muted: #6b7280; --text-light: #9ca3af;
     --border-color: #e5e7eb;
     --shadow-color: rgba(0,0,0,0.06);
     --shadow-hover: rgba(0,0,0,0.12);
 }
 html.dark-mode {
-    --bg-body: #0f172a;
-    --bg-card: #1e293b;
-    --bg-table-even: #1a2332;
-    --bg-table-hover: #2d3a4f;
+    --bg-body: #0f172a; --bg-card: #1e293b;
+    --bg-table-even: #1a2332; --bg-table-hover: #2d3a4f;
     --bg-input: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --text-light: #64748b;
+    --text-primary: #f1f5f9; --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8; --text-light: #64748b;
     --border-color: #334155;
 }
 body { background: var(--bg-body) !important; color: var(--text-primary); }
@@ -1319,14 +1242,9 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 /* TIME FILTER BAR */
 .time-filter-bar {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 14px 18px;
-    margin-bottom: 14px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
+    background: var(--bg-card); border-radius: 12px;
+    padding: 14px 18px; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
@@ -1334,37 +1252,24 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .time-filter-left i { color: #bb0404; font-size: 14px; }
 .time-filter-buttons { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
 .time-btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 8px 16px;
-    background: var(--bg-input);
-    color: var(--text-secondary);
-    border: 1.5px solid var(--border-color);
-    border-radius: 8px;
-    font-size: 12px; font-weight: 700;
-    text-decoration: none; cursor: pointer;
-    transition: all 0.25s ease;
-    white-space: nowrap;
-    font-family: 'Inter', sans-serif;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; padding: 8px 16px;
+    background: var(--bg-input); color: var(--text-secondary);
+    border: 1.5px solid var(--border-color); border-radius: 8px;
+    font-size: 12px; font-weight: 700; text-decoration: none;
+    cursor: pointer; transition: all 0.25s ease; white-space: nowrap;
+    font-family: 'Inter', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;
 }
 .time-btn:hover { background: var(--bg-table-hover); border-color: #bb0404; color: #bb0404; transform: translateY(-1px); }
 .time-btn.active {
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
-    color: #FFFFFF;
-    border-color: #8a0303;
+    color: #FFFFFF; border-color: #8a0303;
     box-shadow: 0 4px 12px rgba(187, 4, 4, 0.35);
     transform: translateY(-1px);
 }
 .time-btn-custom {
     background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-    color: #FFFFFF;
-    border-color: #6D28D9;
-}
-.time-btn-custom:hover {
-    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
-    color: #FFFFFF;
-    border-color: #5B21B6;
+    color: #FFFFFF; border-color: #6D28D9;
 }
 .time-btn-custom.active {
     background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
@@ -1374,10 +1279,8 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 
 /* MAIN FILTER BAR */
 .filter-bar-main {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 16px;
+    background: var(--bg-card); border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 16px;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
@@ -1390,15 +1293,10 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .filter-item label i { color: #bb0404; font-size: 11px; }
 .filter-input {
-    padding: 11px 14px;
-    border: 1.5px solid var(--border-color);
-    border-radius: 10px;
-    font-size: 13px; font-weight: 600;
-    color: var(--text-primary);
-    background: var(--bg-input);
-    font-family: 'Inter', sans-serif;
-    transition: all 0.25s ease;
-    width: 100%;
+    padding: 11px 14px; border: 1.5px solid var(--border-color);
+    border-radius: 10px; font-size: 13px; font-weight: 600;
+    color: var(--text-primary); background: var(--bg-input);
+    font-family: 'Inter', sans-serif; transition: all 0.25s ease; width: 100%;
 }
 .filter-input:focus { outline: none; border-color: #bb0404; box-shadow: 0 0 0 3px rgba(187, 4, 4, 0.12); background: var(--bg-card); }
 .filter-actions { display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0; }
@@ -1408,41 +1306,26 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
     color: #FFFFFF; border: none; border-radius: 10px;
     font-size: 13px; font-weight: 800; cursor: pointer;
-    transition: all 0.25s ease;
-    font-family: 'Inter', sans-serif;
+    transition: all 0.25s ease; font-family: 'Inter', sans-serif;
     text-transform: uppercase; letter-spacing: 0.5px;
-    box-shadow: 0 4px 12px rgba(187, 4, 4, 0.3);
-    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(187, 4, 4, 0.3); white-space: nowrap;
 }
 .btn-filter-main:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(187, 4, 4, 0.45); color: #FFFFFF; }
 .btn-reset-main {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 11px 22px;
-    background: var(--bg-input);
-    color: var(--text-secondary);
-    border: 1.5px solid var(--border-color);
-    border-radius: 10px;
-    font-size: 13px; font-weight: 800;
-    text-decoration: none; cursor: pointer;
-    transition: all 0.25s ease;
-    font-family: 'Inter', sans-serif;
-    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 11px 22px; background: var(--bg-input);
+    color: var(--text-secondary); border: 1.5px solid var(--border-color);
+    border-radius: 10px; font-size: 13px; font-weight: 800;
+    text-decoration: none; cursor: pointer; transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;
     white-space: nowrap;
 }
 .btn-reset-main:hover { background: var(--bg-table-hover); color: var(--text-primary); border-color: #94A3B8; transform: translateY(-2px); }
 
-/* SUMMARY CARDS - SOFT BACKGROUND */
-.summary-cards-soft {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 18px;
-    max-width: 100%;
-}
+/* SUMMARY CARDS */
+.summary-cards-soft { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; max-width: 100%; }
 .summary-card-soft {
-    position: relative;
-    border-radius: 14px;
-    padding: 18px 20px;
+    position: relative; border-radius: 14px; padding: 18px 20px;
     display: flex; align-items: center; gap: 14px;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     min-width: 0; overflow: hidden;
@@ -1450,334 +1333,172 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .summary-card-soft:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1); }
-
-.summary-card-soft-purple {
-    background: rgba(124, 58, 237, 0.08);
-    border-color: rgba(124, 58, 237, 0.2);
-}
-.summary-card-soft-purple .summary-icon-soft {
-    background: rgba(124, 58, 237, 0.15);
-    color: #7C3AED;
-    border: 1.5px solid rgba(124, 58, 237, 0.3);
-}
+.summary-card-soft-purple { background: rgba(124, 58, 237, 0.08); border-color: rgba(124, 58, 237, 0.2); }
+.summary-card-soft-purple .summary-icon-soft { background: rgba(124, 58, 237, 0.15); color: #7C3AED; border: 1.5px solid rgba(124, 58, 237, 0.3); }
 .summary-card-soft-purple .summary-value-soft { color: #6D28D9; }
-
-.summary-card-soft-green {
-    background: rgba(5, 150, 105, 0.08);
-    border-color: rgba(5, 150, 105, 0.2);
-}
-.summary-card-soft-green .summary-icon-soft {
-    background: rgba(5, 150, 105, 0.15);
-    color: #059669;
-    border: 1.5px solid rgba(5, 150, 105, 0.3);
-}
+.summary-card-soft-green { background: rgba(5, 150, 105, 0.08); border-color: rgba(5, 150, 105, 0.2); }
+.summary-card-soft-green .summary-icon-soft { background: rgba(5, 150, 105, 0.15); color: #059669; border: 1.5px solid rgba(5, 150, 105, 0.3); }
 .summary-card-soft-green .summary-value-soft { color: #047857; }
-
-.summary-card-soft-red {
-    background: rgba(220, 38, 38, 0.08);
-    border-color: rgba(220, 38, 38, 0.2);
-}
-.summary-card-soft-red .summary-icon-soft {
-    background: rgba(220, 38, 38, 0.15);
-    color: #DC2626;
-    border: 1.5px solid rgba(220, 38, 38, 0.3);
-}
+.summary-card-soft-red { background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.2); }
+.summary-card-soft-red .summary-icon-soft { background: rgba(220, 38, 38, 0.15); color: #DC2626; border: 1.5px solid rgba(220, 38, 38, 0.3); }
 .summary-card-soft-red .summary-value-soft { color: #B91C1C; }
-
-.summary-card-soft-blue {
-    background: rgba(37, 99, 235, 0.08);
-    border-color: rgba(37, 99, 235, 0.2);
-}
-.summary-card-soft-blue .summary-icon-soft {
-    background: rgba(37, 99, 235, 0.15);
-    color: #2563EB;
-    border: 1.5px solid rgba(37, 99, 235, 0.3);
-}
+.summary-card-soft-blue { background: rgba(37, 99, 235, 0.08); border-color: rgba(37, 99, 235, 0.2); }
+.summary-card-soft-blue .summary-icon-soft { background: rgba(37, 99, 235, 0.15); color: #2563EB; border: 1.5px solid rgba(37, 99, 235, 0.3); }
 .summary-card-soft-blue .summary-value-soft { color: #1D4ED8; }
-
 html.dark-mode .summary-card-soft-purple { background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
 html.dark-mode .summary-card-soft-green { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
 html.dark-mode .summary-card-soft-red { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
 html.dark-mode .summary-card-soft-blue { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
-html.dark-mode .summary-card-soft-purple .summary-value-soft { color: #C4B5FD; }
-html.dark-mode .summary-card-soft-green .summary-value-soft { color: #6EE7B7; }
-html.dark-mode .summary-card-soft-red .summary-value-soft { color: #FCA5A5; }
-html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
-
 .summary-icon-soft {
     width: 50px; height: 50px; border-radius: 13px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0;
-    transition: all 0.3s ease;
+    font-size: 22px; flex-shrink: 0; transition: all 0.3s ease;
 }
-.summary-card-soft:hover .summary-icon-soft { transform: scale(1.08) rotate(-4deg); }
 .summary-info-soft { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
 .summary-label-soft {
     font-size: 10px; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.8px;
-    font-weight: 800; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis;
+    font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .summary-value-soft {
-    font-size: 20px; font-weight: 900;
-    word-break: break-word;
+    font-size: 20px; font-weight: 900; word-break: break-word;
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: -0.3px; line-height: 1.2;
 }
 .summary-sub-soft {
-    font-size: 10px; font-weight: 600;
-    color: var(--text-muted);
-    display: inline-flex; align-items: center; gap: 4px;
-    margin-top: 3px;
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 4px; margin-top: 3px;
 }
-.summary-sub-soft i { font-size: 9px; color: var(--text-light); flex-shrink: 0; }
 .summary-decoration-soft {
     position: absolute; top: -30px; right: -30px;
-    width: 100px; height: 100px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.15);
-    pointer-events: none;
+    width: 100px; height: 100px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15); pointer-events: none;
 }
 
-/* PAGE HEADER + BIG BUTTONS */
+/* PAGE HEADER */
 .page-header {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 16px; flex-wrap: wrap; gap: 12px; max-width: 100%;
 }
 .page-header .header-left h2 { font-size: 20px; font-weight: 700; margin: 0; color: var(--text-primary); }
 .page-header .header-left h2 i { margin-right: 8px; }
-.page-header .header-left .text-muted {
-    font-size: 12px; color: var(--text-muted);
-    margin: 4px 0 0 0;
-    display: flex; align-items: center; gap: 6px;
-}
+.page-header .header-left .text-muted { font-size: 12px; color: var(--text-muted); margin: 4px 0 0 0; display: flex; align-items: center; gap: 6px; }
 .header-right { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
+/* BIG BUTTONS */
 .btn-action-big {
     display: inline-flex; align-items: center; justify-content: center;
-    gap: 10px;
-    padding: 14px 26px;
+    gap: 10px; padding: 14px 26px;
     border: none; border-radius: 12px;
     font-size: 14px; font-weight: 800;
     cursor: pointer; text-decoration: none;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    font-family: 'Inter', sans-serif;
-    white-space: nowrap;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
+    font-family: 'Inter', sans-serif; white-space: nowrap;
+    letter-spacing: 0.5px; text-transform: uppercase;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
     position: relative; overflow: hidden;
 }
 .btn-action-big i:first-child { font-size: 16px; }
 .btn-action-big::before {
-    content: '';
-    position: absolute; top: 50%; left: 50%;
-    width: 0; height: 0;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 0; height: 0; background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%; transform: translate(-50%, -50%);
     transition: width 0.6s ease, height 0.6s ease;
 }
 .btn-action-big:hover::before { width: 300px; height: 300px; }
 .btn-action-big:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); }
 .btn-action-big > * { position: relative; z-index: 1; }
+.btn-action-deposit { background: linear-gradient(135deg, #059669 0%, #10B981 100%); color: #FFFFFF; }
+.btn-action-deposit:hover { color: #FFFFFF; box-shadow: 0 8px 24px rgba(5, 150, 105, 0.45); }
+.btn-action-withdrawal { background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color: #FFFFFF; }
+.btn-action-withdrawal:hover { color: #FFFFFF; box-shadow: 0 8px 24px rgba(220, 38, 38, 0.45); }
+.btn-action-export { background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%); color: #FFFFFF; }
+.btn-action-export:hover { color: #FFFFFF; box-shadow: 0 8px 24px rgba(124, 58, 237, 0.45); }
+.btn-action-export .dropdown-arrow { font-size: 11px; transition: transform 0.3s ease; margin-left: 2px; }
 
-.btn-action-deposit {
-    background: linear-gradient(135deg, #059669 0%, #10B981 100%);
-    color: #FFFFFF;
-}
-.btn-action-deposit:hover {
-    background: linear-gradient(135deg, #047857 0%, #059669 100%);
-    color: #FFFFFF;
-    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.45);
-}
-.btn-action-withdrawal {
-    background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%);
-    color: #FFFFFF;
-}
-.btn-action-withdrawal:hover {
-    background: linear-gradient(135deg, #B91C1C 0%, #DC2626 100%);
-    color: #FFFFFF;
-    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.45);
-}
-
-/* ✅ EXPORT BUTTON */
-.btn-action-export {
-    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-    color: #FFFFFF;
-}
-.btn-action-export:hover {
-    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
-    color: #FFFFFF;
-    box-shadow: 0 8px 24px rgba(124, 58, 237, 0.45);
-}
-.btn-action-export .dropdown-arrow {
-    font-size: 11px;
-    transition: transform 0.3s ease;
-    margin-left: 2px;
-}
-
-/* ✅ EXPORT DROPDOWN */
-.dropdown {
-    position: relative;
-    display: inline-block;
-}
-.export-dropdown.open .dropdown-arrow {
-    transform: rotate(180deg);
-}
+/* EXPORT DROPDOWN */
+.dropdown { position: relative; display: inline-block; }
+.export-dropdown.open .dropdown-arrow { transform: rotate(180deg); }
 .dropdown-menu {
-    display: none;
-    position: absolute;
-    right: 0;
-    top: calc(100% + 8px);
-    min-width: 260px;
-    background: var(--bg-card);
-    border-radius: 12px;
+    display: none; position: absolute; right: 0; top: calc(100% + 8px);
+    min-width: 260px; background: var(--bg-card); border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
     border: 1.5px solid var(--border-color);
-    overflow: hidden;
-    z-index: 1000;
+    overflow: hidden; z-index: 1000;
     animation: dropdownFadeIn 0.2s ease forwards;
 }
 .export-dropdown.open .dropdown-menu { display: block; }
-@keyframes dropdownFadeIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
+@keyframes dropdownFadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 .dropdown-menu a {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 18px;
-    text-decoration: none;
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 600;
-    transition: all 0.2s ease;
-    border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px; text-decoration: none;
+    color: var(--text-primary); font-size: 13px; font-weight: 600;
+    transition: all 0.2s ease; border-bottom: 1px solid var(--border-color);
     position: relative;
 }
 .dropdown-menu a:last-child { border-bottom: none; }
-.dropdown-menu a:hover {
-    background: var(--bg-table-hover);
-    padding-left: 22px;
-}
-.dropdown-menu a::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0;
-    width: 0; height: 100%;
-    background: linear-gradient(90deg, #7C3AED, #6D28D9);
-    transition: width 0.2s ease;
-}
-.dropdown-menu a:hover::before { width: 4px; }
-.dropdown-menu a > i {
-    font-size: 24px;
-    width: 30px;
-    text-align: center;
-    flex-shrink: 0;
-}
-.dropdown-menu a > div {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-}
-.dropdown-item-title {
-    font-size: 13px;
-    font-weight: 800;
-    color: var(--text-primary);
-}
-.dropdown-item-desc {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-}
+.dropdown-menu a:hover { background: var(--bg-table-hover); padding-left: 22px; }
+.dropdown-menu a > i { font-size: 24px; width: 30px; text-align: center; flex-shrink: 0; }
+.dropdown-menu a > div { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.dropdown-item-title { font-size: 13px; font-weight: 800; color: var(--text-primary); }
+.dropdown-item-desc { font-size: 11px; font-weight: 500; color: var(--text-muted); }
 
-/* MY TRANSACTIONS SECTION - RED HEADER */
+/* MY TRANSACTIONS SECTION */
 .section-container-my {
-    background: var(--bg-card);
-    border-radius: 14px;
+    background: var(--bg-card); border-radius: 14px;
     border: 1.5px solid var(--border-color);
-    margin-bottom: 20px;
-    box-shadow: 0 2px 8px var(--shadow-color);
-    width: 100%;
-    overflow: hidden;
+    margin-bottom: 20px; box-shadow: 0 2px 8px var(--shadow-color);
+    width: 100%; overflow: hidden;
 }
 .section-header-my-red {
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
     padding: 16px 22px;
     display: flex; align-items: center; justify-content: space-between;
-    gap: 16px; flex-wrap: wrap;
-    color: #FFFFFF;
+    gap: 16px; flex-wrap: wrap; color: #FFFFFF;
     box-shadow: 0 4px 12px rgba(187, 4, 4, 0.25);
     position: relative; overflow: hidden;
-}
-.section-header-my-red::before {
-    content: '';
-    position: absolute; top: -50%; right: -10%;
-    width: 200px; height: 200px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 50%;
-    pointer-events: none;
 }
 .section-header-my-red h3 {
     font-size: 16px; font-weight: 800; margin: 0;
     display: flex; align-items: center; gap: 10px;
-    color: #FFFFFF;
-    position: relative; z-index: 1;
+    color: #FFFFFF; position: relative; z-index: 1;
 }
 .section-header-my-red h3 i { color: #FCD34D; font-size: 18px; }
 .section-count-my-red {
     font-size: 12px; font-weight: 800;
-    background: rgba(255, 255, 255, 0.25);
-    color: #FFFFFF;
-    padding: 4px 12px; border-radius: 12px;
-    margin-left: 6px;
+    background: rgba(255, 255, 255, 0.25); color: #FFFFFF;
+    padding: 4px 12px; border-radius: 12px; margin-left: 6px;
     border: 1px solid rgba(255, 255, 255, 0.2);
 }
 .search-input-group-my-red {
     display: flex; align-items: center; gap: 8px;
     background: rgba(255, 255, 255, 0.95);
     border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 10px;
-    padding: 8px 14px;
+    border-radius: 10px; padding: 8px 14px;
     width: 320px; max-width: 100%;
     transition: all 0.3s ease;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     position: relative; z-index: 1;
 }
-.search-input-group-my-red:focus-within {
-    background: #FFFFFF;
-    border-color: #FCD34D;
-    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3);
-}
 .search-input-group-my-red i { color: #bb0404; font-size: 13px; flex-shrink: 0; }
 .search-input-group-my-red input {
     flex: 1; border: none; background: transparent;
-    padding: 4px 0;
-    font-size: 13px; color: #1F2937;
-    outline: none; min-width: 0;
-    font-family: 'Inter', sans-serif;
+    padding: 4px 0; font-size: 13px; color: #1F2937;
+    outline: none; min-width: 0; font-family: 'Inter', sans-serif;
 }
 .search-input-group-my-red input::placeholder { color: #9CA3AF; font-size: 12px; }
 .search-input-group-my-red button {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    background: #FEE2E2; color: #DC2626;
-    border: none; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px;
-    transition: all 0.2s ease;
-    flex-shrink: 0;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #FEE2E2; color: #DC2626; border: none;
+    cursor: pointer; display: flex; align-items: center;
+    justify-content: center; font-size: 10px;
+    transition: all 0.2s ease; flex-shrink: 0;
 }
 .search-input-group-my-red button:hover { background: #DC2626; color: #FFFFFF; }
 .search-count-my-red {
-    font-size: 10px; font-weight: 800;
-    padding: 3px 9px;
+    font-size: 10px; font-weight: 800; padding: 3px 9px;
     background: #FCD34D; color: #78350F;
-    border-radius: 8px;
-    flex-shrink: 0;
+    border-radius: 8px; flex-shrink: 0;
 }
 
 /* Transaction Table */
@@ -1788,8 +1509,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     padding: 11px 14px; text-align: left;
     font-weight: 700; color: var(--text-muted);
     text-transform: uppercase; font-size: 10px;
-    border-bottom: 2px solid var(--border-color);
-    white-space: nowrap;
+    border-bottom: 2px solid var(--border-color); white-space: nowrap;
 }
 .txn-table thead th.text-right { text-align: right; }
 .txn-table tbody tr { border-bottom: 1px solid var(--border-color); transition: background 0.2s ease; }
@@ -1798,13 +1518,11 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .txn-table tbody td { padding: 11px 14px; color: var(--text-primary); vertical-align: middle; }
 .txn-table tbody td.text-right { text-align: right; }
 .txn-row-my.hidden-by-search { display: none !important; }
-
 .row-num-my {
     display: inline-flex; align-items: center; justify-content: center;
     width: 26px; height: 26px; border-radius: 50%;
     background: var(--bg-table-hover);
-    font-size: 11px; font-weight: 700;
-    color: var(--text-secondary);
+    font-size: 11px; font-weight: 700; color: var(--text-secondary);
     border: 1px solid var(--border-color);
 }
 .txn-date-my { font-size: 11px; font-weight: 600; color: var(--text-secondary); display: inline-block; line-height: 1.3; }
@@ -1818,50 +1536,33 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .txn-type-badge-my {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 12px; border-radius: 8px;
-    font-size: 11px; font-weight: 700;
-    white-space: nowrap;
+    font-size: 11px; font-weight: 700; white-space: nowrap;
 }
 .txn-type-badge-my.deposit { background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0; }
 .txn-type-badge-my.withdrawal { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 html.dark-mode .txn-type-badge-my.deposit { background: #14532D; color: #4ADE80; border-color: #16A34A; }
 html.dark-mode .txn-type-badge-my.withdrawal { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
-
-.txn-amount-my {
-    font-family: 'Courier New', monospace;
-    font-weight: 800; font-size: 13px;
-    white-space: nowrap;
-}
+.txn-amount-my { font-family: 'Courier New', monospace; font-weight: 800; font-size: 13px; white-space: nowrap; }
 .txn-amount-my.deposit { color: #15803D; }
 .txn-amount-my.withdrawal { color: #991B1B; }
 html.dark-mode .txn-amount-my.deposit { color: #4ADE80; }
 html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
-
 .txn-ref-my { font-family: 'Courier New', monospace; font-size: 11px; color: var(--text-secondary); }
-
 .txn-actions-my { display: flex; gap: 6px; justify-content: center; }
 .btn-txn-view-my {
     width: 34px; height: 34px; border-radius: 8px;
-    border: none;
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    border: 1.5px solid #93C5FD;
+    color: #1D4ED8; border: 1.5px solid #93C5FD;
     display: inline-flex; align-items: center; justify-content: center;
-    cursor: pointer;
-    transition: all 0.25s ease;
-    text-decoration: none;
-    font-size: 13px;
+    cursor: pointer; transition: all 0.25s ease;
+    text-decoration: none; font-size: 13px;
 }
 .btn-txn-view-my:hover {
     background: linear-gradient(135deg, #1D4ED8, #2563EB);
-    color: #FFFFFF;
-    transform: translateY(-3px) scale(1.05);
+    color: #FFFFFF; transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
 }
-
-.no-txn-results-my {
-    text-align: center; padding: 40px 20px;
-    color: var(--text-muted);
-}
+.no-txn-results-my { text-align: center; padding: 40px 20px; color: var(--text-muted); }
 .no-txn-results-my i { font-size: 48px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 12px; }
 .no-txn-results-my p { font-size: 14px; margin: 0 0 16px 0; }
 .empty-txn-my { text-align: center; padding: 40px 20px; color: var(--text-muted); }
@@ -1871,10 +1572,8 @@ html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
 /* SECTION TITLE BAR */
 .section-title-bar {
     display: flex; align-items: center; gap: 10px;
-    padding: 14px 20px;
-    background: var(--bg-card);
-    border-radius: 12px;
-    margin-bottom: 14px;
+    padding: 14px 20px; background: var(--bg-card);
+    border-radius: 12px; margin-bottom: 14px;
     border: 1.5px solid var(--border-color);
     font-size: 15px; font-weight: 800;
     color: var(--text-primary);
@@ -1884,23 +1583,44 @@ html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
 .count-badge-bar {
     background: #bb0404; color: #FFFFFF;
     padding: 3px 12px; border-radius: 10px;
-    font-size: 11px; font-weight: 800;
-    margin-left: auto;
+    font-size: 11px; font-weight: 800; margin-left: auto;
 }
 
-/* REPORT GROUP */
-.report-group {
+/* NO BRANCH SEARCH RESULTS */
+.no-branch-search-results {
+    text-align: center;
+    padding: 60px 20px;
     background: var(--bg-card);
     border-radius: 12px;
     border: 1px solid var(--border-color);
     margin-bottom: 16px;
-    overflow: hidden;
-    box-shadow: 0 2px 8px var(--shadow-color);
-    transition: all 0.3s ease;
-    max-width: 100%;
 }
-.report-group:hover { box-shadow: 0 4px 16px var(--shadow-hover); }
+.no-branch-search-results i {
+    font-size: 56px; color: var(--text-light); opacity: 0.4;
+    display: block; margin-bottom: 16px;
+}
+.no-branch-search-results h3 {
+    font-size: 18px; color: var(--text-primary);
+    margin: 0 0 8px 0;
+}
+.no-branch-search-results p {
+    color: var(--text-muted); font-size: 14px;
+    margin: 0 0 20px 0;
+}
 
+/* REPORT GROUP */
+.report-group {
+    background: var(--bg-card); border-radius: 12px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 16px; overflow: hidden;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    transition: all 0.3s ease; max-width: 100%;
+}
+.report-group.hidden-by-search { display: none !important; }
+.report-group.highlight-match {
+    border-color: #FCD34D;
+    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.3), 0 4px 16px rgba(0, 0, 0, 0.1);
+}
 .report-group-header {
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
     padding: 14px 20px;
@@ -1909,11 +1629,9 @@ html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
 }
 .report-header-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
 .report-icon {
-    width: 42px; height: 42px;
-    background: rgba(255,255,255,0.15);
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; color: #FFFFFF; flex-shrink: 0;
+    width: 42px; height: 42px; background: rgba(255,255,255,0.15);
+    border-radius: 10px; display: flex; align-items: center;
+    justify-content: center; font-size: 18px; color: #FFFFFF; flex-shrink: 0;
 }
 .report-header-info { flex: 1; min-width: 0; }
 .report-header-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
@@ -1932,23 +1650,16 @@ html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
 .report-header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
 .report-stat {
     display: flex; flex-direction: column; align-items: center;
-    padding: 6px 14px;
-    background: rgba(255,255,255,0.12);
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.15);
-    white-space: nowrap;
+    padding: 6px 14px; background: rgba(255,255,255,0.12);
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); white-space: nowrap;
 }
-.report-stat .stat-label {
-    font-size: 9px; font-weight: 600; opacity: 0.7;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
+.report-stat .stat-label { font-size: 9px; font-weight: 600; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.5px; }
 .report-stat .stat-value { font-size: 14px; font-weight: 800; color: #FFFFFF; margin-top: 2px; }
 .report-header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .btn-view-report {
     padding: 6px 14px; border: none; border-radius: 6px;
     font-size: 11px; font-weight: 700; cursor: pointer;
-    text-decoration: none;
-    display: inline-flex; align-items: center; gap: 5px;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 5px;
     transition: all 0.2s ease; white-space: nowrap;
     background: rgba(255,255,255,0.2); color: #FFFFFF;
     border: 1px solid rgba(255,255,255,0.2);
@@ -1958,43 +1669,145 @@ html.dark-mode .txn-amount-my.withdrawal { color: #FCA5A5; }
 /* PROVIDERS TABLE */
 .providers-table-wrapper {
     overflow-x: auto; overflow-y: hidden;
-    max-width: 100%;
-    -webkit-overflow-scrolling: touch;
+    max-width: 100%; -webkit-overflow-scrolling: touch;
     background: var(--bg-card);
 }
-.providers-table-wrapper::-webkit-scrollbar { height: 10px; }
-.providers-table-wrapper::-webkit-scrollbar-track { background: var(--bg-table-even); border-radius: 5px; margin: 0 8px; }
-.providers-table-wrapper::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #bb0404, #8a0303); border-radius: 5px; }
-
-.providers-table {
-    width: 100%; border-collapse: separate; border-spacing: 0;
-    font-size: 13px; min-width: 900px;
-}
+.providers-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 900px; }
 .providers-table thead tr { background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%); }
 html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #334155 0%, #1e293b 100%); }
 .providers-table thead th {
     padding: 14px 16px; text-align: left;
     font-weight: 800; color: var(--text-secondary);
     text-transform: uppercase; font-size: 10px; letter-spacing: 1px;
-    border-bottom: 3px solid #bb0404;
-    white-space: nowrap;
+    border-bottom: 3px solid #bb0404; white-space: nowrap;
 }
 .providers-table thead th.text-right { text-align: right; }
-.providers-table tbody tr {
-    border-bottom: 1px solid var(--border-color);
-    transition: all 0.25s ease;
-}
+.providers-table tbody tr { border-bottom: 1px solid var(--border-color); transition: all 0.25s ease; }
 .providers-table tbody tr:hover { background: linear-gradient(135deg, rgba(187, 4, 4, 0.04), rgba(187, 4, 4, 0.02)); }
 .providers-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
 .providers-table tbody td { padding: 14px 16px; color: var(--text-primary); vertical-align: middle; }
 .providers-table tbody td.text-right { text-align: right; }
+.provider-row.hidden-by-search { display: none !important; }
+.provider-row.highlight-match {
+    background: linear-gradient(135deg, rgba(252, 211, 77, 0.3), rgba(252, 211, 77, 0.15)) !important;
+    animation: highlightPulse 1.5s ease-in-out;
+}
+@keyframes highlightPulse {
+    0%, 100% { background: linear-gradient(135deg, rgba(252, 211, 77, 0.3), rgba(252, 211, 77, 0.15)); }
+    50% { background: linear-gradient(135deg, rgba(252, 211, 77, 0.45), rgba(252, 211, 77, 0.25)); }
+}
 
+/* ✅ TABLE SEARCH ROW - NDANI YA TABLE HEADER */
+.table-search-row {
+    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important;
+}
+.table-search-cell {
+    padding: 12px 16px !important;
+    background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%) !important;
+    border-bottom: none !important;
+    border-top: none !important;
+    text-align: center !important;
+}
+.table-search-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 4px 0;
+}
+.table-search-input-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #FFFFFF;
+    border-radius: 10px;
+    padding: 8px 14px;
+    width: 400px;
+    max-width: 100%;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+    position: relative;
+}
+.table-search-input-group:focus-within {
+    border-color: #FCD34D;
+    box-shadow: 0 0 0 3px rgba(252, 211, 77, 0.4), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+.table-search-input-group i.fa-search {
+    color: #bb0404;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.table-search-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 4px 2px;
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    color: #1F2937;
+    outline: none;
+    min-width: 0;
+    font-weight: 500;
+}
+.table-search-input::placeholder {
+    color: #9CA3AF;
+    font-size: 12px;
+}
+.table-search-clear {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #FEE2E2;
+    color: #DC2626;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+.table-search-clear:hover {
+    background: #DC2626;
+    color: #FFFFFF;
+}
+.table-search-count {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 10px;
+    background: #FCD34D;
+    color: #78350F;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+.no-table-search-results {
+    text-align: center;
+    padding: 40px 20px;
+    background: var(--bg-table-even);
+    border-top: 1px solid var(--border-color);
+}
+.no-table-search-results i {
+    font-size: 44px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 12px;
+}
+.no-table-search-results p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 16px 0;
+    font-weight: 500;
+}
+
+/* PROVIDER TABLE CELLS */
 .row-number {
     display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; border-radius: 50%;
     background: linear-gradient(135deg, #F1F5F9, #E2E8F0);
-    font-size: 11px; font-weight: 800; color: #475569;
-    border: 2px solid #CBD5E1;
+    font-size: 11px; font-weight: 800; color: #475569; border: 2px solid #CBD5E1;
 }
 .provider-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .provider-icon-circle {
@@ -2007,8 +1820,7 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 .provider-name-text { font-weight: 800; color: var(--text-primary); font-size: 13px; white-space: nowrap; }
 .code-badge {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 5px 12px;
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    padding: 5px 12px; background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1D4ED8; border-radius: 8px;
     font-size: 11px; font-weight: 800;
     font-family: 'Courier New', monospace;
@@ -2017,8 +1829,7 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 }
 .amount-float {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 12px;
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    padding: 6px 12px; background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
     color: #1D4ED8; border-radius: 8px;
     font-weight: 800; font-size: 12px;
     font-family: 'Courier New', monospace;
@@ -2026,8 +1837,7 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 }
 .amount-float-bold {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 14px;
-    background: linear-gradient(135deg, #1E40AF, #2563EB);
+    padding: 6px 14px; background: linear-gradient(135deg, #1E40AF, #2563EB);
     color: #FFFFFF; border-radius: 8px;
     font-weight: 900; font-size: 13px;
     font-family: 'Courier New', monospace;
@@ -2036,8 +1846,7 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 }
 .amount-deposit {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 12px;
-    background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
+    padding: 6px 12px; background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
     color: #15803D; border-radius: 8px;
     font-weight: 800; font-size: 12px;
     font-family: 'Courier New', monospace;
@@ -2045,8 +1854,7 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 }
 .amount-withdrawal {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 12px;
-    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    padding: 6px 12px; background: linear-gradient(135deg, #FEE2E2, #FECACA);
     color: #991B1B; border-radius: 8px;
     font-weight: 800; font-size: 12px;
     font-family: 'Courier New', monospace;
@@ -2055,58 +1863,53 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
 .provider-actions { display: flex; gap: 6px; justify-content: center; }
 .btn-provider {
     width: 34px; height: 34px; border-radius: 10px;
-    border: none;
     display: inline-flex; align-items: center; justify-content: center;
-    cursor: pointer;
-    transition: all 0.25s ease;
-    text-decoration: none;
-    font-size: 13px;
+    cursor: pointer; transition: all 0.25s ease;
+    text-decoration: none; font-size: 13px;
 }
 .btn-provider-view {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    border: 1.5px solid #93C5FD;
+    color: #1D4ED8; border: 1.5px solid #93C5FD;
 }
 .btn-provider-view:hover {
     background: linear-gradient(135deg, #1D4ED8, #2563EB);
-    color: #FFFFFF;
-    transform: translateY(-3px) scale(1.05);
+    color: #FFFFFF; transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
 }
-.totals-row {
-    background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important;
-    border-top: 3px solid #bb0404;
-}
+.totals-row { background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important; border-top: 3px solid #bb0404; }
 html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e293b 100%) !important; }
 .totals-row td { padding: 16px; font-weight: 900; color: var(--text-primary); border-bottom: none; font-size: 13px; }
 
 .empty-state {
     text-align: center; padding: 60px 20px;
-    background: var(--bg-card);
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    max-width: 100%;
+    background: var(--bg-card); border-radius: 12px;
+    border: 1px solid var(--border-color); max-width: 100%;
 }
 .empty-state i { font-size: 56px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 16px; }
 .empty-state h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
 .empty-state p { color: var(--text-muted); font-size: 14px; margin: 0; }
 
+.btn {
+    padding: 10px 22px; border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+    text-decoration: none; display: inline-flex;
+    align-items: center; gap: 8px; transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+}
+.btn-secondary { background: var(--bg-input); color: var(--text-secondary); border: 1.5px solid var(--border-color); }
+.btn-secondary:hover { background: var(--bg-table-hover); color: var(--text-primary); }
+.btn-sm { padding: 6px 14px; font-size: 12px; }
+
 /* TRANSACTION MODAL */
 .txn-modal-overlay {
-    display: none; position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 9999;
-    justify-content: center; align-items: center;
+    display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+    z-index: 9999; justify-content: center; align-items: center;
     padding: 20px; overflow-y: auto;
 }
 .txn-modal-overlay.show { display: flex; animation: fadeIn 0.2s ease forwards; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideUpModal {
-    from { opacity: 0; transform: translateY(30px) scale(0.96); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-}
+@keyframes slideUpModal { from { opacity: 0; transform: translateY(30px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .txn-modal {
     background: var(--bg-card); border-radius: 16px;
     width: 100%; max-width: 560px; max-height: 90vh;
@@ -2115,18 +1918,15 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
     border: 1px solid var(--border-color);
 }
 .txn-modal-header {
-    padding: 20px 24px;
-    border-radius: 16px 16px 0 0;
+    padding: 20px 24px; border-radius: 16px 16px 0 0;
     display: flex; align-items: center; gap: 16px;
     position: relative; overflow: hidden; color: white;
 }
 .txn-modal-header.txn-header-deposit { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
 .txn-modal-header.txn-header-withdrawal { background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%); }
 .txn-modal-header-icon {
-    width: 52px; height: 52px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
+    width: 52px; height: 52px; background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
     font-size: 22px; flex-shrink: 0;
     border: 2px solid rgba(255, 255, 255, 0.25);
     position: relative; z-index: 1;
@@ -2138,11 +1938,9 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
     width: 36px; height: 36px; border-radius: 50%;
     background: rgba(255, 255, 255, 0.15); color: #FFFFFF;
     border: 1px solid rgba(255, 255, 255, 0.2);
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px;
-    transition: all 0.2s ease;
-    flex-shrink: 0;
+    cursor: pointer; display: flex; align-items: center;
+    justify-content: center; font-size: 14px;
+    transition: all 0.2s ease; flex-shrink: 0;
     position: relative; z-index: 1;
 }
 .txn-modal-close:hover { background: rgba(255, 255, 255, 0.3); transform: rotate(90deg); }
@@ -2156,9 +1954,8 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
 .txn-modal-message.error { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 .txn-provider-info {
     background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
-    border: 2px solid #93C5FD;
-    border-radius: 12px; padding: 14px 18px;
-    margin-bottom: 16px;
+    border: 2px solid #93C5FD; border-radius: 12px;
+    padding: 14px 18px; margin-bottom: 16px;
     display: flex; align-items: center; gap: 14px;
 }
 .txn-provider-icon {
@@ -2171,7 +1968,6 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
 .txn-provider-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #1E40AF; }
 .txn-provider-name { font-size: 15px; font-weight: 800; color: #1E293B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .txn-provider-code { font-size: 11px; font-weight: 700; color: #1D4ED8; background: #FFFFFF; padding: 2px 10px; border-radius: 8px; align-self: flex-start; font-family: 'Courier New', monospace; }
-
 .txn-form-group { margin-bottom: 16px; }
 .txn-form-group label {
     display: block; font-size: 12px; font-weight: 700;
@@ -2183,10 +1979,8 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
     width: 100%; padding: 11px 14px;
     border: 1.5px solid var(--border-color);
     border-radius: 10px; font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-input);
-    font-family: 'Inter', sans-serif;
-    transition: all 0.3s ease;
+    color: var(--text-primary); background: var(--bg-input);
+    font-family: 'Inter', sans-serif; transition: all 0.3s ease;
 }
 .txn-form-control:focus {
     outline: none; border-color: #2563EB;
@@ -2196,37 +1990,77 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
 .txn-amount-input {
     font-size: 20px !important; font-weight: 800;
     font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: 1px; text-align: right;
-    padding-right: 18px;
+    letter-spacing: 1px; text-align: right; padding-right: 18px;
 }
+
 .txn-balance-preview {
     background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
-    border: 2px solid #FCD34D; border-radius: 12px;
-    padding: 14px 18px; margin-bottom: 16px;
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    border: 2px solid #FCD34D;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
-.txn-balance-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.txn-balance-label {
-    font-size: 10px; font-weight: 700;
+.txn-balance-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 10px;
+    border: 1.5px solid rgba(252, 211, 77, 0.5);
+}
+.txn-balance-row-label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 1px; color: #92400E;
+}
+.txn-balance-row-label i { font-size: 13px; color: #D97706; }
+.txn-balance-row-values { display: flex; align-items: center; gap: 8px; width: 100%; }
+.txn-balance-box {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 8px 12px;
+    background: #FFFFFF; border-radius: 8px;
+    border: 1.5px solid #FCD34D;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+.txn-balance-box-label {
+    font-size: 9px; font-weight: 800;
     text-transform: uppercase; letter-spacing: 0.8px;
-    color: #92400E;
-    display: flex; align-items: center; gap: 5px;
+    color: #92400E; opacity: 0.75;
 }
-.txn-balance-value {
-    font-size: 15px; font-weight: 900;
+.txn-balance-box-value {
+    font-size: 16px; font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
-    word-break: break-all;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+}
+.txn-balance-arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: #D97706; font-size: 14px; flex-shrink: 0; opacity: 0.8;
 }
 .txn-float-value { color: #1D4ED8; }
 .txn-cash-value { color: #059669; }
 .txn-after-value { color: #7C3AED; }
+.txn-after-cash-value { color: #047857; }
+.txn-balance-box-after {
+    background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%);
+    border-color: #86EFAC;
+}
+.txn-balance-box-after .txn-balance-box-label { color: #15803D; opacity: 0.9; }
+
 .txn-form-actions { display: flex; gap: 12px; padding-top: 8px; flex-wrap: wrap; }
 .txn-btn {
     padding: 12px 24px; border: none; border-radius: 10px;
     font-weight: 700; font-size: 13px; cursor: pointer;
     display: inline-flex; align-items: center; gap: 8px;
-    transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
+    transition: all 0.3s ease; font-family: 'Inter', sans-serif;
     flex: 1; justify-content: center; min-width: 140px;
 }
 .txn-btn-cancel {
@@ -2248,12 +2082,10 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
 @media (max-width: 1024px) {
     .capital-compact-content { grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
     .capital-compact-value { font-size: 18px; }
-    .filter-form-main { flex-wrap: wrap; }
 }
 @media (max-width: 768px) {
     .summary-cards-soft { grid-template-columns: 1fr; }
     .time-filter-bar { flex-direction: column; align-items: stretch; gap: 10px; }
-    .time-filter-left { justify-content: center; }
     .time-filter-buttons { justify-content: center; }
     .time-btn { flex: 1; min-width: 60px; }
     .filter-form-main { flex-direction: column; align-items: stretch; }
@@ -2272,27 +2104,25 @@ html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e
     .report-group-header { flex-direction: column; align-items: flex-start; }
     .txn-modal { max-width: 95vw; max-height: 95vh; }
     .txn-modal-body { padding: 18px; }
-    .txn-balance-preview { grid-template-columns: 1fr; gap: 10px; }
     .txn-form-actions { flex-direction: column; }
     .txn-btn { width: 100%; }
-
     .export-dropdown { flex: 1; }
-    .export-dropdown .btn-action-export {
-        width: 100%;
-        justify-content: center;
-    }
+    .export-dropdown .btn-action-export { width: 100%; justify-content: center; }
+    .table-search-input-group { width: 100%; }
 }
 @media (max-width: 480px) {
     .summary-card-soft { padding: 14px 16px; gap: 12px; }
     .summary-icon-soft { width: 44px; height: 44px; font-size: 18px; }
     .summary-value-soft { font-size: 16px; }
-    .summary-label-soft { font-size: 9px; }
     .capital-compact-value { font-size: 16px; }
     .capital-compact-icon { width: 44px; height: 44px; font-size: 18px; }
     .time-btn { font-size: 11px; padding: 7px 12px; }
     .btn-action-big { padding: 11px 16px; font-size: 12px; }
     .filter-item label { font-size: 10px; }
     .filter-input { font-size: 12px; padding: 9px 12px; }
+    .txn-balance-box-value { font-size: 13px; }
+    .txn-balance-row { padding: 8px 10px; }
+    .txn-balance-box { padding: 6px 8px; }
 }
 </style>
 
@@ -2304,13 +2134,10 @@ function formatMoneyInput(input) {
     const cursorPos = input.selectionStart;
     const oldValue = input.value;
     const oldLength = oldValue.length;
-    
     let value = input.value.replace(/[^0-9]/g, '');
     if (value === '') { input.value = ''; return; }
-    
     value = value.replace(/^0+/, '') || '0';
     if (value.length > 15) value = value.substring(0, 15);
-    
     let formatted = '';
     let count = 0;
     for (let i = value.length - 1; i >= 0; i--) {
@@ -2318,7 +2145,6 @@ function formatMoneyInput(input) {
         formatted = value[i] + formatted;
         count++;
     }
-    
     input.value = formatted;
     const newLength = formatted.length;
     const newCursorPos = cursorPos + (newLength - oldLength);
@@ -2335,50 +2161,163 @@ function parseMoney(str) {
 }
 
 // ============================================================
-// ✅ TOGGLE EXPORT DROPDOWN
+// ✅ TABLE SEARCH - NDANI YA TABLE HEADER
+// Inafanya highlight ya provider anayelingana
+// ============================================================
+function onTableSearch(input, reportId) {
+    const searchTerm = input.value.toLowerCase().trim();
+    const tbody = document.querySelector(`[data-report-tbody="${reportId}"]`);
+    const clearBtn = document.querySelector(`.table-search-clear[data-report-id="${reportId}"]`);
+    const countBadge = document.querySelector(`.table-search-count[data-report-id="${reportId}"]`);
+    const noResults = document.querySelector(`.no-table-search-results[data-report-id="${reportId}"]`);
+    
+    if (!tbody) return;
+    const rows = tbody.querySelectorAll('.provider-row');
+    
+    if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
+    
+    if (searchTerm.length === 0) {
+        rows.forEach(row => {
+            row.classList.remove('hidden-by-search');
+            row.classList.remove('highlight-match');
+        });
+        rows.forEach((row, idx) => {
+            const numCell = row.querySelector('.row-number');
+            if (numCell) numCell.textContent = idx + 1;
+        });
+        if (countBadge) countBadge.style.display = 'none';
+        if (noResults) noResults.style.display = 'none';
+        return;
+    }
+    
+    let matchCount = 0;
+    rows.forEach(row => {
+        const searchData = row.getAttribute('data-search') || '';
+        if (searchData.includes(searchTerm)) {
+            row.classList.remove('hidden-by-search');
+            row.classList.add('highlight-match');
+            matchCount++;
+        } else {
+            row.classList.add('hidden-by-search');
+            row.classList.remove('highlight-match');
+        }
+    });
+    
+    // Renumber visible rows
+    let visibleIdx = 1;
+    rows.forEach(row => {
+        if (!row.classList.contains('hidden-by-search')) {
+            const numCell = row.querySelector('.row-number');
+            if (numCell) numCell.textContent = visibleIdx++;
+        }
+    });
+    
+    if (countBadge) {
+        countBadge.style.display = 'inline-block';
+        countBadge.textContent = matchCount;
+    }
+    if (noResults) noResults.style.display = matchCount === 0 ? 'block' : 'none';
+}
+
+function clearTableSearch(reportId) {
+    const input = document.querySelector(`.table-search-input[data-report-id="${reportId}"]`);
+    if (input) {
+        input.value = '';
+        onTableSearch(input, reportId);
+        input.focus();
+    }
+}
+
+// ============================================================
+// ✅ GLOBAL BRANCH REPORTS SEARCH (juu ya reports zote)
+// ============================================================
+function onBranchReportsSearch(input) {
+    const searchTerm = input.value.toLowerCase().trim();
+    const reportGroups = document.querySelectorAll('.report-group');
+    const clearBtn = document.getElementById('branchReportsSearchClear');
+    const countBadge = document.getElementById('branchReportsSearchCount');
+    const noResults = document.getElementById('noBranchReportsResults');
+    const reportsContainer = document.getElementById('reportsContainer');
+    const headerCount = document.getElementById('branchReportsHeaderCount');
+    
+    if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
+    
+    if (searchTerm.length === 0) {
+        reportGroups.forEach(group => {
+            group.classList.remove('hidden-by-search');
+            group.classList.remove('highlight-match');
+        });
+        if (countBadge) countBadge.style.display = 'none';
+        if (noResults) noResults.style.display = 'none';
+        if (reportsContainer) reportsContainer.style.display = '';
+        if (headerCount) headerCount.textContent = reportGroups.length;
+        return;
+    }
+    
+    let matchCount = 0;
+    reportGroups.forEach(group => {
+        const searchData = group.getAttribute('data-search') || '';
+        if (searchData.includes(searchTerm)) {
+            group.classList.remove('hidden-by-search');
+            group.classList.add('highlight-match');
+            matchCount++;
+        } else {
+            group.classList.add('hidden-by-search');
+            group.classList.remove('highlight-match');
+        }
+    });
+    
+    if (countBadge) {
+        countBadge.style.display = 'inline-block';
+        countBadge.textContent = matchCount;
+    }
+    if (noResults) noResults.style.display = matchCount === 0 ? 'block' : 'none';
+    if (reportsContainer) reportsContainer.style.display = matchCount === 0 ? 'none' : '';
+    if (headerCount) headerCount.textContent = matchCount;
+}
+
+function clearBranchReportsSearch() {
+    const input = document.getElementById('branchReportsSearchInput');
+    if (input) {
+        input.value = '';
+        onBranchReportsSearch(input);
+        input.focus();
+    }
+}
+
+function clearGlobalSearch() {
+    clearBranchReportsSearch();
+}
+
+// ============================================================
+// EXPORT DROPDOWN
 // ============================================================
 function toggleExportDropdown(event) {
     event.stopPropagation();
-    const dropdown = document.querySelector('.export-dropdown');
-    dropdown.classList.toggle('open');
+    document.querySelector('.export-dropdown').classList.toggle('open');
 }
 
 document.addEventListener('click', function(e) {
     const dropdown = document.querySelector('.export-dropdown');
-    if (dropdown && !dropdown.contains(e.target)) {
-        dropdown.classList.remove('open');
-    }
+    if (dropdown && !dropdown.contains(e.target)) dropdown.classList.remove('open');
 });
 
-// ============================================================
-// ✅ EXPORT DATA
-// ============================================================
 function exportData(format) {
     const dropdown = document.querySelector('.export-dropdown');
     if (dropdown) dropdown.classList.remove('open');
-    
     const urlParams = new URLSearchParams(window.location.search);
     const fromDate = urlParams.get('from_date') || '<?php echo $from_date; ?>';
     const toDate = urlParams.get('to_date') || '<?php echo $to_date; ?>';
     const branchId = '<?php echo $employee_branch_id; ?>';
-    
     const exportUrl = `export_employee.php?format=${format}&from_date=${fromDate}&to_date=${toDate}&branch_id=${branchId}`;
-    
     const formatLabels = { 'pdf': 'PDF', 'csv': 'CSV', 'word': 'Word' };
-    
-    const msg = `Export Daily Reports as ${formatLabels[format]}?\n\n` +
-                `Period: ${fromDate} to ${toDate}\n` +
-                `Branch: <?php echo htmlspecialchars($branch_name); ?>\n` +
-                `Records: <?php echo count($reports); ?> reports`;
-    
+    const msg = `Export Daily Reports as ${formatLabels[format]}?\n\nPeriod: ${fromDate} to ${toDate}\nBranch: <?php echo htmlspecialchars($branch_name); ?>\nRecords: <?php echo count($reports); ?> reports`;
     if (confirm(msg)) {
         const exportBtn = document.querySelector('.btn-action-export');
         const originalContent = exportBtn.innerHTML;
         exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Exporting...</span>';
         exportBtn.disabled = true;
-        
         window.location.href = exportUrl;
-        
         setTimeout(function() {
             exportBtn.innerHTML = originalContent;
             exportBtn.disabled = false;
@@ -2395,9 +2334,7 @@ function onMyTxnSearch(input) {
     const clearBtn = document.getElementById('myTxnSearchClear');
     const countBadge = document.getElementById('myTxnSearchCount');
     const noResults = document.getElementById('noMyTxnResults');
-    
     if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
-    
     if (searchTerm.length === 0) {
         rows.forEach(row => row.classList.remove('hidden-by-search'));
         rows.forEach((row, idx) => {
@@ -2408,18 +2345,13 @@ function onMyTxnSearch(input) {
         if (noResults) noResults.style.display = 'none';
         return;
     }
-    
     let matchCount = 0;
     rows.forEach(row => {
         const searchData = row.getAttribute('data-search') || '';
         if (searchData.includes(searchTerm)) {
-            row.classList.remove('hidden-by-search');
-            matchCount++;
-        } else {
-            row.classList.add('hidden-by-search');
-        }
+            row.classList.remove('hidden-by-search'); matchCount++;
+        } else row.classList.add('hidden-by-search');
     });
-    
     let visibleIdx = 1;
     rows.forEach(row => {
         if (!row.classList.contains('hidden-by-search')) {
@@ -2427,21 +2359,13 @@ function onMyTxnSearch(input) {
             if (numCell) numCell.textContent = visibleIdx++;
         }
     });
-    
-    if (countBadge) {
-        countBadge.style.display = 'inline-block';
-        countBadge.textContent = matchCount;
-    }
+    if (countBadge) { countBadge.style.display = 'inline-block'; countBadge.textContent = matchCount; }
     if (noResults) noResults.style.display = matchCount === 0 ? 'block' : 'none';
 }
 
 function clearMyTxnSearch() {
     const input = document.getElementById('myTxnSearchInput');
-    if (input) {
-        input.value = '';
-        onMyTxnSearch(input);
-        input.focus();
-    }
+    if (input) { input.value = ''; onMyTxnSearch(input); input.focus(); }
 }
 
 // ============================================================
@@ -2452,7 +2376,6 @@ let currentTxnType = 'deposit';
 
 function openTransactionModal(type, providerId = null) {
     currentTxnType = type;
-    
     const overlay = document.getElementById('txnModalOverlay');
     const header = document.getElementById('txnModalHeader');
     const icon = document.getElementById('txnModalIcon');
@@ -2461,38 +2384,31 @@ function openTransactionModal(type, providerId = null) {
     const submitBtn = document.getElementById('txnSubmitBtn');
     const messageDiv = document.getElementById('txnModalMessage');
     const providerInfo = document.getElementById('txnProviderInfo');
-    
     messageDiv.style.display = 'none';
     providerInfo.style.display = 'none';
-    
     if (type === 'deposit') {
         header.className = 'txn-modal-header txn-header-deposit';
         icon.innerHTML = '<i class="fas fa-arrow-down"></i>';
         title.textContent = 'Add Deposit';
-        subtitle.textContent = 'Add money to provider float';
+        subtitle.textContent = 'Mteja anaweka cash - Float inapungua, Cash inaongezeka';
         submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Deposit';
     } else {
         header.className = 'txn-modal-header txn-header-withdrawal';
         icon.innerHTML = '<i class="fas fa-arrow-up"></i>';
         title.textContent = 'Add Withdrawal';
-        subtitle.textContent = 'Withdraw money from provider float';
+        subtitle.textContent = 'Mteja anatoa float - Cash inapungua, Float inaongezeka';
         submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Withdrawal';
     }
-    
     document.getElementById('txnForm').reset();
     document.getElementById('txnType').value = type;
     document.getElementById('txnBalancePreview').style.display = 'none';
     document.getElementById('txnAmount').value = '';
-    
     if (providerId) {
-        const providerSelect = document.getElementById('txnProviderSelect');
-        providerSelect.value = providerId;
+        document.getElementById('txnProviderSelect').value = providerId;
         onProviderChange();
     }
-    
     overlay.classList.add('show');
     document.body.style.overflow = 'hidden';
-    
     setTimeout(() => {
         if (providerId) document.getElementById('txnAmount').focus();
         else document.getElementById('txnProviderSelect').focus();
@@ -2510,47 +2426,36 @@ async function onProviderChange() {
     const providerId = select.value;
     const providerInfo = document.getElementById('txnProviderInfo');
     const balancePreview = document.getElementById('txnBalancePreview');
-    
     if (!providerId) {
         providerInfo.style.display = 'none';
         balancePreview.style.display = 'none';
         currentProviderData = { float: 0, cash: 0 };
         return;
     }
-    
     const option = select.options[select.selectedIndex];
-    const providerName = option.getAttribute('data-name');
-    const providerCode = option.getAttribute('data-code');
-    const iconClass = option.getAttribute('data-icon');
-    const colorCode = option.getAttribute('data-color');
-    
-    document.getElementById('txnProviderName').textContent = providerName;
-    document.getElementById('txnProviderCode').textContent = providerCode;
+    document.getElementById('txnProviderName').textContent = option.getAttribute('data-name');
+    document.getElementById('txnProviderCode').textContent = option.getAttribute('data-code');
     const iconEl = document.getElementById('txnProviderIcon');
-    iconEl.innerHTML = `<i class="${iconClass}"></i>`;
-    iconEl.style.background = colorCode;
+    iconEl.innerHTML = `<i class="${option.getAttribute('data-icon')}"></i>`;
+    iconEl.style.background = option.getAttribute('data-color');
     providerInfo.style.display = 'flex';
-    
     try {
         const formData = new FormData();
         formData.append('ajax_action', 'get_provider_float');
         formData.append('provider_id', providerId);
         formData.append('branch_id', '<?php echo $employee_branch_id; ?>');
-        
         const response = await fetch(window.location.href, { method: 'POST', body: formData });
         const data = await response.json();
-        
         if (data.success) {
             currentProviderData = {
                 float: parseFloat(data.float) || 0,
                 cash: parseFloat(data.cash) || 0
             };
-            
             document.getElementById('txnCurrentFloat').textContent = data.formatted_float;
             document.getElementById('txnCurrentCash').textContent = data.formatted_cash;
             document.getElementById('txnAfterFloat').textContent = data.formatted_float;
-            
-            balancePreview.style.display = 'grid';
+            document.getElementById('txnAfterCash').textContent = data.formatted_cash;
+            balancePreview.style.display = 'flex';
             updateBalancePreview();
         }
     } catch (err) { console.error('Error:', err); }
@@ -2559,12 +2464,24 @@ async function onProviderChange() {
 function updateBalancePreview() {
     const amount = parseMoney(document.getElementById('txnAmount').value);
     const currentFloat = currentProviderData.float;
+    const currentCash = currentProviderData.cash;
     
-    let afterFloat = currentTxnType === 'deposit' ? currentFloat + amount : currentFloat - amount;
+    let afterFloat, afterCash;
+    if (currentTxnType === 'deposit') {
+        afterFloat = currentFloat - amount;
+        afterCash = currentCash + amount;
+    } else {
+        afterFloat = currentFloat + amount;
+        afterCash = currentCash - amount;
+    }
     
-    const afterEl = document.getElementById('txnAfterFloat');
-    afterEl.textContent = formatMoney(afterFloat);
-    afterEl.style.color = (currentTxnType === 'withdrawal' && afterFloat < 0) ? '#DC2626' : '';
+    const afterFloatEl = document.getElementById('txnAfterFloat');
+    afterFloatEl.textContent = formatMoney(afterFloat);
+    afterFloatEl.style.color = afterFloat < 0 ? '#DC2626' : '';
+    
+    const afterCashEl = document.getElementById('txnAfterCash');
+    afterCashEl.textContent = formatMoney(afterCash);
+    afterCashEl.style.color = afterCash < 0 ? '#DC2626' : '';
 }
 
 async function submitTransaction(event) {
@@ -2590,15 +2507,14 @@ async function submitTransaction(event) {
         
         if (data.success) {
             showModalMessage(data.message, 'success');
-            
+            updateUIAfterTransaction(data.transaction);
             setTimeout(() => {
                 closeTransactionModal();
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
-                window.location.reload();
-            }, 1500);
+            }, 800);
         } else {
-            showModalMessage(data.message || 'An error occurred. Please try again.', 'error');
+            showModalMessage(data.message || 'An error occurred.', 'error');
             submitBtn.disabled = false;
             submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
         }
@@ -2606,6 +2522,118 @@ async function submitTransaction(event) {
         showModalMessage('Network error. Please try again.', 'error');
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-save"></i> Save';
+    }
+}
+
+function updateUIAfterTransaction(txn) {
+    if (!txn) return;
+    
+    const floatEl = document.getElementById('totalFloatDisplay');
+    const cashEl = document.getElementById('totalCashDisplay');
+    const capitalEl = document.getElementById('totalCapitalDisplay');
+    
+    if (floatEl && txn.formatted_total_float) {
+        floatEl.textContent = txn.formatted_total_float;
+        floatEl.style.transition = 'all 0.3s ease';
+        floatEl.style.transform = 'scale(1.15)';
+        setTimeout(() => floatEl.style.transform = 'scale(1)', 300);
+    }
+    
+    const currentCashText = cashEl ? cashEl.textContent : 'TSh 0';
+    const currentCash = parseMoney(currentCashText);
+    
+    let newTotalCash;
+    if (currentTxnType === 'deposit') {
+        newTotalCash = currentCash + parseMoney(txn.formatted_amount);
+    } else {
+        newTotalCash = currentCash - parseMoney(txn.formatted_amount);
+    }
+    
+    if (cashEl) {
+        cashEl.textContent = formatMoney(newTotalCash);
+        cashEl.style.transition = 'all 0.3s ease';
+        cashEl.style.transform = 'scale(1.15)';
+        setTimeout(() => cashEl.style.transform = 'scale(1)', 300);
+    }
+    
+    if (capitalEl && txn.formatted_capital) {
+        capitalEl.textContent = txn.formatted_capital;
+        capitalEl.style.transition = 'all 0.3s ease';
+        capitalEl.style.transform = 'scale(1.15)';
+        setTimeout(() => capitalEl.style.transform = 'scale(1)', 300);
+    }
+    
+    const myTxnCountEl = document.getElementById('myTxnCountDisplay');
+    const myDepositsEl = document.getElementById('myDepositsDisplay');
+    const myWithdrawalsEl = document.getElementById('myWithdrawalsDisplay');
+    const myDepositCountEl = document.getElementById('myDepositCountDisplay');
+    const myWithdrawalCountEl = document.getElementById('myWithdrawalCountDisplay');
+    const myTxnHeaderCountEl = document.getElementById('myTxnHeaderCount');
+    
+    if (myTxnCountEl) {
+        const current = parseInt(myTxnCountEl.textContent.replace(/,/g, '')) || 0;
+        myTxnCountEl.textContent = (current + 1).toLocaleString();
+    }
+    if (myTxnHeaderCountEl) {
+        const current = parseInt(myTxnHeaderCountEl.textContent.replace(/,/g, '')) || 0;
+        myTxnHeaderCountEl.textContent = current + 1;
+    }
+    
+    const amount = parseMoney(txn.formatted_amount);
+    
+    if (currentTxnType === 'deposit') {
+        if (myDepositsEl) {
+            const current = parseMoney(myDepositsEl.textContent);
+            myDepositsEl.textContent = formatMoney(current + amount);
+        }
+        if (myDepositCountEl) {
+            const match = myDepositCountEl.textContent.match(/(\d+)/);
+            const count = match ? parseInt(match[1]) : 0;
+            myDepositCountEl.innerHTML = `<i class="fas fa-list"></i> ${(count + 1).toLocaleString()} transactions`;
+        }
+    } else {
+        if (myWithdrawalsEl) {
+            const current = parseMoney(myWithdrawalsEl.textContent);
+            myWithdrawalsEl.textContent = formatMoney(current + amount);
+        }
+        if (myWithdrawalCountEl) {
+            const match = myWithdrawalCountEl.textContent.match(/(\d+)/);
+            const count = match ? parseInt(match[1]) : 0;
+            myWithdrawalCountEl.innerHTML = `<i class="fas fa-list"></i> ${(count + 1).toLocaleString()} transactions`;
+        }
+    }
+    
+    setTimeout(() => {
+        reloadMyTransactions();
+    }, 500);
+}
+
+async function reloadMyTransactions() {
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const fromDate = urlParams.get('from_date') || '<?php echo $from_date; ?>';
+        const toDate = urlParams.get('to_date') || '<?php echo $to_date; ?>';
+        
+        const formData = new FormData();
+        formData.append('ajax_action', 'get_my_transactions');
+        formData.append('from_date', fromDate);
+        formData.append('to_date', toDate);
+        
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
+        const data = await response.json();
+        
+        if (data.success && data.html) {
+            const tbody = document.getElementById('myTxnTableBody');
+            if (tbody) {
+                tbody.innerHTML = data.html;
+                const searchInput = document.getElementById('myTxnSearchInput');
+                if (searchInput && searchInput.value) {
+                    onMyTxnSearch(searchInput);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error reloading transactions:', err);
     }
 }
 
@@ -2631,12 +2659,18 @@ document.addEventListener('keydown', function(e) {
             dropdown.classList.remove('open');
             return;
         }
-        const input = document.getElementById('myTxnSearchInput');
-        if (input && input.value.length > 0 && document.activeElement === input) {
+        const myInput = document.getElementById('myTxnSearchInput');
+        if (myInput && myInput.value.length > 0 && document.activeElement === myInput) {
             clearMyTxnSearch();
+            return;
+        }
+        const tableInput = document.activeElement;
+        if (tableInput && tableInput.classList.contains('table-search-input')) {
+            const reportId = tableInput.getAttribute('data-report-id');
+            clearTableSearch(reportId);
+            return;
         }
     }
-    
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         const input = document.getElementById('myTxnSearchInput');

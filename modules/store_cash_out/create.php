@@ -4,9 +4,9 @@
 // WAKALA FINANCIAL SYSTEM - ADD STORE CASH OUT
 // 🔴 RED THEME — SCOPED CSS — SIDEBAR SAFE
 // ✅ Money format: 1,000,000,000
-// ✅ Source: Capital OR Profit
-// ✅ Auto-deduct from Daily Report cash + Capital table
-// ✅ Validation: check available balance
+// ✅ Default Source: PROFIT
+// ✅ Capital = current_cash from latest daily report
+// ✅ Profit = net_profit from daily reports
 // ================================================================
 
 require_once '../../config/config.php';
@@ -26,9 +26,6 @@ $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'employee';
 $is_admin = ($role === 'admin' || $role === 'super_admin');
 
-// ============================================================
-// ADMIN ONLY ACCESS
-// ============================================================
 if (!$is_admin) {
     $_SESSION['error_message'] = 'Only administrators can create cash out records.';
     header('Location: index.php');
@@ -53,11 +50,8 @@ $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // HELPER: Get available balances per branch
 // ============================================================
 if (!function_exists('getAvailableBalances')) {
-    function getAvailableBalances($db, $branch_id, $from_date = null, $to_date = null) {
-        $from_date = $from_date ?? date('Y-m-01');
-        $to_date = $to_date ?? date('Y-m-d');
-        
-        // Available Cash (from latest daily report)
+    function getAvailableBalances($db, $branch_id) {
+        // ✅ CAPITAL = current_cash kutoka daily report ya mwisho
         $stmt = $db->prepare("
             SELECT current_cash, current_float 
             FROM daily_reports 
@@ -70,7 +64,7 @@ if (!function_exists('getAvailableBalances')) {
         $available_cash = floatval($latest_dr['current_cash'] ?? 0);
         $available_float = floatval($latest_dr['current_float'] ?? 0);
         
-        // Available Profit (total net_profit from daily reports)
+        // ✅ PROFIT = net_profit (jumla) - profit iliyotumika
         $stmt = $db->prepare("
             SELECT COALESCE(SUM(net_profit), 0) as total_profit
             FROM daily_reports 
@@ -80,7 +74,6 @@ if (!function_exists('getAvailableBalances')) {
         $profit_row = $stmt->fetch(PDO::FETCH_ASSOC);
         $total_profit = floatval($profit_row['total_profit'] ?? 0);
         
-        // Total cash_out already deducted from profit
         $stmt = $db->prepare("
             SELECT COALESCE(SUM(amount), 0) as total_profit_cashout
             FROM store_cash_out 
@@ -92,20 +85,17 @@ if (!function_exists('getAvailableBalances')) {
         $cashout_row = $stmt->fetch(PDO::FETCH_ASSOC);
         $profit_used = floatval($cashout_row['total_profit_cashout'] ?? 0);
         
-        $available_profit = $total_profit - $profit_used;
+        $available_profit = max(0, $total_profit - $profit_used);
         
         return [
+            'capital' => $available_cash,   // ✅ Capital = current_cash
             'cash' => $available_cash,
             'float' => $available_float,
-            'profit' => max(0, $available_profit),
-            'total_capital' => $available_cash + $available_float,
+            'profit' => $available_profit,
         ];
     }
 }
 
-// ============================================================
-// GET BALANCES FOR EACH BRANCH (for JS validation)
-// ============================================================
 $branch_balances = [];
 foreach ($branches as $b) {
     $branch_balances[$b['id']] = getAvailableBalances($db, $b['id']);
@@ -117,27 +107,16 @@ foreach ($branches as $b) {
 if (!function_exists('generateCapitalNumberLocal')) {
     function generateCapitalNumberLocal($db) {
         $prefix = 'CAP-' . date('Ymd') . '-';
-
         $stmt = $db->prepare("SELECT capital_number FROM capital_management
                               WHERE capital_number LIKE ?
                               ORDER BY id DESC LIMIT 1");
         $stmt->execute([$prefix . '%']);
         $last = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($last) {
-            $last_num = intval(substr($last['capital_number'], -4));
-            $new_num = $last_num + 1;
-        } else {
-            $new_num = 1;
-        }
-
+        $new_num = $last ? intval(substr($last['capital_number'], -4)) + 1 : 1;
         return $prefix . str_pad($new_num, 4, '0', STR_PAD_LEFT);
     }
 }
 
-// ============================================================
-// AUTO-GENERATE CASHOUT NUMBER
-// ============================================================
 $cashout_number = generateCashOutNumber($db);
 
 // ============================================================
@@ -151,14 +130,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cashout_date = isset($_POST['cashout_date']) ? trim($_POST['cashout_date']) : date('Y-m-d');
         $branch_id = isset($_POST['branch_id']) ? intval($_POST['branch_id']) : 0;
         $source = isset($_POST['source']) && in_array($_POST['source'], ['capital', 'profit']) 
-            ? $_POST['source'] : 'capital';
+            ? $_POST['source'] : 'profit';
 
-        // Parse amount
         $amount_raw = isset($_POST['amount']) ? $_POST['amount'] : '0';
         $amount_clean = preg_replace('/[^0-9.]/', '', str_replace(',', '', $amount_raw));
         $amount = floatval($amount_clean);
 
-        // Optional fields
         $reason = isset($_POST['reason']) ? trim($_POST['reason']) : '';
         $taken_by = isset($_POST['taken_by']) ? trim($_POST['taken_by']) : '';
         $description = isset($_POST['description']) ? trim($_POST['description']) : '';
@@ -167,7 +144,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $approved_by = $emp['full_name'] ?? 'Admin';
         $approved_date = date('Y-m-d');
 
-        // VALIDATION
         $errors = [];
 
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $cashout_date)) {
@@ -182,44 +158,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Amount must be greater than 0.';
         }
 
-        // ============================================================
-        // CHECK AVAILABLE BALANCE
-        // ============================================================
+        // CHECK BALANCE
         if (empty($errors)) {
             $balances = getAvailableBalances($db, $branch_id);
             
             if ($source === 'capital') {
-                // Check cash balance
-                if ($balances['cash'] < $amount) {
-                    $errors[] = 'Insufficient Cash! Available cash: ' . 
-                        formatCurrency($balances['cash']) . 
+                if ($balances['capital'] < $amount) {
+                    $errors[] = 'Insufficient Capital! Available: ' . 
+                        formatCurrency($balances['capital']) . 
                         '. Requested: ' . formatCurrency($amount);
                 }
             } elseif ($source === 'profit') {
-                // Check profit balance
                 if ($balances['profit'] < $amount) {
-                    $errors[] = 'Insufficient Profit! Available profit: ' . 
+                    $errors[] = 'Insufficient Profit! Available: ' . 
                         formatCurrency($balances['profit']) . 
                         '. Requested: ' . formatCurrency($amount);
                 }
             }
         }
 
-        // ============================================================
-        // INSERT RECORD
-        // ============================================================
         if (empty($errors)) {
             $db->beginTransaction();
-
             $cashout_number = generateCashOutNumber($db);
 
-            // Get branch name for storage
             $branch_stmt = $db->prepare("SELECT branch_name FROM branches WHERE id = ?");
             $branch_stmt->execute([$branch_id]);
             $branch_row = $branch_stmt->fetch(PDO::FETCH_ASSOC);
             $branch_name_store = $branch_row['branch_name'] ?? $user_branch_name;
 
-            // 1. INSERT kwenye store_cash_out (with source)
+            // INSERT store_cash_out
             $sql = "INSERT INTO store_cash_out (
                         cashout_number, employee_id, branch, branch_id,
                         cashout_date, amount, source, reason, taken_by,
@@ -228,59 +195,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $stmt = $db->prepare($sql);
             $stmt->execute([
-                $cashout_number,
-                $user_id,
-                $branch_name_store,
-                $branch_id,
-                $cashout_date,
-                $amount,
-                $source,
-                $reason,
-                $taken_by,
-                $description,
-                $status,
-                $approved_by,
-                $approved_date
+                $cashout_number, $user_id, $branch_name_store, $branch_id,
+                $cashout_date, $amount, $source, $reason, $taken_by,
+                $description, $status, $approved_by, $approved_date
             ]);
 
             $new_id = $db->lastInsertId();
 
-            // ============================================================
-            // 2. UPDATE CAPITAL MANAGEMENT (only if source = capital)
-            // ============================================================
+            // CAPITAL DEDUCTION
             if ($source === 'capital') {
                 $capital_number = generateCapitalNumberLocal($db);
                 $capital_description = 'Store Cash Out (' . $cashout_number . ')';
-                if (!empty($reason)) {
-                    $capital_description .= ' - ' . $reason;
-                }
+                if (!empty($reason)) $capital_description .= ' - ' . $reason;
 
                 $cap_sql = "INSERT INTO capital_management (
                                 capital_number, employee_id, branch, branch_id,
                                 transaction_date, transaction_type, amount,
                                 description, reference_id, reference_module, notes
                             ) VALUES (?, ?, ?, ?, ?, 'cash_out', ?, ?, ?, 'store_cash_out', ?)";
-
                 $cap_stmt = $db->prepare($cap_sql);
                 $cap_stmt->execute([
-                    $capital_number,
-                    $user_id,
-                    $branch_name_store,
-                    $branch_id,
-                    $cashout_date,
-                    $amount,
-                    $capital_description,
-                    $new_id,
-                    $description
+                    $capital_number, $user_id, $branch_name_store, $branch_id,
+                    $cashout_date, $amount, $capital_description, $new_id, $description
                 ]);
 
                 // Deduct from latest daily report cash
                 $latest_dr_stmt = $db->prepare("
-                    SELECT id, current_cash 
-                    FROM daily_reports 
-                    WHERE branch_id = ? 
-                    ORDER BY report_date DESC, id DESC 
-                    LIMIT 1
+                    SELECT id, current_cash FROM daily_reports 
+                    WHERE branch_id = ? ORDER BY report_date DESC, id DESC LIMIT 1
                 ");
                 $latest_dr_stmt->execute([$branch_id]);
                 $latest_dr = $latest_dr_stmt->fetch(PDO::FETCH_ASSOC);
@@ -289,26 +231,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $new_cash = max(0, floatval($latest_dr['current_cash']) - $amount);
                     $update_stmt = $db->prepare("
                         UPDATE daily_reports 
-                        SET current_cash = ?,
-                            total_cash_out = COALESCE(total_cash_out, 0) + ?,
-                            updated_at = NOW()
+                        SET current_cash = ?, total_cash_out = COALESCE(total_cash_out, 0) + ?, updated_at = NOW()
                         WHERE id = ?
                     ");
                     $update_stmt->execute([$new_cash, $amount, $latest_dr['id']]);
                 }
             }
 
-            // ============================================================
-            // 3. UPDATE PROFIT (only if source = profit)
-            // ============================================================
+            // PROFIT DEDUCTION
             if ($source === 'profit') {
-                // Deduct from net_profit of latest daily report
                 $latest_dr_stmt = $db->prepare("
                     SELECT id, net_profit, net_profit_after_salaries 
                     FROM daily_reports 
-                    WHERE branch_id = ? 
-                    ORDER BY report_date DESC, id DESC 
-                    LIMIT 1
+                    WHERE branch_id = ? ORDER BY report_date DESC, id DESC LIMIT 1
                 ");
                 $latest_dr_stmt->execute([$branch_id]);
                 $latest_dr = $latest_dr_stmt->fetch(PDO::FETCH_ASSOC);
@@ -316,51 +251,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($latest_dr) {
                     $new_profit = max(0, floatval($latest_dr['net_profit']) - $amount);
                     $new_profit_after = max(0, floatval($latest_dr['net_profit_after_salaries']) - $amount);
-                    
                     $update_stmt = $db->prepare("
                         UPDATE daily_reports 
-                        SET net_profit = ?,
-                            net_profit_after_salaries = ?,
-                            total_cash_out = COALESCE(total_cash_out, 0) + ?,
-                            updated_at = NOW()
+                        SET net_profit = ?, net_profit_after_salaries = ?, 
+                            total_cash_out = COALESCE(total_cash_out, 0) + ?, updated_at = NOW()
                         WHERE id = ?
                     ");
                     $update_stmt->execute([$new_profit, $new_profit_after, $amount, $latest_dr['id']]);
                 }
 
-                // Pia ongeza entry kwenye capital_management kama reference
-                // (lakini siyo cash_out — ni profit_allocation negative)
                 $capital_number = generateCapitalNumberLocal($db);
                 $cap_sql = "INSERT INTO capital_management (
                                 capital_number, employee_id, branch, branch_id,
                                 transaction_date, transaction_type, amount,
                                 description, reference_id, reference_module, notes
                             ) VALUES (?, ?, ?, ?, ?, 'cash_out', ?, ?, ?, 'store_cash_out_profit', ?)";
-
                 $cap_stmt = $db->prepare($cap_sql);
                 $cap_stmt->execute([
-                    $capital_number,
-                    $user_id,
-                    $branch_name_store,
-                    $branch_id,
-                    $cashout_date,
-                    $amount,
+                    $capital_number, $user_id, $branch_name_store, $branch_id,
+                    $cashout_date, $amount,
                     'Store Cash Out from Profit (' . $cashout_number . ')',
-                    $new_id,
-                    $description
+                    $new_id, $description
                 ]);
             }
 
-            // ============================================================
-            // 4. LOG ACTIVITY
-            // ============================================================
             if (function_exists('logActivity')) {
                 logActivity(
-                    $user_id,
-                    'Add Store Cash Out',
-                    'Store Cash Out',
-                    $new_id,
-                    '',
+                    $user_id, 'Add Store Cash Out', 'Store Cash Out', $new_id, '',
                     "Added cashout: $cashout_number - " . formatCurrency($amount) . " (Source: " . ucfirst($source) . ")"
                 );
             }
@@ -375,9 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
     } catch (PDOException $e) {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
+        if ($db->inTransaction()) $db->rollBack();
         error_log("Add cashout error: " . $e->getMessage());
         $error_message = 'Failed to add cash out record: ' . htmlspecialchars($e->getMessage());
     }
@@ -405,12 +320,6 @@ include_once '../../includes/admin_topbar.php';
     --border-color: #fecaca;
     --shadow-color: rgba(220, 38, 38, 0.08);
     --shadow-hover: rgba(220, 38, 38, 0.15);
-    --red-primary: #DC2626;
-    --red-dark: #B91C1C;
-    --red-darker: #991B1B;
-    --red-lighter: #FEE2E2;
-    --red-lightest: #FEF2F2;
-    --red-accent: #FCA5A5;
 }
 html.dark-mode .main-wrapper {
     --bg-body: #1a0a0a;
@@ -423,13 +332,9 @@ html.dark-mode .main-wrapper {
     --text-muted: #94a3b8;
     --text-light: #64748b;
     --border-color: #7f1d1d;
-    --red-lighter: #7F1D1D;
-    --red-lightest: #450A0A;
 }
 
-.main-wrapper, .main-wrapper *, .main-wrapper *::before, .main-wrapper *::after {
-    box-sizing: border-box;
-}
+.main-wrapper, .main-wrapper *, .main-wrapper *::before, .main-wrapper *::after { box-sizing: border-box; }
 .main-wrapper { background: var(--bg-body) !important; overflow-x: hidden !important; max-width: 100% !important; }
 .main-wrapper .main-content {
     padding: 16px 20px !important;
@@ -440,7 +345,6 @@ html.dark-mode .main-wrapper {
     width: 100% !important;
 }
 
-/* BRANCH INDICATOR */
 .main-wrapper .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
@@ -478,7 +382,6 @@ html.dark-mode .main-wrapper {
     gap: 6px; font-weight: 600;
 }
 
-/* PAGE HEADER */
 .main-wrapper .page-header {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 18px; flex-wrap: wrap; gap: 12px;
@@ -507,7 +410,6 @@ html.dark-mode .main-wrapper {
 }
 .main-wrapper .btn-secondary:hover { background: var(--bg-card); color: var(--text-primary); }
 
-/* ALERTS */
 .main-wrapper .alert {
     padding: 14px 18px; border-radius: 10px; margin-bottom: 16px;
     display: flex; align-items: flex-start; gap: 12px;
@@ -521,7 +423,6 @@ html.dark-mode .main-wrapper .alert-danger { background: #7F1D1D; color: #FEE2E2
 .main-wrapper .alert i { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
 .main-wrapper .alert-content { flex: 1; }
 
-/* FORM CONTAINER */
 .main-wrapper .form-container {
     background: var(--bg-card);
     border-radius: 14px;
@@ -576,7 +477,6 @@ html.dark-mode .main-wrapper .alert-danger { background: #7F1D1D; color: #FEE2E2
     flex-shrink: 0;
 }
 
-/* FORM BODY */
 .main-wrapper .form-body { padding: 28px 24px; }
 .main-wrapper .form-grid {
     display: grid;
@@ -650,9 +550,6 @@ html.dark-mode .main-wrapper .alert-danger { background: #7F1D1D; color: #FEE2E2
 }
 .main-wrapper .form-hint i { font-size: 10px; }
 
-/* ============================================================
-   💰 AMOUNT INPUT
-   ============================================================ */
 .main-wrapper .amount-input-wrapper { position: relative; }
 .main-wrapper .amount-input-wrapper .currency-prefix {
     position: absolute;
@@ -687,9 +584,7 @@ html.dark-mode .main-wrapper .amount-input-wrapper .form-control {
     border-color: #DC2626;
     box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
 }
-html.dark-mode .main-wrapper .amount-input-wrapper .form-control:focus {
-    background: #2a1515;
-}
+html.dark-mode .main-wrapper .amount-input-wrapper .form-control:focus { background: #2a1515; }
 .main-wrapper .amount-helper {
     display: flex;
     justify-content: space-between;
@@ -717,9 +612,7 @@ html.dark-mode .main-wrapper .amount-in-words { color: #FCA5A5; }
     border: 1px solid var(--border-color);
 }
 
-/* ============================================================
-   🔥 SOURCE SELECTOR (Capital vs Profit)
-   ============================================================ */
+/* SOURCE SELECTOR */
 .main-wrapper .source-selector {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -757,13 +650,17 @@ html.dark-mode .main-wrapper .amount-in-words { color: #FCA5A5; }
 html.dark-mode .main-wrapper .source-option.selected {
     background: linear-gradient(135deg, #450A0A 0%, #7F1D1D 100%);
 }
+.main-wrapper .source-option.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 .main-wrapper .source-icon {
     width: 44px; height: 44px;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
     font-size: 20px;
     flex-shrink: 0;
-    transition: all 0.25s ease;
 }
 .main-wrapper .source-option[data-source="capital"] .source-icon {
     background: #DBEAFE;
@@ -796,9 +693,7 @@ html.dark-mode .main-wrapper .source-option[data-source="profit"] .source-icon {
     opacity: 0;
     transition: opacity 0.2s ease;
 }
-.main-wrapper .source-option.selected .source-title .check-icon {
-    opacity: 1;
-}
+.main-wrapper .source-option.selected .source-title .check-icon { opacity: 1; }
 .main-wrapper .source-desc {
     font-size: 11px;
     color: var(--text-muted);
@@ -824,39 +719,9 @@ html.dark-mode .main-wrapper .source-option[data-source="profit"] .source-icon {
     color: #15803D;
     border: 1px solid #86EFAC;
 }
-html.dark-mode .main-wrapper .source-balance.capital {
-    background: #1E3A5F; color: #60A5FA;
-}
-html.dark-mode .main-wrapper .source-balance.profit {
-    background: #14532D; color: #4ADE80;
-}
+html.dark-mode .main-wrapper .source-balance.capital { background: #1E3A5F; color: #60A5FA; }
+html.dark-mode .main-wrapper .source-balance.profit { background: #14532D; color: #4ADE80; }
 
-/* BALANCE INFO BOX */
-.main-wrapper .balance-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 16px;
-    background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
-    border: 1.5px solid #93C5FD;
-    border-radius: 10px;
-    margin-top: 8px;
-    font-size: 12px;
-    font-weight: 700;
-    color: #1D4ED8;
-}
-html.dark-mode .main-wrapper .balance-info {
-    background: linear-gradient(135deg, #1E3A5F 0%, #1e293b 100%);
-    border-color: #3B82F6;
-    color: #60A5FA;
-}
-.main-wrapper .balance-info i { font-size: 16px; }
-.main-wrapper .balance-info strong {
-    font-family: 'Courier New', monospace;
-    font-size: 14px;
-}
-
-/* WARNING BOX */
 .main-wrapper .warning-box {
     display: flex;
     align-items: flex-start;
@@ -883,7 +748,6 @@ html.dark-mode .main-wrapper .warning-box {
     margin-top: 1px;
 }
 
-/* FORM ACTIONS */
 .main-wrapper .form-actions {
     display: flex;
     gap: 12px;
@@ -944,7 +808,6 @@ html.dark-mode .main-wrapper .warning-box {
     border-color: var(--text-muted);
 }
 
-/* ADMIN BADGE */
 .main-wrapper .admin-badge {
     display: inline-flex;
     align-items: center;
@@ -961,7 +824,6 @@ html.dark-mode .main-wrapper .warning-box {
 }
 .main-wrapper .admin-badge i { color: #FCD34D; font-size: 12px; }
 
-/* RESPONSIVE */
 @media (max-width: 768px) {
     .main-wrapper .main-content { padding: 12px !important; }
     .main-wrapper .branch-indicator { flex-direction: column; align-items: flex-start; }
@@ -973,10 +835,7 @@ html.dark-mode .main-wrapper .warning-box {
     .main-wrapper .source-selector { grid-template-columns: 1fr; }
     .main-wrapper .form-actions { flex-direction: column-reverse; }
     .main-wrapper .form-actions .btn-submit,
-    .main-wrapper .form-actions .btn-cancel {
-        width: 100%;
-        justify-content: center;
-    }
+    .main-wrapper .form-actions .btn-cancel { width: 100%; justify-content: center; }
 }
 </style>
 
@@ -991,7 +850,7 @@ html.dark-mode .main-wrapper .warning-box {
                 </div>
                 <div class="branch-info">
                     <span class="branch-indicator-label">Add Cash Out</span>
-                    <span class="branch-indicator-name"><?php echo htmlspecialchars($user_branch_name); ?></span>
+                    <span class="branch-indicator-name" id="headerBranchName"><?php echo htmlspecialchars($user_branch_name); ?></span>
                 </div>
             </div>
             <div class="branch-indicator-right">
@@ -1022,7 +881,6 @@ html.dark-mode .main-wrapper .warning-box {
             </div>
         </div>
 
-        <!-- ERROR MESSAGE -->
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-triangle"></i>
@@ -1033,10 +891,7 @@ html.dark-mode .main-wrapper .warning-box {
             </div>
         <?php endif; ?>
 
-        <!-- FORM CONTAINER -->
         <div class="form-container">
-            
-            <!-- FORM HEADER -->
             <div class="form-header">
                 <div class="form-header-content">
                     <div class="form-header-icon">
@@ -1053,10 +908,7 @@ html.dark-mode .main-wrapper .warning-box {
                 </div>
             </div>
 
-            <!-- FORM BODY -->
             <div class="form-body">
-
-                <!-- FORM -->
                 <form method="POST" action="" id="cashoutForm">
                     
                     <div class="form-grid">
@@ -1083,10 +935,13 @@ html.dark-mode .main-wrapper .warning-box {
                             </label>
                             <select name="branch_id" id="branchSelect" class="form-control" required>
                                 <option value="">-- Select Branch --</option>
-                                <?php foreach ($branches as $b): ?>
+                                <?php foreach ($branches as $b): 
+                                    $bal = $branch_balances[$b['id']] ?? ['capital' => 0, 'profit' => 0];
+                                ?>
                                     <option value="<?php echo $b['id']; ?>" 
-                                        data-cash="<?php echo $branches && isset($branch_balances[$b['id']]) ? $branch_balances[$b['id']]['cash'] : 0; ?>"
-                                        data-profit="<?php echo $branches && isset($branch_balances[$b['id']]) ? $branch_balances[$b['id']]['profit'] : 0; ?>"
+                                        data-capital="<?php echo $bal['capital']; ?>"
+                                        data-profit="<?php echo $bal['profit']; ?>"
+                                        data-branch-name="<?php echo htmlspecialchars($b['branch_name']); ?>"
                                         <?php echo (isset($_POST['branch_id']) && $_POST['branch_id'] == $b['id']) ? 'selected' : ''; ?>
                                         <?php echo ($user_branch_id == $b['id'] && !isset($_POST['branch_id'])) ? 'selected' : ''; ?>>
                                         <?php echo htmlspecialchars($b['branch_name']); ?>
@@ -1098,7 +953,7 @@ html.dark-mode .main-wrapper .warning-box {
                             </select>
                         </div>
                         
-                        <!-- 🔥 SOURCE SELECTOR (Full Width) -->
+                        <!-- SOURCE SELECTOR -->
                         <div class="form-group form-grid-full">
                             <label class="form-label">
                                 <i class="fas fa-hand-holding-usd"></i>
@@ -1108,10 +963,9 @@ html.dark-mode .main-wrapper .warning-box {
                             <div class="source-selector" id="sourceSelector">
                                 
                                 <!-- Capital Option -->
-                                <label class="source-option <?php echo (isset($_POST['source']) && $_POST['source'] == 'capital') || !isset($_POST['source']) ? 'selected' : ''; ?>" 
-                                       data-source="capital">
+                                <label class="source-option" data-source="capital" id="capitalOption">
                                     <input type="radio" name="source" value="capital" 
-                                           <?php echo (isset($_POST['source']) && $_POST['source'] == 'capital') || !isset($_POST['source']) ? 'checked' : ''; ?>>
+                                           <?php echo (isset($_POST['source']) && $_POST['source'] == 'capital') ? 'checked' : ''; ?>>
                                     <div class="source-icon">
                                         <i class="fas fa-building"></i>
                                     </div>
@@ -1120,18 +974,17 @@ html.dark-mode .main-wrapper .warning-box {
                                             <i class="fas fa-check-circle check-icon"></i>
                                             Capital
                                         </span>
-                                        <span class="source-desc">Deduct from Daily Report Cash</span>
-                                        <span class="source-balance capital" id="capitalBalance">
+                                        <span class="source-desc">Deduct from Available Cash</span>
+                                        <span class="source-balance capital">
                                             Available: <span id="capitalAmount">—</span>
                                         </span>
                                     </div>
                                 </label>
                                 
                                 <!-- Profit Option -->
-                                <label class="source-option <?php echo (isset($_POST['source']) && $_POST['source'] == 'profit') ? 'selected' : ''; ?>" 
-                                       data-source="profit">
+                                <label class="source-option" data-source="profit" id="profitOption">
                                     <input type="radio" name="source" value="profit" 
-                                           <?php echo (isset($_POST['source']) && $_POST['source'] == 'profit') ? 'checked' : ''; ?>>
+                                           <?php echo (!isset($_POST['source']) || $_POST['source'] == 'profit') ? 'checked' : ''; ?>>
                                     <div class="source-icon">
                                         <i class="fas fa-chart-line"></i>
                                     </div>
@@ -1141,7 +994,7 @@ html.dark-mode .main-wrapper .warning-box {
                                             Profit
                                         </span>
                                         <span class="source-desc">Deduct from Business Profit</span>
-                                        <span class="source-balance profit" id="profitBalance">
+                                        <span class="source-balance profit">
                                             Available: <span id="profitAmount">—</span>
                                         </span>
                                     </div>
@@ -1151,7 +1004,7 @@ html.dark-mode .main-wrapper .warning-box {
                             
                             <div class="form-hint" style="margin-top: 8px;">
                                 <i class="fas fa-info-circle"></i>
-                                Choose <strong>Capital</strong> to deduct from cash balance, or <strong>Profit</strong> to deduct from profit
+                                Choose <strong>Capital</strong> to deduct from cash balance, or <strong>Profit</strong> to deduct from business profit
                             </div>
                         </div>
                         
@@ -1180,14 +1033,13 @@ html.dark-mode .main-wrapper .warning-box {
                                 </span>
                             </div>
                             
-                            <!-- Balance Warning -->
                             <div class="warning-box" id="balanceWarning" style="display: none;">
                                 <i class="fas fa-exclamation-triangle"></i>
                                 <span id="warningMessage">Insufficient balance for this source.</span>
                             </div>
                         </div>
                         
-                        <!-- Taken By (Optional) -->
+                        <!-- Taken By -->
                         <div class="form-group">
                             <label class="form-label">
                                 <i class="fas fa-user"></i>
@@ -1201,7 +1053,7 @@ html.dark-mode .main-wrapper .warning-box {
                                    maxlength="100">
                         </div>
                         
-                        <!-- Reason (Optional) -->
+                        <!-- Reason -->
                         <div class="form-group">
                             <label class="form-label">
                                 <i class="fas fa-comment-alt"></i>
@@ -1215,7 +1067,7 @@ html.dark-mode .main-wrapper .warning-box {
                                    maxlength="200">
                         </div>
                         
-                        <!-- Description / Notes (Full Width - OPTIONAL) -->
+                        <!-- Notes -->
                         <div class="form-group form-grid-full">
                             <label class="form-label">
                                 <i class="fas fa-align-left"></i>
@@ -1229,7 +1081,6 @@ html.dark-mode .main-wrapper .warning-box {
                         
                     </div>
 
-                    <!-- FORM ACTIONS -->
                     <div class="form-actions">
                         <a href="index.php" class="btn-cancel">
                             <i class="fas fa-times"></i> Cancel
@@ -1240,24 +1091,21 @@ html.dark-mode .main-wrapper .warning-box {
                     </div>
                     
                 </form>
-                
             </div>
         </div>
-        
     </div>
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
 <script>
 // ============================================================
-// 💰 NUMBER TO WORDS (Kiswahili)
+// 💰 NUMBER TO WORDS
 // ============================================================
 function numberToWords(num) {
     if (num === 0) return 'sifuri';
     const ones = ['', 'moja', 'mbili', 'tatu', 'nne', 'tano', 'sita', 'saba', 'nane', 'tisa'];
     const tens = ['', '', 'ishirini', 'thelathini', 'arobaini', 'hamsini', 'sitini', 'sabini', 'themanini', 'tisini'];
     const scales = ['', 'elfu', 'milioni', 'bilioni', 'trilioni'];
-    
     function convertHundreds(n) {
         let result = '';
         if (n >= 100) { result += ones[Math.floor(n / 100)] + ' mia '; n %= 100; }
@@ -1299,38 +1147,77 @@ document.addEventListener('DOMContentLoaded', function() {
     const amountInput = document.getElementById('amountInput');
     const amountInWords = document.getElementById('amountInWords');
     const branchSelect = document.getElementById('branchSelect');
-    const sourceSelector = document.getElementById('sourceSelector');
     const sourceOptions = document.querySelectorAll('.source-option');
+    const capitalOption = document.getElementById('capitalOption');
+    const profitOption = document.getElementById('profitOption');
     const capitalAmount = document.getElementById('capitalAmount');
     const profitAmount = document.getElementById('profitAmount');
     const balanceWarning = document.getElementById('balanceWarning');
     const warningMessage = document.getElementById('warningMessage');
     const submitBtn = document.getElementById('submitBtn');
+    const headerBranchName = document.getElementById('headerBranchName');
     
-    let currentCash = 0;
+    let currentCapital = 0;
     let currentProfit = 0;
-    let currentSource = 'capital';
+    let currentSource = 'profit';
     
     // ============================================================
-    // UPDATE BALANCES
+    // UPDATE BALANCES + AUTO-SELECT SOURCE
     // ============================================================
     function updateBalances() {
         const selectedOption = branchSelect.options[branchSelect.selectedIndex];
-        currentCash = parseFloat(selectedOption.dataset.cash || 0);
-        currentProfit = parseFloat(selectedOption.dataset.profit || 0);
+        if (!selectedOption || !selectedOption.value) return;
         
-        capitalAmount.textContent = formatNumberWithCommas(Math.floor(currentCash).toString()) + ' TSh';
+        currentCapital = parseFloat(selectedOption.dataset.capital || 0);
+        currentProfit = parseFloat(selectedOption.dataset.profit || 0);
+        const branchName = selectedOption.dataset.branchName || '';
+        
+        // Update header branch name
+        if (headerBranchName && branchName) {
+            headerBranchName.textContent = branchName;
+        }
+        
+        // Update balance displays
+        capitalAmount.textContent = formatNumberWithCommas(Math.floor(currentCapital).toString()) + ' TSh';
         profitAmount.textContent = formatNumberWithCommas(Math.floor(currentProfit).toString()) + ' TSh';
         
+        // ✅ AUTO-SELECT: Kama Capital ina cash, ichague; vinginevyo chagua Profit
+        autoSelectSource();
+        
         validateAmount();
+    }
+    
+    function autoSelectSource() {
+        // ✅ Kama branch ina cash → chagua Capital
+        // ✅ Kama haina cash lakini ina profit → chagua Profit
+        // ✅ Kama haina vyote → chagua Capital (default)
+        
+        let newSource = 'capital'; // default
+        
+        if (currentCapital > 0) {
+            newSource = 'capital';
+        } else if (currentProfit > 0) {
+            newSource = 'profit';
+        } else {
+            newSource = 'capital';
+        }
+        
+        // Set selection
+        sourceOptions.forEach(function(o) { o.classList.remove('selected'); });
+        const targetOption = newSource === 'capital' ? capitalOption : profitOption;
+        if (targetOption) {
+            targetOption.classList.add('selected');
+            targetOption.querySelector('input[type="radio"]').checked = true;
+        }
+        currentSource = newSource;
     }
     
     function validateAmount() {
         const rawValue = parseFormattedNumber(amountInput.value);
         const amount = parseFloat(rawValue) || 0;
         
-        let available = currentSource === 'capital' ? currentCash : currentProfit;
-        let sourceName = currentSource === 'capital' ? 'Cash (Capital)' : 'Profit';
+        let available = currentSource === 'capital' ? currentCapital : currentProfit;
+        let sourceName = currentSource === 'capital' ? 'Capital' : 'Profit';
         
         if (amount > 0 && amount > available) {
             warningMessage.innerHTML = 'Insufficient <strong>' + sourceName + '</strong>! Available: <strong>' + 
@@ -1351,7 +1238,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ============================================================
-    // SOURCE SELECTOR
+    // SOURCE SELECTOR (Manual click)
     // ============================================================
     sourceOptions.forEach(function(opt) {
         opt.addEventListener('click', function() {

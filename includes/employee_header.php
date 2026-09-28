@@ -8,6 +8,7 @@
 // ✅ No padding-top (handled by main-wrapper)
 // ✅ No margin-left (handled by main-wrapper)
 // ✅ Touches sidebar edge
+// ✅ FIXED: No --sidebar-width default (prevents topbar dancing)
 // ================================================================
 
 $page_title = $page_title ?? 'Dashboard';
@@ -53,6 +54,9 @@ $user_id = $_SESSION['user_id'] ?? 0;
         
         /* ============================================================
            LIGHT MODE (Default)
+           ⭐ NOTE: --sidebar-width and --topbar-height are NOT set here
+           They are set by employee_topbar.php / employee_sidebar.php
+           This prevents "dancing" during load
            ============================================================ */
         html {
             --bg-body: #f3f4f6;
@@ -66,8 +70,6 @@ $user_id = $_SESSION['user_id'] ?? 0;
             --border-color: #e5e7eb;
             --shadow-color: rgba(0,0,0,0.06);
             --shadow-hover: rgba(0,0,0,0.12);
-            --sidebar-width: 220px;
-            --topbar-height: 70px;
         }
         
         /* ============================================================
@@ -99,7 +101,7 @@ $user_id = $_SESSION['user_id'] ?? 0;
             width: 100%;
             max-width: 100vw;
             overflow-x: hidden;
-            transition: background 0.3s ease, color 0.3s ease;
+            /* ⭐ NO transition on body to prevent flicker */
         }
         
         /* ============================================================

@@ -7,6 +7,7 @@
 // ✅ Mobile toggle works standalone
 // ✅ Bigger text for readability
 // ✅ Cash Out menu REMOVED from Financial section
+// ✅ FIXED: Order = Morning Report → Daily Report → Evening Stock
 // ================================================================
 
 $full_name = $_SESSION['full_name'] ?? 'Employee';
@@ -480,6 +481,7 @@ function isNavActive($section, $current_section) {
     <!-- Navigation -->
     <nav class="sidebar-nav">
 
+        <!-- Main Section -->
         <div class="nav-section">
             <div class="section-title">Main</div>
             <a href="../dashboard/employee.php"
@@ -489,28 +491,36 @@ function isNavActive($section, $current_section) {
             </a>
         </div>
 
+        <!-- ============================================================
+             ✅ REPORTS SECTION - FIXED ORDER
+             Morning Report → Daily Report → Evening Stock
+             ============================================================ -->
         <div class="nav-section">
             <div class="section-title">Reports</div>
 
+            <!-- 1. MORNING REPORT -->
             <a href="../morning_report/index_employee.php"
                class="nav-item <?php echo isNavActive('morning_report', $current_section); ?>">
                 <i class="fas fa-sun"></i>
                 <span>Morning Report</span>
             </a>
 
-            <a href="../evening_stock/index_employee.php"
-               class="nav-item <?php echo isNavActive('evening_stock', $current_section); ?>">
-                <i class="fas fa-moon"></i>
-                <span>Evening Stock</span>
-            </a>
-
+            <!-- 2. DAILY REPORT -->
             <a href="../daily_report/index_employee.php"
                class="nav-item <?php echo isNavActive('daily_report', $current_section); ?>">
                 <i class="fas fa-file-alt"></i>
                 <span>Daily Report</span>
             </a>
+
+            <!-- 3. EVENING STOCK -->
+            <a href="../evening_stock/index_employee.php"
+               class="nav-item <?php echo isNavActive('evening_stock', $current_section); ?>">
+                <i class="fas fa-moon"></i>
+                <span>Evening Stock</span>
+            </a>
         </div>
 
+        <!-- Financial Section -->
         <div class="nav-section">
             <div class="section-title">Financial</div>
 
@@ -534,6 +544,7 @@ function isNavActive($section, $current_section) {
             </a>
         </div>
 
+        <!-- Account Section -->
         <div class="nav-section">
             <div class="section-title">Account</div>
             <a href="../profile/index_employee.php"

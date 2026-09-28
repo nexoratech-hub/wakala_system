@@ -3,10 +3,8 @@
 // FILE: includes/employee_topbar.php
 // WAKALA SYSTEM - EMPLOYEE TOPBAR
 // ✅ HEIGHT 70px, TOPBAR TOUCHES SIDEBAR EDGE
-// ✅ Search button (no ⌘K shortcut)
-// ✅ Avatar-only profile (clickable → profile page)
-// ✅ FIXED: Dark mode applies to whole page (html.dark-mode)
-// ✅ FIXED: Topbar dynamically positions at sidebar edge (JS-based)
+// ✅ FIXED: Topbar no longer "dances" - runs positionTopbar once
+// ✅ FIXED: Removed MutationObserver (was causing infinite loops)
 // ================================================================
 
 $full_name = $_SESSION['full_name'] ?? 'Employee';
@@ -69,11 +67,11 @@ if ($user_id > 0) {
 <style>
 /* ============================================================
    EMPLOYEE TOPBAR - HEIGHT 70px
-   ⭐ Position DYNAMICALLY set via JavaScript based on sidebar width
+   ⭐ CSS-based positioning (no JS animation)
    ============================================================ */
 :root {
     --topbar-height: 70px;
-    --sidebar-width: 220px;  /* Default - will be overridden by JS */
+    --sidebar-width: 220px;
     
     /* TOPBAR THEME VARIABLES - LIGHT */
     --topbar-bg: #ffffff;
@@ -101,15 +99,14 @@ html.dark-mode {
 }
 
 /* ============================================================
-   TOPBAR - Position set dynamically
-   ⭐ NO left property - JavaScript will set it
+   TOPBAR - Positioned via CSS (JS only adjusts on resize)
+   ⭐ NO transitions on left/width to prevent "dancing"
    ============================================================ */
 .employee-topbar {
     position: fixed;
     top: 0;
-    /* left: SET BY JS */
+    left: var(--sidebar-width);              /* ⭐ CSS-based */
     right: 0;
-    /* width: SET BY JS */
     z-index: 1000;
     background: var(--topbar-bg);
     padding: 10px 24px;
@@ -117,12 +114,14 @@ html.dark-mode {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--topbar-border);
-    border-left: 1px solid var(--topbar-border);  /* ⭐ Separator line from sidebar */
+    border-left: 1px solid var(--topbar-border);
     min-height: var(--topbar-height);
     height: var(--topbar-height);
+    /* ⭐ NO transition on left/width - prevents dancing */
     transition: background 0.3s ease, border-color 0.3s ease;
     box-shadow: 0 2px 8px var(--topbar-shadow);
     box-sizing: border-box;
+    width: auto;                             /* ⭐ Let right:0 handle width */
 }
 
 /* ============================================================
@@ -207,7 +206,7 @@ html.dark-mode {
 }
 
 /* ============================================================
-   SEARCH WRAPPER - With Search Button
+   SEARCH WRAPPER
    ============================================================ */
 .employee-topbar .search-wrapper {
     position: relative;
@@ -399,10 +398,11 @@ html.dark-mode {
     }
 }
 
+/* ⭐ MOBILE: Override CSS variable for left position */
 @media (max-width: 768px) {
     .employee-topbar {
-        left: 0 !important;
-        width: 100% !important;
+        left: 0 !important;                   /* ⭐ Force left:0 on mobile */
+        right: 0;
         border-left: none;
         padding: 8px 14px;
         min-height: 62px;
@@ -509,6 +509,7 @@ html.dark-mode {
                     'Commissions' => 'fa-hand-holding-usd',
                     'Expenses' => 'fa-receipt',
                     'Cash Out' => 'fa-money-bill-wave',
+                    'Transfer' => 'fa-exchange-alt',
                     'Profile' => 'fa-user'
                 ];
                 echo $icons[$page_title] ?? 'fa-user-circle';
@@ -558,87 +559,77 @@ html.dark-mode {
 
 <script>
 (function() {
+    'use strict';
+    
     // ============================================================
-    // ⭐ DYNAMIC TOPBAR POSITIONING
-    // Reads sidebar width and positions topbar at its RIGHT edge
+    // ⭐ TOPBAR POSITIONING - SIMPLIFIED & PERFORMANT
+    // Uses CSS variables - JS only updates them when sidebar width changes
+    // NO MutationObserver (was causing infinite loops)
+    // NO setTimeout spam
     // ============================================================
-    function positionTopbar() {
-        var topbar = document.getElementById('employeeTopbar');
-        if (!topbar) return;
+    
+    var lastSidebarWidth = -1;
+    var topbar = document.getElementById('employeeTopbar');
+    
+    function detectSidebarWidth() {
+        // Mobile always 0
+        if (window.innerWidth <= 768) return 0;
         
-        // Try to find sidebar
-        var sidebar = document.querySelector('.employee-sidebar, .sidebar, aside.sidebar, #employeeSidebar, #adminSidebar, .admin-sidebar');
-        
-        var sidebarWidth = 220; // Default fallback
-        
-        if (sidebar) {
-            var rect = sidebar.getBoundingClientRect();
-            sidebarWidth = rect.width || sidebarWidth;
-            
-            // Also try computed style
-            var computed = window.getComputedStyle(sidebar);
-            if (computed.width && computed.width !== 'auto') {
-                var cssWidth = parseFloat(computed.width);
-                if (cssWidth > 0) {
-                    sidebarWidth = cssWidth;
-                }
-            }
-        } else {
-            // Try reading from CSS variable
+        var sidebar = document.querySelector('.employee-sidebar, #employeeSidebar, .sidebar, aside.sidebar');
+        if (!sidebar) {
+            // Fallback to CSS variable
             var cssVar = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width');
-            if (cssVar) {
-                var parsed = parseFloat(cssVar);
-                if (parsed > 0) sidebarWidth = parsed;
-            }
+            var parsed = parseFloat(cssVar);
+            return (parsed > 0) ? parsed : 220;
         }
         
-        // Handle mobile (sidebar hidden)
-        var isMobile = window.innerWidth <= 768;
+        var rect = sidebar.getBoundingClientRect();
+        var width = rect.width;
         
-        if (isMobile) {
-            topbar.style.left = '0px';
-            topbar.style.width = '100%';
-            topbar.style.borderLeft = 'none';
+        // If sidebar is hidden/transformed off-screen
+        if (width <= 0) {
+            var cssVar = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width');
+            var parsed = parseFloat(cssVar);
+            return (parsed > 0) ? parsed : 220;
+        }
+        
+        return width;
+    }
+    
+    function updateTopbarPosition() {
+        if (!topbar) return;
+        
+        var width = detectSidebarWidth();
+        
+        // ⭐ Only update if changed (prevents dancing)
+        if (width === lastSidebarWidth) return;
+        lastSidebarWidth = width;
+        
+        if (width <= 0) {
+            // Mobile
+            document.documentElement.style.setProperty('--sidebar-width', '0px');
         } else {
-            topbar.style.left = sidebarWidth + 'px';
-            topbar.style.width = 'calc(100% - ' + sidebarWidth + 'px)';
-            topbar.style.borderLeft = '1px solid var(--topbar-border)';
+            document.documentElement.style.setProperty('--sidebar-width', width + 'px');
         }
     }
     
-    // Run immediately
-    positionTopbar();
+    // Run ONCE on load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', updateTopbarPosition);
+    } else {
+        updateTopbarPosition();
+    }
     
-    // Re-run on resize
+    // Update on resize (debounced)
     var resizeTimer;
     window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(positionTopbar, 50);
+        resizeTimer = setTimeout(updateTopbarPosition, 150);
     });
     
-    // Re-run when DOM is ready
-    document.addEventListener('DOMContentLoaded', positionTopbar);
-    
-    // ⭐ Also run after sidebar loads/mutates (it might load after topbar)
-    setTimeout(positionTopbar, 100);
-    setTimeout(positionTopbar, 300);
-    setTimeout(positionTopbar, 500);
-    
-    // Use MutationObserver to detect sidebar appearing
-    if (typeof MutationObserver !== 'undefined') {
-        var observer = new MutationObserver(function() {
-            positionTopbar();
-        });
-        observer.observe(document.body, { 
-            childList: true, 
-            subtree: true 
-        });
-        
-        // Stop observing after 2 seconds (perf optimization)
-        setTimeout(function() {
-            observer.disconnect();
-        }, 2000);
-    }
+    // Update once after 300ms in case sidebar loads late
+    // (Only once - not repeatedly)
+    setTimeout(updateTopbarPosition, 300);
     
     // ============================================================
     // DARK MODE
@@ -686,10 +677,11 @@ html.dark-mode {
         // ============================================================
         // LIVE DATE/TIME
         // ============================================================
+        var timeEl = document.getElementById('liveTime');
+        var dateEl = document.getElementById('liveDate');
+        
         function updateDateTime() {
             var now = new Date();
-            var timeEl = document.getElementById('liveTime');
-            var dateEl = document.getElementById('liveDate');
             
             if (timeEl) {
                 timeEl.textContent = now.toLocaleTimeString('en-US', {
