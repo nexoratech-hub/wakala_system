@@ -2,12 +2,9 @@
 // ================================================================
 // FILE: includes/employee_sidebar.php
 // WAKALA SYSTEM - EMPLOYEE SIDEBAR
-// ✅ Starts FROM TOP (full height)
-// ✅ NARROWER (220px)
-// ✅ Mobile toggle works standalone
-// ✅ Bigger text for readability
-// ✅ Cash Out menu REMOVED from Financial section
-// ✅ FIXED: Order = Morning Report → Daily Report → Evening Stock
+// ✅ Toggle button inaonekana KILA WAKATI kwenye simu
+// ✅ Inabadilika kuwa X ukifungua
+// ✅ Inabaki juu ya sidebar (z-index juu)
 // ================================================================
 
 $full_name = $_SESSION['full_name'] ?? 'Employee';
@@ -52,13 +49,13 @@ function isNavActive($section, $current_section) {
    ============================================================ */
 .employee-sidebar {
     position: fixed;
-    top: 0;                                      /* ⭐ Starts FROM TOP */
+    top: 0;
     left: 0;
-    width: 220px;                                /* ⭐ Narrow width */
-    height: 100vh;                               /* ⭐ Full height */
+    width: 220px;
+    height: 100vh;
     background: #bb0404;
     color: #ffffff;
-    z-index: 997;                                /* Header (1000+) sits above on desktop */
+    z-index: 997;
     transition: transform 0.3s ease;
     overflow-y: auto;
     overflow-x: hidden;
@@ -292,36 +289,43 @@ function isNavActive($section, $current_section) {
 }
 
 /* ============================================================
-   MOBILE FLOATING TOGGLE
+   ✅ MOBILE FLOATING TOGGLE - ALWAYS VISIBLE ON MOBILE
    ============================================================ */
 .mobile-sidebar-toggle {
     display: none;
     position: fixed;
     top: 14px;
     left: 14px;
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
     border-radius: 12px;
     background: linear-gradient(135deg, #bb0404 0%, #8a0303 100%);
     color: #ffffff;
-    border: none;
+    border: 2px solid rgba(255, 255, 255, 0.25);
     cursor: pointer;
-    z-index: 1000;
+    z-index: 10001;              /* ⭐ JUZI KULIKO SIDEBAR */
     align-items: center;
     justify-content: center;
-    font-size: 17px;
-    box-shadow: 0 4px 16px rgba(187, 4, 4, 0.4);
-    transition: all 0.2s ease;
+    font-size: 18px;
+    box-shadow: 0 4px 18px rgba(187, 4, 4, 0.5);
+    transition: all 0.25s ease;
+    pointer-events: auto;
 }
 
 .mobile-sidebar-toggle:hover,
 .mobile-sidebar-toggle:active {
-    transform: scale(1.05);
-    box-shadow: 0 6px 20px rgba(187, 4, 4, 0.55);
+    transform: scale(1.08);
+    box-shadow: 0 6px 24px rgba(187, 4, 4, 0.65);
+}
+
+.mobile-sidebar-toggle:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(187, 4, 4, 0.3), 0 4px 18px rgba(187, 4, 4, 0.5);
 }
 
 .mobile-sidebar-toggle i {
-    font-size: 17px;
+    font-size: 18px;
+    line-height: 1;
 }
 
 /* ============================================================
@@ -335,7 +339,7 @@ function isNavActive($section, $current_section) {
     width: 100%;
     height: 100%;
     background: rgba(0,0,0,0.55);
-    z-index: 996;
+    z-index: 998;                    /* ⭐ Chini ya sidebar */
     opacity: 0;
     transition: opacity 0.3s ease;
     backdrop-filter: blur(2px);
@@ -356,7 +360,7 @@ function isNavActive($section, $current_section) {
         height: 100vh;
         width: 260px;
         box-shadow: none;
-        z-index: 999;
+        z-index: 9999;              /* ⭐ Chini ya toggle button */
     }
 
     .employee-sidebar.mobile-open {
@@ -364,8 +368,9 @@ function isNavActive($section, $current_section) {
         box-shadow: 4px 0 30px rgba(0,0,0,0.35);
     }
 
+    /* ✅ Toggle button inaonekana kwenye simu - ALWAYS */
     .mobile-sidebar-toggle {
-        display: flex;
+        display: flex !important;
     }
 
     .employee-sidebar .sidebar-nav .nav-item {
@@ -429,15 +434,20 @@ function isNavActive($section, $current_section) {
     }
 
     .mobile-sidebar-toggle {
-        width: 42px;
-        height: 42px;
+        width: 46px;
+        height: 46px;
         top: 12px;
         left: 12px;
+        font-size: 17px;
+    }
+
+    .mobile-sidebar-toggle i {
+        font-size: 17px;
     }
 }
 
 /* ============================================================
-   DESKTOP: hide toggle + overlay
+   ✅ DESKTOP: hide toggle + overlay
    ============================================================ */
 @media (min-width: 769px) {
     .mobile-sidebar-toggle {
@@ -450,8 +460,8 @@ function isNavActive($section, $current_section) {
 }
 </style>
 
-<!-- Floating toggle (mobile only) -->
-<button type="button" class="mobile-sidebar-toggle" id="employeeSidebarToggle" aria-label="Open menu">
+<!-- ✅ Floating toggle (mobile only) - ALWAYS VISIBLE -->
+<button type="button" class="mobile-sidebar-toggle" id="employeeSidebarToggle" aria-label="Toggle menu">
     <i class="fas fa-bars"></i>
 </button>
 
@@ -481,7 +491,6 @@ function isNavActive($section, $current_section) {
     <!-- Navigation -->
     <nav class="sidebar-nav">
 
-        <!-- Main Section -->
         <div class="nav-section">
             <div class="section-title">Main</div>
             <a href="../dashboard/employee.php"
@@ -491,28 +500,21 @@ function isNavActive($section, $current_section) {
             </a>
         </div>
 
-        <!-- ============================================================
-             ✅ REPORTS SECTION - FIXED ORDER
-             Morning Report → Daily Report → Evening Stock
-             ============================================================ -->
         <div class="nav-section">
             <div class="section-title">Reports</div>
 
-            <!-- 1. MORNING REPORT -->
             <a href="../morning_report/index_employee.php"
                class="nav-item <?php echo isNavActive('morning_report', $current_section); ?>">
                 <i class="fas fa-sun"></i>
                 <span>Morning Report</span>
             </a>
 
-            <!-- 2. DAILY REPORT -->
             <a href="../daily_report/index_employee.php"
                class="nav-item <?php echo isNavActive('daily_report', $current_section); ?>">
                 <i class="fas fa-file-alt"></i>
                 <span>Daily Report</span>
             </a>
 
-            <!-- 3. EVENING STOCK -->
             <a href="../evening_stock/index_employee.php"
                class="nav-item <?php echo isNavActive('evening_stock', $current_section); ?>">
                 <i class="fas fa-moon"></i>
@@ -520,7 +522,6 @@ function isNavActive($section, $current_section) {
             </a>
         </div>
 
-        <!-- Financial Section -->
         <div class="nav-section">
             <div class="section-title">Financial</div>
 
@@ -544,7 +545,6 @@ function isNavActive($section, $current_section) {
             </a>
         </div>
 
-        <!-- Account Section -->
         <div class="nav-section">
             <div class="section-title">Account</div>
             <a href="../profile/index_employee.php"
@@ -568,76 +568,113 @@ function isNavActive($section, $current_section) {
 
 <script>
 // ============================================================
-// SIDEBAR TOGGLE
+// ✅ SIDEBAR TOGGLE - INAFANYA KAZI KIKAMILIFU
 // ============================================================
 (function() {
-    document.addEventListener('DOMContentLoaded', function() {
+    'use strict';
+    
+    function initSidebar() {
         var toggleBtn = document.getElementById('employeeSidebarToggle');
         var sidebar   = document.getElementById('employeeSidebar');
         var overlay   = document.getElementById('employeeSidebarOverlay');
 
-        if (!toggleBtn || !sidebar || !overlay) return;
+        if (!toggleBtn || !sidebar || !overlay) {
+            console.warn('Sidebar elements not found');
+            return;
+        }
+
+        var isOpen = false;
 
         function openSidebar() {
+            isOpen = true;
             sidebar.classList.add('mobile-open');
             overlay.classList.add('active');
             document.body.style.overflow = 'hidden';
+            // ✅ Badilisha icon kuwa X
             toggleBtn.innerHTML = '<i class="fas fa-times"></i>';
+            toggleBtn.setAttribute('aria-label', 'Close menu');
         }
 
         function closeSidebar() {
+            isOpen = false;
             sidebar.classList.remove('mobile-open');
             overlay.classList.remove('active');
             document.body.style.overflow = '';
+            // ✅ Rudisha icon kuwa bars
             toggleBtn.innerHTML = '<i class="fas fa-bars"></i>';
+            toggleBtn.setAttribute('aria-label', 'Open menu');
         }
 
+        // ✅ Toggle button click
         toggleBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            if (sidebar.classList.contains('mobile-open')) {
+            if (isOpen) {
                 closeSidebar();
             } else {
                 openSidebar();
             }
         });
 
+        // ✅ Overlay click → close
         overlay.addEventListener('click', closeSidebar);
 
+        // ✅ Escape key → close
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && sidebar.classList.contains('mobile-open')) {
+            if (e.key === 'Escape' && isOpen) {
                 closeSidebar();
             }
         });
 
-        // Swipe gestures
+        // ✅ Swipe gestures
         var touchStartX = 0;
         var touchStartY = 0;
+        var touchStartTime = 0;
 
         document.addEventListener('touchstart', function(e) {
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
         }, { passive: true });
 
         document.addEventListener('touchend', function(e) {
             var deltaX = e.changedTouches[0].clientX - touchStartX;
             var deltaY = e.changedTouches[0].clientY - touchStartY;
+            var deltaTime = Date.now() - touchStartTime;
 
-            if (touchStartX < 40 && deltaX > 60 && Math.abs(deltaY) < 80) {
+            // Swipe right from left edge → open
+            if (touchStartX < 40 && deltaX > 60 && Math.abs(deltaY) < 80 && deltaTime < 500) {
                 openSidebar();
             }
 
-            if (sidebar.classList.contains('mobile-open') &&
-                deltaX < -60 && Math.abs(deltaY) < 80) {
+            // Swipe left → close
+            if (isOpen && deltaX < -60 && Math.abs(deltaY) < 80 && deltaTime < 500) {
                 closeSidebar();
             }
         }, { passive: true });
 
+        // ✅ Resize → close sidebar kama inafunguliwa na tunarudi desktop
         window.addEventListener('resize', function() {
-            if (window.innerWidth > 768 && sidebar.classList.contains('mobile-open')) {
+            if (window.innerWidth > 768 && isOpen) {
                 closeSidebar();
             }
         });
-    });
+
+        // ✅ Close sidebar kama link inabofya
+        sidebar.querySelectorAll('.nav-item').forEach(function(link) {
+            link.addEventListener('click', function() {
+                if (window.innerWidth <= 768) {
+                    closeSidebar();
+                }
+            });
+        });
+    }
+
+    // ✅ Run on DOM ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initSidebar);
+    } else {
+        initSidebar();
+    }
 })();
 </script>

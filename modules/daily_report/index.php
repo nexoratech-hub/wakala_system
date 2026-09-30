@@ -6,7 +6,9 @@
 // ✅ FIXED: Withdrawal → Cash inapungua, Float inaongezeka
 // ✅ FIXED: Date-aware summary
 // ✅ FIXED: All Branches inahesabu jumla
-// ✅ Balance preview: Float juu, Cash chini
+// ✅ FIXED: Balance preview: Float juu, Cash chini
+// ✅ NEW: Reset Balance Modal (Float/Cash/Both) — bila reason
+// ✅ NEW: BRANCH CASH ROW — highlighted, yenye View/Edit/Delete
 // ================================================================
 
 require_once '../../config/config.php';
@@ -232,10 +234,8 @@ if (isset($_POST['ajax_action'])) {
                 $current_float = floatval($mr_provider['float_balance'] ?? 0);
             }
             
-            // ============================================================
             // ✅ DEPOSIT    → Cash INAONGEZEKA, Float INAPUNGUA
             // ✅ WITHDRAWAL → Cash INAPUNGUA,   Float INAONGEZEKA
-            // ============================================================
             if ($transaction_type === 'deposit') {
                 $new_cash = $current_cash + $amount;
                 $new_float = $current_float - $amount;
@@ -344,6 +344,163 @@ if (isset($_POST['ajax_action'])) {
                     'formatted_float' => formatCurrency($new_float),
                     'formatted_cash' => formatCurrency($new_cash)
                 ]
+            ]);
+            exit();
+        }
+        
+        // ============================================================
+        // ✅ RESET PROVIDER BALANCE (Float / Cash / Both) — bila reason
+        // ============================================================
+        if ($_POST['ajax_action'] === 'reset_provider_balance') {
+            $provider_row_id = intval($_POST['provider_row_id'] ?? 0);
+            $report_id = intval($_POST['report_id'] ?? 0);
+            $branch_id = intval($_POST['branch_id'] ?? 0);
+            $reset_type = $_POST['reset_type'] ?? 'float';
+            
+            if ($provider_row_id <= 0 || $report_id <= 0) {
+                throw new Exception('Invalid provider or report.');
+            }
+            if (!in_array($reset_type, ['float', 'cash', 'both'])) {
+                throw new Exception('Invalid reset type.');
+            }
+            
+            $db->beginTransaction();
+            
+            $stmt = $db->prepare("SELECT * FROM daily_report_providers WHERE id = ?");
+            $stmt->execute([$provider_row_id]);
+            $provider_row = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$provider_row) {
+                throw new Exception('Provider row not found.');
+            }
+            
+            $old_float = floatval($provider_row['current_float'] ?? 0);
+            $old_cash = floatval($provider_row['current_cash'] ?? 0);
+            
+            $updates = [];
+            $params = [];
+            
+            if ($reset_type === 'float' || $reset_type === 'both') {
+                $updates[] = "current_float = 0";
+                $updates[] = "morning_float = 0";
+            }
+            if ($reset_type === 'cash' || $reset_type === 'both') {
+                $updates[] = "current_cash = 0";
+                $updates[] = "morning_cash = 0";
+            }
+            
+            $updates[] = "updated_at = NOW()";
+            $params[] = $provider_row_id;
+            
+            $sql = "UPDATE daily_report_providers SET " . implode(', ', $updates) . " WHERE id = ?";
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            
+            $stmt = $db->prepare("SELECT current_cash FROM daily_reports WHERE id = ?");
+            $stmt->execute([$report_id]);
+            $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_cash_main = floatval($dr['current_cash'] ?? 0);
+            
+            if ($reset_type === 'cash' || $reset_type === 'both') {
+                $stmt = $db->prepare("UPDATE daily_reports SET current_cash = 0, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$report_id]);
+                $current_cash_main = 0;
+            }
+            
+            syncDailyReportTotals($db, $report_id, $current_cash_main);
+            
+            $reset_labels = [
+                'float' => 'Float',
+                'cash' => 'Cash',
+                'both' => 'Float & Cash'
+            ];
+            logActivity($user_id, 'Reset Provider Balance', 'Daily Report', $provider_row_id, 
+                'Old Float: ' . number_format($old_float) . ', Old Cash: ' . number_format($old_cash),
+                'Reset ' . $reset_labels[$reset_type] . ' for ' . $provider_row['provider_name']);
+            
+            $db->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => $reset_labels[$reset_type] . ' ya ' . $provider_row['provider_name'] . ' imefutwa kikamilifu.',
+                'reset_type' => $reset_type
+            ]);
+            exit();
+        }
+        
+        // ============================================================
+        // ✅ GET REPORT CASH (kwa ajili ya Reset Modal)
+        // ============================================================
+        if ($_POST['ajax_action'] === 'get_report_cash') {
+            $report_id = intval($_POST['report_id'] ?? 0);
+            
+            if ($report_id <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Invalid report ID']);
+                exit();
+            }
+            
+            $stmt = $db->prepare("SELECT current_cash FROM daily_reports WHERE id = ?");
+            $stmt->execute([$report_id]);
+            $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$dr) {
+                echo json_encode(['success' => false, 'message' => 'Report not found']);
+                exit();
+            }
+            
+            $cash = floatval($dr['current_cash'] ?? 0);
+            
+            echo json_encode([
+                'success' => true,
+                'cash' => $cash,
+                'formatted_cash' => formatCurrency($cash)
+            ]);
+            exit();
+        }
+        
+        // ============================================================
+        // ✅ RESET BRANCH CASH
+        // ============================================================
+        if ($_POST['ajax_action'] === 'reset_branch_cash') {
+            $report_id = intval($_POST['report_id'] ?? 0);
+            $branch_id = intval($_POST['branch_id'] ?? 0);
+            
+            if ($report_id <= 0 || $branch_id <= 0) {
+                throw new Exception('Invalid report or branch.');
+            }
+            
+            $db->beginTransaction();
+            
+            $stmt = $db->prepare("SELECT current_cash, report_number FROM daily_reports WHERE id = ?");
+            $stmt->execute([$report_id]);
+            $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$dr) {
+                throw new Exception('Report not found.');
+            }
+            
+            $old_cash = floatval($dr['current_cash'] ?? 0);
+            
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_cash = 0, 
+                    current_capital = current_float,
+                    updated_at = NOW() 
+                WHERE id = ?
+            ");
+            $stmt->execute([$report_id]);
+            
+            syncDailyReportTotals($db, $report_id, 0);
+            
+            logActivity($user_id, 'Reset Branch Cash', 'Daily Report', $report_id, 
+                'Old Cash: ' . number_format($old_cash),
+                'Reset branch cash for ' . $dr['report_number']);
+            
+            $db->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Branch cash ya ' . $dr['report_number'] . ' imefutwa kikamilifu.'
             ]);
             exit();
         }
@@ -914,16 +1071,79 @@ include_once '../../includes/admin_topbar.php';
                                                        class="btn-provider btn-provider-edit" title="Edit Provider">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
-                                                    <a href="delete_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>" 
-                                                       class="btn-provider btn-provider-delete" 
-                                                       onclick="return confirm('Are you sure you want to delete provider \'<?php echo addslashes($p['provider_name']); ?>\'?')"
-                                                       title="Delete">
+                                                    <button type="button" 
+                                                            class="btn-provider btn-provider-delete" 
+                                                            onclick="openResetBalanceModal(
+                                                                <?php echo $p['id']; ?>, 
+                                                                <?php echo $report['id']; ?>, 
+                                                                '<?php echo addslashes($p['provider_name']); ?>', 
+                                                                '<?php echo addslashes($p['provider_code']); ?>', 
+                                                                '<?php echo addslashes($provider_color); ?>', 
+                                                                '<?php echo addslashes($provider_icon); ?>', 
+                                                                <?php echo floatval($p['current_float']); ?>
+                                                            )"
+                                                            title="Reset Float/Cash">
                                                         <i class="fas fa-trash"></i>
-                                                    </a>
+                                                    </button>
                                                 </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
+                                    
+                                    <!-- 🔥 BRANCH CASH ROW -->
+                                    <tr class="branch-cash-row" 
+                                        data-report-id="<?php echo $report['id']; ?>"
+                                        data-branch-id="<?php echo $report['branch_id']; ?>"
+                                        data-search="branch cash <?php echo strtolower($report['branch_name'] ?? ''); ?>">
+                                        <td colspan="4">
+                                            <div class="branch-cash-label">
+                                                <i class="fas fa-money-bill-wave"></i>
+                                                <div>
+                                                    <span class="branch-cash-title">BRANCH CASH</span>
+                                                    <span class="branch-cash-subtitle">Shared across all providers in <?php echo htmlspecialchars($report['branch_name'] ?? 'this branch'); ?></span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="branch-cash-muted">—</span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="branch-cash-muted">—</span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="branch-cash-muted">—</span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="amount-cash-branch" id="branch-cash-<?php echo $report['id']; ?>">
+                                                <i class="fas fa-coins"></i>
+                                                <?php echo formatCurrency($report['current_cash']); ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="provider-actions">
+                                                <a href="view_branch_cash.php?report_id=<?php echo $report['id']; ?>&branch_id=<?php echo $report['branch_id']; ?>" 
+                                                   class="btn-provider btn-provider-view" title="View Cash Transactions">
+                                                    <i class="fas fa-eye"></i>
+                                                </a>
+                                                <a href="edit_branch_cash.php?report_id=<?php echo $report['id']; ?>&branch_id=<?php echo $report['branch_id']; ?>" 
+                                                   class="btn-provider btn-provider-edit" title="Edit Branch Cash">
+                                                    <i class="fas fa-edit"></i>
+                                                </a>
+                                                <button type="button" 
+                                                        class="btn-provider btn-provider-delete" 
+                                                        onclick="openResetCashModal(
+                                                            <?php echo $report['id']; ?>, 
+                                                            <?php echo $report['branch_id']; ?>, 
+                                                            '<?php echo addslashes($report['branch_name']); ?>', 
+                                                            <?php echo floatval($report['current_cash']); ?>
+                                                        )"
+                                                        title="Reset Branch Cash">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    
                                     <tr class="totals-row">
                                         <td colspan="4"><strong>TOTAL (<?php echo count($report['providers']); ?> providers)</strong></td>
                                         <td class="text-right"><strong class="amount-float"><?php echo formatCurrency($sum_float); ?></strong></td>
@@ -979,7 +1199,9 @@ include_once '../../includes/admin_topbar.php';
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
-<!-- TRANSACTION MODAL -->
+<!-- ============================================================
+     TRANSACTION MODAL
+     ============================================================ -->
 <div class="txn-modal-overlay" id="txnModalOverlay" onclick="closeTransactionModal(event)">
     <div class="txn-modal" onclick="event.stopPropagation()">
         
@@ -1031,10 +1253,7 @@ include_once '../../includes/admin_topbar.php';
                     </select>
                 </div>
                 
-                <!-- ✅ BALANCE PREVIEW: FLOAT JUU, CASH CHINI -->
                 <div class="txn-balance-preview" id="txnBalancePreview" style="display:none;">
-                    
-                    <!-- FLOAT ROW -->
                     <div class="txn-balance-row">
                         <div class="txn-balance-row-label">
                             <i class="fas fa-coins"></i>
@@ -1053,7 +1272,6 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     
-                    <!-- CASH ROW -->
                     <div class="txn-balance-row">
                         <div class="txn-balance-row-label">
                             <i class="fas fa-money-bill-wave"></i>
@@ -1071,7 +1289,6 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         </div>
                     </div>
-                    
                 </div>
                 
                 <div class="txn-form-group">
@@ -1102,6 +1319,179 @@ include_once '../../includes/admin_topbar.php';
                     </button>
                     <button type="submit" class="txn-btn txn-btn-submit" id="txnSubmitBtn">
                         <i class="fas fa-save"></i> Save Transaction
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     🔥 RESET PROVIDER BALANCE MODAL — bila reason
+     ============================================================ -->
+<div class="txn-modal-overlay" id="resetModalOverlay" onclick="closeResetModal(event)">
+    <div class="txn-modal" onclick="event.stopPropagation()" style="max-width: 600px;">
+        
+        <div class="txn-modal-header" style="background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);">
+            <div class="txn-modal-header-icon">
+                <i class="fas fa-eraser"></i>
+            </div>
+            <div class="txn-modal-header-content">
+                <h3>Reset Provider Balance</h3>
+                <p>Chagua kitu gani unataka kufuta — Float, Cash, au zote mbili</p>
+            </div>
+            <button type="button" class="txn-modal-close" onclick="closeResetModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <div class="txn-modal-body">
+            
+            <div id="resetModalMessage" class="txn-modal-message" style="display:none;"></div>
+            
+            <div class="txn-provider-info" style="display:flex;">
+                <div class="txn-provider-icon" id="resetProviderIcon"><i class="fas fa-university"></i></div>
+                <div class="txn-provider-details">
+                    <span class="txn-provider-label">Provider</span>
+                    <span class="txn-provider-name" id="resetProviderName">-</span>
+                    <span class="txn-provider-code" id="resetProviderCode">-</span>
+                </div>
+            </div>
+            
+            <form id="resetForm" onsubmit="submitResetBalance(event)">
+                <input type="hidden" name="ajax_action" value="reset_provider_balance">
+                <input type="hidden" name="provider_row_id" id="resetProviderRowId">
+                <input type="hidden" name="report_id" id="resetReportId">
+                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
+                
+                <div class="reset-current-values">
+                    <div class="reset-value-box">
+                        <span class="reset-value-label"><i class="fas fa-coins"></i> Current Float</span>
+                        <span class="reset-value-number" id="resetCurrentFloat">TSh 0</span>
+                    </div>
+                    <div class="reset-value-box">
+                        <span class="reset-value-label"><i class="fas fa-money-bill-wave"></i> Current Cash</span>
+                        <span class="reset-value-number" id="resetCurrentCash">TSh 0</span>
+                    </div>
+                </div>
+                
+                <div class="txn-form-group">
+                    <label>Chagua kitu cha Kufuta <span class="required">*</span></label>
+                    <div class="reset-options">
+                        <label class="reset-option">
+                            <input type="radio" name="reset_type" value="float" checked>
+                            <div class="reset-option-content">
+                                <i class="fas fa-coins"></i>
+                                <div>
+                                    <span class="reset-option-title">Float Only</span>
+                                    <span class="reset-option-desc">Futa float ya provider (cash inabaki)</span>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="reset-option">
+                            <input type="radio" name="reset_type" value="cash">
+                            <div class="reset-option-content">
+                                <i class="fas fa-money-bill-wave"></i>
+                                <div>
+                                    <span class="reset-option-title">Cash Only</span>
+                                    <span class="reset-option-desc">Futa cash ya provider (float inabaki)</span>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="reset-option">
+                            <input type="radio" name="reset_type" value="both">
+                            <div class="reset-option-content">
+                                <i class="fas fa-broom"></i>
+                                <div>
+                                    <span class="reset-option-title">Both Float & Cash</span>
+                                    <span class="reset-option-desc">Futa zote mbili (float + cash)</span>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="reset-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span>Onyo: Kitendo hiki hakiwezi kurudishwa. Hakikisha umechagua sahihi.</span>
+                </div>
+                
+                <div class="txn-form-actions">
+                    <button type="button" class="txn-btn txn-btn-cancel" onclick="closeResetModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button type="submit" class="txn-btn" id="resetSubmitBtn" 
+                            style="background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%); color: white; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);">
+                        <i class="fas fa-eraser"></i> Reset Balance
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     🔥 RESET BRANCH CASH MODAL
+     ============================================================ -->
+<div class="txn-modal-overlay" id="resetCashModalOverlay" onclick="closeResetCashModal(event)">
+    <div class="txn-modal" onclick="event.stopPropagation()" style="max-width: 560px;">
+        
+        <div class="txn-modal-header" style="background: linear-gradient(135deg, #D97706 0%, #B45309 100%);">
+            <div class="txn-modal-header-icon">
+                <i class="fas fa-money-bill-wave"></i>
+            </div>
+            <div class="txn-modal-header-content">
+                <h3>Reset Branch Cash</h3>
+                <p>Futa cash ya branch — cash inashirikiwa na providers wote</p>
+            </div>
+            <button type="button" class="txn-modal-close" onclick="closeResetCashModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <div class="txn-modal-body">
+            
+            <div id="resetCashModalMessage" class="txn-modal-message" style="display:none;"></div>
+            
+            <div class="txn-provider-info" style="display:flex; background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%); border-color: #FCD34D;">
+                <div class="txn-provider-icon" style="background: linear-gradient(135deg, #D97706, #B45309);">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="txn-provider-details">
+                    <span class="txn-provider-label" style="color: #92400E;">Branch</span>
+                    <span class="txn-provider-name" id="resetCashBranchName">-</span>
+                    <span class="txn-provider-code" style="background: #FEF3C7; color: #92400E;">Cash Balance</span>
+                </div>
+            </div>
+            
+            <form id="resetCashForm" onsubmit="submitResetCash(event)">
+                <input type="hidden" name="ajax_action" value="reset_branch_cash">
+                <input type="hidden" name="report_id" id="resetCashReportId">
+                <input type="hidden" name="branch_id" id="resetCashBranchId">
+                
+                <div class="reset-current-values" style="grid-template-columns: 1fr;">
+                    <div class="reset-value-box" style="background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); border-color: #FCD34D;">
+                        <span class="reset-value-label" style="color: #92400E;">
+                            <i class="fas fa-coins"></i> Current Cash
+                        </span>
+                        <span class="reset-value-number" style="color: #B45309;" id="resetCashCurrentValue">TSh 0</span>
+                    </div>
+                </div>
+                
+                <div class="reset-warning" style="background: #FEE2E2; border-color: #FCA5A5; color: #991B1B;">
+                    <i class="fas fa-exclamation-triangle" style="color: #DC2626;"></i>
+                    <span>Onyo: Kitendo hiki kitafuta cash yote ya branch hii. Hakiwezi kurudishwa!</span>
+                </div>
+                
+                <div class="txn-form-actions">
+                    <button type="button" class="txn-btn txn-btn-cancel" onclick="closeResetCashModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button type="submit" class="txn-btn" id="resetCashSubmitBtn" 
+                            style="background: linear-gradient(135deg, #D97706 0%, #B45309 100%); color: white; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);">
+                        <i class="fas fa-eraser"></i> Reset Cash
                     </button>
                 </div>
             </form>
@@ -1672,6 +2062,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .providers-table tbody td { padding: 14px 16px; color: var(--text-primary); vertical-align: middle; }
 .providers-table tbody td.text-right { text-align: right; }
 .provider-row.hidden-by-search { display: none !important; }
+.branch-cash-row.hidden-by-search { display: none !important; }
 .row-number {
     display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; border-radius: 50%;
@@ -1782,6 +2173,125 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .btn-secondary { background: var(--bg-input); color: var(--text-secondary); border: 1.5px solid var(--border-color); }
 .btn-secondary:hover { background: var(--bg-table-hover); color: var(--text-primary); }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
+
+/* ============================================================
+   🔥 BRANCH CASH ROW (Highlighted)
+   ============================================================ */
+.branch-cash-row {
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 50%, #FCD34D 100%) !important;
+    border-top: 3px solid #D97706 !important;
+    border-bottom: 3px solid #D97706 !important;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.2);
+}
+
+.branch-cash-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 6px;
+    background: linear-gradient(180deg, #D97706, #B45309);
+    border-radius: 0 4px 4px 0;
+}
+
+.branch-cash-row:hover {
+    background: linear-gradient(135deg, #FDE68A 0%, #FCD34D 50%, #FBBF24 100%) !important;
+}
+
+.branch-cash-row td {
+    padding: 16px 16px !important;
+    vertical-align: middle;
+}
+
+.branch-cash-label {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.branch-cash-label > i {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
+    border: 2px solid rgba(255, 255, 255, 0.4);
+}
+
+.branch-cash-label > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.branch-cash-title {
+    font-size: 14px;
+    font-weight: 900;
+    color: #78350F;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.branch-cash-subtitle {
+    font-size: 10px;
+    font-weight: 600;
+    color: #92400E;
+    opacity: 0.8;
+    letter-spacing: 0.3px;
+}
+
+.branch-cash-muted {
+    color: #92400E;
+    opacity: 0.4;
+    font-weight: 700;
+    font-size: 16px;
+}
+
+.amount-cash-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+    color: #FFFFFF;
+    border-radius: 10px;
+    font-weight: 900;
+    font-size: 15px;
+    font-family: 'Inter', 'Courier New', monospace;
+    border: 2px solid #92400E;
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(217, 119, 6, 0.4);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.amount-cash-branch i {
+    color: #FCD34D;
+    font-size: 14px;
+}
+
+/* Dark mode */
+html.dark-mode .branch-cash-row {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 50%, #92400E 100%) !important;
+    border-top-color: #FBBF24 !important;
+    border-bottom-color: #FBBF24 !important;
+}
+html.dark-mode .branch-cash-row::before {
+    background: linear-gradient(180deg, #FBBF24, #F59E0B);
+}
+html.dark-mode .branch-cash-row:hover {
+    background: linear-gradient(135deg, #78350F 0%, #92400E 50%, #B45309 100%) !important;
+}
+html.dark-mode .branch-cash-title { color: #FEF3C7; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); }
+html.dark-mode .branch-cash-subtitle { color: #FCD34D; }
+html.dark-mode .branch-cash-muted { color: #FCD34D; }
 
 /* ============================================================
    TRANSACTION MODAL
@@ -1899,7 +2409,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 }
 
 /* ============================================================
-   💰 BALANCE PREVIEW - FLOAT JUU, CASH CHINI
+   💰 BALANCE PREVIEW
    ============================================================ */
 .txn-balance-preview {
     background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
@@ -1911,7 +2421,6 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     flex-direction: column;
     gap: 12px;
 }
-
 .txn-balance-row {
     display: flex;
     flex-direction: column;
@@ -1921,7 +2430,6 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     border-radius: 10px;
     border: 1.5px solid rgba(252, 211, 77, 0.5);
 }
-
 .txn-balance-row-label {
     display: flex;
     align-items: center;
@@ -1932,76 +2440,42 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     letter-spacing: 1px;
     color: #92400E;
 }
-.txn-balance-row-label i {
-    font-size: 13px;
-    color: #D97706;
-}
-
-.txn-balance-row-values {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-}
-
+.txn-balance-row-label i { font-size: 13px; color: #D97706; }
+.txn-balance-row-values { display: flex; align-items: center; gap: 8px; width: 100%; }
 .txn-balance-box {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
     padding: 8px 12px;
     background: #FFFFFF;
     border-radius: 8px;
     border: 1.5px solid #FCD34D;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
-
 .txn-balance-box-label {
-    font-size: 9px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: #92400E;
-    opacity: 0.75;
+    font-size: 9px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    color: #92400E; opacity: 0.75;
 }
-
 .txn-balance-box-value {
-    font-size: 16px;
-    font-weight: 900;
+    font-size: 16px; font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
     letter-spacing: -0.3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    line-height: 1.2;
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; line-height: 1.2;
 }
-
 .txn-balance-arrow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #D97706;
-    font-size: 14px;
-    flex-shrink: 0;
-    opacity: 0.8;
+    display: flex; align-items: center; justify-content: center;
+    color: #D97706; font-size: 14px; flex-shrink: 0; opacity: 0.8;
 }
-
-/* Colors */
 .txn-float-value { color: #1D4ED8; }
 .txn-cash-value { color: #059669; }
 .txn-after-value { color: #7C3AED; }
 .txn-after-cash-value { color: #047857; }
-
-/* After boxes tinted */
 .txn-balance-box-after {
     background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%);
     border-color: #86EFAC;
 }
-.txn-balance-box-after .txn-balance-box-label {
-    color: #15803D;
-    opacity: 0.9;
-}
+.txn-balance-box-after .txn-balance-box-label { color: #15803D; opacity: 0.9; }
 
 .txn-form-actions {
     display: flex; gap: 12px; padding-top: 8px; flex-wrap: wrap;
@@ -2024,6 +2498,156 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 }
 .txn-btn-submit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.5); }
 .txn-btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+/* ============================================================
+   🔥 RESET BALANCE MODAL
+   ============================================================ */
+.reset-current-values {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+.reset-value-box {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    border: 2px solid #FCA5A5;
+    border-radius: 10px;
+    transition: all 0.25s ease;
+}
+.reset-value-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
+}
+.reset-value-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #991B1B;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.reset-value-label i { font-size: 11px; }
+.reset-value-number {
+    font-size: 16px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    color: #DC2626;
+}
+
+.reset-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.reset-option {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 0;
+    position: relative;
+}
+.reset-option input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.reset-option-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-input);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    transition: all 0.25s ease;
+    width: 100%;
+    cursor: pointer;
+}
+.reset-option-content > i {
+    font-size: 20px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+    transition: all 0.25s ease;
+}
+.reset-option-content > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+.reset-option-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.reset-option-desc {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+.reset-option input[type="radio"]:checked + .reset-option-content {
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    border-color: #DC2626;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
+}
+.reset-option input[type="radio"]:checked + .reset-option-content > i {
+    color: #DC2626;
+    transform: scale(1.1);
+}
+.reset-option input[type="radio"]:checked + .reset-option-content .reset-option-title {
+    color: #991B1B;
+}
+.reset-option:hover .reset-option-content {
+    border-color: #FCA5A5;
+    background: var(--bg-table-hover);
+}
+
+.reset-warning {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: #FEF3C7;
+    border: 1.5px solid #FCD34D;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #92400E;
+}
+.reset-warning i {
+    font-size: 16px;
+    color: #D97706;
+    flex-shrink: 0;
+}
+
+html.dark-mode .reset-value-box {
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+    border-color: #DC2626;
+}
+html.dark-mode .reset-value-label { color: #FCA5A5; }
+html.dark-mode .reset-value-number { color: #FEE2E2; }
+html.dark-mode .reset-option input[type="radio"]:checked + .reset-option-content {
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+    border-color: #FCA5A5;
+}
+html.dark-mode .reset-option input[type="radio"]:checked + .reset-option-content .reset-option-title {
+    color: #FEE2E2;
+}
+html.dark-mode .reset-warning {
+    background: #5F3A1E;
+    color: #FBBF24;
+    border-color: #D97706;
+}
 
 /* ============================================================
    RESPONSIVE
@@ -2071,6 +2695,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     .txn-modal-body { padding: 18px; }
     .txn-form-actions { flex-direction: column; }
     .txn-btn { width: 100%; }
+    .reset-current-values { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
     .summary-card-soft { padding: 14px 16px; gap: 12px; }
@@ -2091,6 +2716,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     .txn-balance-box-value { font-size: 13px; }
     .txn-balance-row { padding: 8px 10px; }
     .txn-balance-box { padding: 6px 8px; }
+    .reset-value-number { font-size: 14px; }
 }
 </style>
 
@@ -2270,8 +2896,6 @@ function updateBalancePreview() {
     const currentFloat = currentProviderData.float;
     const currentCash = currentProviderData.cash;
     
-    // ✅ DEPOSIT    → Float INAPUNGUA, Cash INAONGEZEKA
-    // ✅ WITHDRAWAL → Float INAONGEZEKA, Cash INAPUNGUA
     let afterFloat, afterCash;
     if (currentTxnType === 'deposit') {
         afterFloat = currentFloat - amount;
@@ -2333,6 +2957,165 @@ function showModalMessage(message, type) {
 }
 
 // ============================================================
+// 🔥 RESET PROVIDER BALANCE MODAL
+// ============================================================
+function openResetBalanceModal(providerRowId, reportId, providerName, providerCode, providerColor, providerIcon, currentFloat) {
+    const branchId = '<?php echo $selected_branch; ?>';
+    if (branchId == '0') {
+        alert('Tafadhali chagua branch maalum kwanza!');
+        return;
+    }
+    
+    document.getElementById('resetProviderRowId').value = providerRowId;
+    document.getElementById('resetReportId').value = reportId;
+    document.getElementById('resetProviderName').textContent = providerName;
+    document.getElementById('resetProviderCode').textContent = providerCode;
+    document.getElementById('resetCurrentFloat').textContent = formatMoney(currentFloat);
+    document.getElementById('resetCurrentCash').textContent = 'Loading...';
+    
+    const iconEl = document.getElementById('resetProviderIcon');
+    iconEl.innerHTML = `<i class="${providerIcon}"></i>`;
+    iconEl.style.background = providerColor;
+    
+    document.getElementById('resetForm').reset();
+    document.getElementById('resetProviderRowId').value = providerRowId;
+    document.getElementById('resetReportId').value = reportId;
+    document.getElementById('resetModalMessage').style.display = 'none';
+    
+    document.getElementById('resetModalOverlay').classList.add('show');
+    document.body.style.overflow = 'hidden';
+    
+    fetchCurrentCash(reportId);
+}
+
+async function fetchCurrentCash(reportId) {
+    try {
+        const formData = new FormData();
+        formData.append('ajax_action', 'get_report_cash');
+        formData.append('report_id', reportId);
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (data.success) {
+            document.getElementById('resetCurrentCash').textContent = data.formatted_cash;
+        } else {
+            document.getElementById('resetCurrentCash').textContent = 'TSh 0';
+        }
+    } catch (err) {
+        document.getElementById('resetCurrentCash').textContent = 'TSh 0';
+    }
+}
+
+function closeResetModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('resetModalOverlay').classList.remove('show');
+    document.body.style.overflow = '';
+}
+
+async function submitResetBalance(event) {
+    event.preventDefault();
+    const form = document.getElementById('resetForm');
+    const formData = new FormData(form);
+    const submitBtn = document.getElementById('resetSubmitBtn');
+    const resetType = formData.get('reset_type');
+    
+    const typeLabels = { float: 'Float', cash: 'Cash', both: 'Float & Cash' };
+    if (!confirm(`Una uhakika unataka kufuta ${typeLabels[resetType]} ya provider huyu?\n\nKitendo hiki hakiwezi kurudishwa!`)) {
+        return;
+    }
+    
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resetting...';
+    
+    try {
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (data.success) {
+            showResetMessage(data.message, 'success');
+            setTimeout(() => {
+                closeResetModal();
+                window.location.reload();
+            }, 1500);
+        } else {
+            showResetMessage(data.message || 'An error occurred.', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-eraser"></i> Reset Balance';
+        }
+    } catch (err) {
+        showResetMessage('Network error. Please try again.', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-eraser"></i> Reset Balance';
+    }
+}
+
+function showResetMessage(message, type) {
+    const messageDiv = document.getElementById('resetModalMessage');
+    messageDiv.className = 'txn-modal-message ' + type;
+    messageDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> <span>${message}</span>`;
+    messageDiv.style.display = 'flex';
+}
+
+// ============================================================
+// 🔥 RESET BRANCH CASH MODAL
+// ============================================================
+function openResetCashModal(reportId, branchId, branchName, currentCash) {
+    document.getElementById('resetCashReportId').value = reportId;
+    document.getElementById('resetCashBranchId').value = branchId;
+    document.getElementById('resetCashBranchName').textContent = branchName;
+    document.getElementById('resetCashCurrentValue').textContent = formatMoney(currentCash);
+    document.getElementById('resetCashModalMessage').style.display = 'none';
+    
+    document.getElementById('resetCashModalOverlay').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeResetCashModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('resetCashModalOverlay').classList.remove('show');
+    document.body.style.overflow = '';
+}
+
+async function submitResetCash(event) {
+    event.preventDefault();
+    const form = document.getElementById('resetCashForm');
+    const formData = new FormData(form);
+    const submitBtn = document.getElementById('resetCashSubmitBtn');
+    
+    if (!confirm('Una uhakika unataka kufuta cash yote ya branch hii?\n\nKitendo hiki hakiwezi kurudishwa!')) {
+        return;
+    }
+    
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resetting...';
+    
+    try {
+        const response = await fetch(window.location.href, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (data.success) {
+            showResetCashMessage(data.message, 'success');
+            setTimeout(() => {
+                closeResetCashModal();
+                window.location.reload();
+            }, 1500);
+        } else {
+            showResetCashMessage(data.message || 'An error occurred.', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-eraser"></i> Reset Cash';
+        }
+    } catch (err) {
+        showResetCashMessage('Network error. Please try again.', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-eraser"></i> Reset Cash';
+    }
+}
+
+function showResetCashMessage(message, type) {
+    const messageDiv = document.getElementById('resetCashModalMessage');
+    messageDiv.className = 'txn-modal-message ' + type;
+    messageDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> <span>${message}</span>`;
+    messageDiv.style.display = 'flex';
+}
+
+// ============================================================
 // SEARCH FUNCTIONS
 // ============================================================
 function onGlobalSearch(input) {
@@ -2375,9 +3158,12 @@ function onTableSearch(input, reportId) {
     const noResults = document.querySelector(`.no-provider-results[data-report-id="${reportId}"]`);
     if (!tbody) return;
     const rows = tbody.querySelectorAll('.provider-row');
+    const cashRow = tbody.querySelector('.branch-cash-row');
+    
     if (clearBtn) clearBtn.style.display = searchTerm.length > 0 ? 'flex' : 'none';
     if (searchTerm.length === 0) {
         rows.forEach(row => row.classList.remove('hidden-by-search'));
+        if (cashRow) cashRow.classList.remove('hidden-by-search');
         rows.forEach((row, idx) => {
             const numCell = row.querySelector('.row-number');
             if (numCell) numCell.textContent = idx + 1;
@@ -2393,6 +3179,16 @@ function onTableSearch(input, reportId) {
             row.classList.remove('hidden-by-search'); matchCount++;
         } else row.classList.add('hidden-by-search');
     });
+    
+    if (cashRow) {
+        const cashSearch = cashRow.getAttribute('data-search') || '';
+        if (cashSearch.includes(searchTerm)) {
+            cashRow.classList.remove('hidden-by-search');
+        } else {
+            cashRow.classList.add('hidden-by-search');
+        }
+    }
+    
     let visibleIdx = 1;
     rows.forEach(row => {
         if (!row.classList.contains('hidden-by-search')) {
@@ -2426,6 +3222,10 @@ function deleteReport(id) {
 
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
+        const resetCashOverlay = document.getElementById('resetCashModalOverlay');
+        if (resetCashOverlay && resetCashOverlay.classList.contains('show')) { closeResetCashModal(); return; }
+        const resetOverlay = document.getElementById('resetModalOverlay');
+        if (resetOverlay && resetOverlay.classList.contains('show')) { closeResetModal(); return; }
         const txnOverlay = document.getElementById('txnModalOverlay');
         if (txnOverlay && txnOverlay.classList.contains('show')) { closeTransactionModal(); return; }
         const dropdown = document.querySelector('.export-dropdown');

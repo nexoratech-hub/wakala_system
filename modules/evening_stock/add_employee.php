@@ -2,16 +2,10 @@
 // ================================================================
 // FILE: modules/evening_stock/add_employee.php
 // EVENING STOCK - ADD (EMPLOYEE) - FINAL FIXED
-// 
-// ✅ FIX: Check duplicate KABLA ya form (inaonyesha nani aliyeunda)
-// ✅ FIX: Check duplicate kwenye POST (better error message)
-// ✅ FIX: Catch SQL error 1062 → friendly message
-// ✅ Auto-filter from daily_report (SAME DATE as stock_date)
+// ✅ FIX: Closing Float & Cash ni READONLY (hazibadiliki)
+// ✅ FIX: Check duplicate KABLA ya form
+// ✅ Auto-filter from daily_report (SAME DATE)
 // ✅ Employee adds to OWN BRANCH only
-// ✅ Float taken from daily_report_providers.current_float
-// ✅ Cash taken from daily_reports.current_cash (BRANCH CASH)
-// ✅ cumm_total = FLOAT ONLY
-// ✅ Saves daily_report_id, opening_float, opening_cash
 // ✅ Blue theme
 // ================================================================
 
@@ -70,7 +64,6 @@ $selected_branch_code = $branch_info['branch_code'] ?? '';
 
 // ============================================================
 // ✅ CHECK DUPLICATE #1: EVENING STOCK (KABLA YA FORM)
-// Inaonyesha jina la aliyeunda + muda
 // ============================================================
 $existing_stock = null;
 $stmt = $db->prepare("
@@ -140,9 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stock_date = $_POST['stock_date'] ?? date('Y-m-d');
         $notes      = trim($_POST['notes'] ?? '');
 
-        // ------------------------------------------------------------
         // ✅ CHECK #1: Evening Stock ipo tayari?
-        // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT 
                 es.id, 
@@ -170,9 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             );
         }
 
-        // ------------------------------------------------------------
         // Get Daily Report
-        // ------------------------------------------------------------
         $stmt = $db->prepare("
             SELECT * FROM daily_reports 
             WHERE branch_id = ? AND report_date = ?
@@ -197,9 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('No providers found in daily report for this date.');
         }
 
-        // ------------------------------------------------------------
         // ✅ BEGIN TRANSACTION
-        // ------------------------------------------------------------
         $db->beginTransaction();
 
         $stock_number = 'ES-' . date('Ymd', strtotime($stock_date)) . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
@@ -211,8 +198,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         foreach ($dr_providers as $drp) {
             $pid = $drp['provider_id'];
             
-            $closing_float = floatval(str_replace(',', '', $_POST['closing_float'][$pid] ?? $drp['current_float']));
-            $closing_cash  = floatval(str_replace(',', '', $_POST['closing_cash'][$pid]  ?? $drp['current_cash']));
+            // ✅ TUMIA VALUES KUTOKA DAILY REPORT (NOT FROM POST)
+            $closing_float = floatval(str_replace(',', '', $drp['current_float']));
+            $closing_cash  = floatval(str_replace(',', '', $drp['current_cash']));
 
             $total_float += $closing_float;
 
@@ -231,9 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $total_cash = floatval(str_replace(',', '', $dr['current_cash'] ?? 0));
         $branch_name = $selected_branch_name;
 
-        // ------------------------------------------------------------
         // ✅ INSERT EVENING STOCK
-        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO evening_stocks 
             (stock_number, employee_id, branch, branch_id, daily_report_id, stock_date,
@@ -258,9 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         $stock_id = $db->lastInsertId();
 
-        // ------------------------------------------------------------
         // ✅ INSERT evening_stock_providers
-        // ------------------------------------------------------------
         $stmt = $db->prepare("
             INSERT INTO evening_stock_providers 
             (evening_stock_id, provider_id, provider_code, provider_name,
@@ -272,8 +256,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         foreach ($dr_providers as $drp) {
             $pid = $drp['provider_id'];
             
-            $closing_float = floatval(str_replace(',', '', $_POST['closing_float'][$pid] ?? $drp['current_float']));
-            $closing_cash  = floatval(str_replace(',', '', $_POST['closing_cash'][$pid]  ?? $drp['current_cash']));
+            // ✅ TUMIA VALUES KUTOKA DAILY REPORT (NOT FROM POST)
+            $closing_float = floatval(str_replace(',', '', $drp['current_float']));
+            $closing_cash  = floatval(str_replace(',', '', $drp['current_cash']));
 
             $stmt->execute([
                 $stock_id,
@@ -311,9 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $error_msg = $e->getMessage();
         
-        // ============================================================
         // ✅ CATCH SQL ERROR 1062 - Duplicate entry
-        // ============================================================
         if (strpos($error_msg, '1062') !== false || 
             strpos($error_msg, 'Duplicate entry') !== false ||
             strpos($error_msg, 'Integrity constraint') !== false) {
@@ -381,7 +364,7 @@ include_once '../../includes/employee_topbar.php';
                     <?php echo date('d M Y', strtotime($selected_date)); ?>
                 </span>
                 <span class="branch-status-viewonly">
-                    <i class="fas fa-lock"></i> Locked to Your Branch
+                    <i class="fas fa-lock"></i> Read-Only Mode
                 </span>
             </div>
             <a href="index_employee.php" class="btn-back-card">
@@ -394,7 +377,7 @@ include_once '../../includes/employee_topbar.php';
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-plus-circle" style="color:#2563EB;"></i> Add Evening Stock</h2>
-                <p class="text-muted">Auto-filtered from Daily Report</p>
+                <p class="text-muted">Auto-filled from Daily Report — No editing allowed</p>
             </div>
         </div>
 
@@ -415,9 +398,7 @@ include_once '../../includes/employee_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================ -->
-        <!-- EXISTING STOCK - With creator info -->
-        <!-- ============================================================ -->
+        <!-- EXISTING STOCK -->
         <?php if ($existing_stock): ?>
             <div class="existing-stock-warning">
                 <i class="fas fa-info-circle"></i>
@@ -456,9 +437,7 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
-        <!-- ============================================================ -->
         <!-- NO DAILY REPORT -->
-        <!-- ============================================================ -->
         <?php elseif (!$daily_report): ?>
             <div class="no-daily-report-warning">
                 <i class="fas fa-exclamation-triangle"></i>
@@ -474,9 +453,7 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
-        <!-- ============================================================ -->
         <!-- MAIN FORM -->
-        <!-- ============================================================ -->
         <?php else: ?>
 
             <!-- Daily Report Info -->
@@ -504,6 +481,15 @@ include_once '../../includes/employee_topbar.php';
                 </div>
             </div>
 
+            <!-- ✅ READONLY NOTICE -->
+            <div class="readonly-notice">
+                <i class="fas fa-lock"></i>
+                <div>
+                    <strong>Read-Only Mode</strong>
+                    <p>All values are auto-filled from the Daily Report and <strong>cannot be edited</strong>. Simply review and click "Save Evening Stock".</p>
+                </div>
+            </div>
+
             <div class="form-container">
                 <form method="POST" action="" class="main-form" id="stockForm" onsubmit="return validateForm()">
                     <input type="hidden" name="action" value="add_stock">
@@ -514,12 +500,12 @@ include_once '../../includes/employee_topbar.php';
                     <div class="form-section">
                         <div class="section-header">
                             <h3><i class="fas fa-university"></i> Provider Closing Balances</h3>
-                            <span class="section-badge"><?php echo count($daily_report_providers); ?> Providers</span>
+                            <span class="section-badge"><?php echo count($daily_report_providers); ?> Providers · 🔒 Read-Only</span>
                         </div>
 
                         <p class="section-hint">
                             <i class="fas fa-info-circle"></i>
-                            Balances are auto-filled from the Daily Report. You can adjust them before saving.
+                            All values are auto-filled from the Daily Report and cannot be modified.
                         </p>
 
                         <div class="providers-table-wrapper">
@@ -559,20 +545,16 @@ include_once '../../includes/employee_topbar.php';
                                                 <span class="amount-readonly text-danger">-<?php echo formatCurrency($drp['total_withdrawals']); ?></span>
                                             </td>
                                             <td class="text-right">
-                                                <input type="text"
-                                                       name="closing_float[<?php echo $drp['provider_id']; ?>]"
-                                                       class="money-input-table"
-                                                       value="<?php echo number_format($drp['current_float'], 0, '.', ''); ?>"
-                                                       data-provider-id="<?php echo $drp['provider_id']; ?>"
-                                                       oninput="formatMoneyInput(this); updateTotals();">
+                                                <!-- ✅ CLOSING FLOAT - READONLY -->
+                                                <span class="amount-readonly-highlight">
+                                                    <?php echo formatCurrency($drp['current_float']); ?>
+                                                </span>
                                             </td>
                                             <td class="text-right">
-                                                <input type="text"
-                                                       name="closing_cash[<?php echo $drp['provider_id']; ?>]"
-                                                       class="money-input-table"
-                                                       value="<?php echo number_format($drp['current_cash'], 0, '.', ''); ?>"
-                                                       data-provider-id="<?php echo $drp['provider_id']; ?>"
-                                                       oninput="formatMoneyInput(this); updateTotals();">
+                                                <!-- ✅ CLOSING CASH - READONLY -->
+                                                <span class="amount-readonly-highlight">
+                                                    <?php echo formatCurrency($drp['current_cash']); ?>
+                                                </span>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -583,10 +565,10 @@ include_once '../../includes/employee_topbar.php';
                                             <strong>PROVIDER FLOAT TOTAL</strong>
                                         </td>
                                         <td class="text-right">
-                                            <span class="total-float" id="totalFloat">TSh 0</span>
+                                            <span class="total-float"><?php echo formatCurrency($display_total_float); ?></span>
                                         </td>
                                         <td class="text-right">
-                                            <span class="total-cash" id="totalCash">TSh 0</span>
+                                            <span class="total-cash"><?php echo formatCurrency($display_total_cash); ?></span>
                                         </td>
                                     </tr>
                                     <tr class="grand-total-row">
@@ -594,7 +576,7 @@ include_once '../../includes/employee_topbar.php';
                                             <strong>GRAND TOTAL</strong>
                                         </td>
                                         <td colspan="2" class="text-right">
-                                            <span class="grand-total" id="grandTotal">TSh 0</span>
+                                            <span class="grand-total"><?php echo formatCurrency($display_total_float + $display_total_cash); ?></span>
                                         </td>
                                     </tr>
                                 </tfoot>
@@ -620,9 +602,6 @@ include_once '../../includes/employee_topbar.php';
                     <div class="form-actions">
                         <button type="submit" class="btn btn-submit" id="submitBtn">
                             <i class="fas fa-save"></i> Save Evening Stock
-                        </button>
-                        <button type="reset" class="btn btn-reset" onclick="return confirmReset()">
-                            <i class="fas fa-undo"></i> Reset
                         </button>
                         <a href="index_employee.php" class="btn btn-cancel">
                             <i class="fas fa-times"></i> Cancel
@@ -654,11 +633,6 @@ include_once '../../includes/employee_topbar.php';
     --ea-input-bg: #F9FAFB;
     --ea-hover: #F3F4F6;
     --ea-shadow: rgba(0,0,0,0.06);
-
-    --ea-blue-900: #1E3A8A;
-    --ea-blue-700: #1D4ED8;
-    --ea-blue-600: #2563EB;
-    --ea-blue-500: #3B82F6;
 
     --sidebar-width: 220px;
     --topbar-height: 70px;
@@ -719,35 +693,6 @@ body {
     overflow-x: hidden !important;
     flex: 1;
 }
-
-/* ============================================================
-   FOOTER
-   ============================================================ */
-.employee-footer {
-    margin-left: 0 !important;
-    margin-top: auto !important;
-    margin-bottom: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    background: #ffffff !important;
-    border-top: 1px solid var(--ea-border) !important;
-    padding: 10px 20px !important;
-}
-html.dark-mode .employee-footer {
-    background: #1e293b !important;
-    border-color: #334155 !important;
-}
-.employee-footer .footer-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    color: #6b7280;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-html.dark-mode .employee-footer .footer-content { color: #94a3b8; }
-.employee-footer .footer-version { font-weight: 600; color: #bb0404; }
 
 /* ============================================================
    BRANCH STATUS CARD — BLUE
@@ -953,7 +898,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     margin-top: 12px;
 }
 
-/* ✅ CREATOR INFO */
 .creator-info {
     display: inline-flex;
     align-items: center;
@@ -1083,6 +1027,47 @@ html.dark-mode .dric-total-item { background: rgba(15, 23, 42, 0.5); }
     font-family: 'Inter', 'Courier New', monospace;
 }
 html.dark-mode .dric-total-value { color: #DBEAFE; }
+
+/* ============================================================
+   ✅ READONLY NOTICE
+   ============================================================ */
+.readonly-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 22px;
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    border: 2px solid #FCD34D;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    color: #92400E;
+}
+html.dark-mode .readonly-notice {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 100%);
+    border-color: #F59E0B;
+    color: #FCD34D;
+}
+.readonly-notice > i {
+    font-size: 24px;
+    color: #D97706;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+html.dark-mode .readonly-notice > i { color: #FCD34D; }
+.readonly-notice strong {
+    font-size: 14px;
+    font-weight: 800;
+    display: block;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.readonly-notice p {
+    font-size: 13px;
+    margin: 0;
+    line-height: 1.5;
+    font-weight: 500;
+}
 
 /* ============================================================
    FORM CONTAINER
@@ -1215,26 +1200,24 @@ html.dark-mode .provider-code { background: #1E3A5F; color: #60A5FA; }
 .amount-readonly.text-success { color: #10B981; }
 .amount-readonly.text-danger { color: #DC2626; }
 
-.money-input-table {
-    width: 130px;
-    padding: 8px 12px;
+/* ✅ READONLY HIGHLIGHT (Closing Float/Cash) */
+.amount-readonly-highlight {
+    display: inline-block;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+    color: #1D4ED8;
     border-radius: 8px;
-    border: 1.5px solid var(--ea-border);
     font-size: 13px;
     font-weight: 800;
     font-family: 'Inter', 'Courier New', monospace;
-    text-align: right;
-    color: #2563EB;
-    background: var(--ea-input-bg);
-    outline: none;
-    transition: all 0.3s ease;
+    border: 1.5px solid #93C5FD;
+    white-space: nowrap;
 }
-.money-input-table:focus {
-    border-color: #2563EB;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
-    background: var(--ea-card-bg);
+html.dark-mode .amount-readonly-highlight {
+    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
+    color: #60A5FA;
+    border-color: #3B82F6;
 }
-html.dark-mode .money-input-table { color: #60A5FA; }
 
 .providers-table tfoot {
     background: var(--ea-hover);
@@ -1349,12 +1332,11 @@ html.dark-mode .total-cash { color: #60A5FA; }
     cursor: not-allowed;
     transform: none;
 }
-.btn-reset, .btn-cancel {
+.btn-cancel {
     background: var(--ea-card-bg);
     color: var(--ea-text-secondary);
     border: 1.5px solid var(--ea-border);
 }
-.btn-reset:hover { background: var(--ea-border); color: var(--ea-text); }
 .btn-cancel:hover {
     background: #FEE2E2;
     color: #991B1B;
@@ -1384,19 +1366,6 @@ html.dark-mode .total-cash { color: #60A5FA; }
     }
     .main-content { padding: 12px !important; }
 
-    .employee-footer {
-        margin-left: 0 !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        padding: 10px 14px !important;
-    }
-    .employee-footer .footer-content {
-        font-size: 11px;
-        flex-direction: column;
-        text-align: center;
-        gap: 4px;
-    }
-
     .branch-status-card {
         flex-direction: column;
         align-items: flex-start;
@@ -1415,76 +1384,32 @@ html.dark-mode .total-cash { color: #60A5FA; }
     .dric-totals { width: 100%; }
     .dric-total-item { flex: 1; }
 
+    .readonly-notice {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
     .form-actions { flex-direction: column; }
     .form-actions .btn { width: 100%; justify-content: center; }
 
     .form-section { padding: 18px 20px; }
-
-    .money-input-table { width: 110px; font-size: 12px; padding: 6px 10px; }
 }
 @media (max-width: 480px) {
     .main-wrapper { padding-top: 58px; }
     .main-content { padding: 10px !important; }
-    .employee-footer { padding: 8px 12px !important; }
-    .employee-footer .footer-content { font-size: 10px; }
 
     .branch-status-name { font-size: 15px; }
     .branch-status-icon { width: 44px; height: 44px; font-size: 18px; }
     .header-left h2 { font-size: 18px; }
     .section-header h3 { font-size: 13px; }
     .form-section { padding: 16px 14px; }
-    .money-input-table { width: 90px; font-size: 11px; }
+    .amount-readonly-highlight { padding: 4px 10px; font-size: 11px; }
 }
 </style>
 
 <script>
 // ============================================================
-// FORMAT MONEY INPUT
-// ============================================================
-function formatMoneyInput(input) {
-    var value = input.value.replace(/[^0-9]/g, '');
-    if (value === '') { input.value = ''; return; }
-    value = value.replace(/^0+/, '') || '0';
-    if (value.length > 15) value = value.substring(0, 15);
-
-    var formatted = '';
-    var count = 0;
-    for (var i = value.length - 1; i >= 0; i--) {
-        if (count > 0 && count % 3 === 0) formatted = ',' + formatted;
-        formatted = value[i] + formatted;
-        count++;
-    }
-    input.value = formatted;
-    updateTotals();
-}
-
-// ============================================================
-// UPDATE TOTALS (JS live preview)
-// ============================================================
-function updateTotals() {
-    var totalFloat = 0;
-    var totalCash = 0;
-
-    document.querySelectorAll('input[name^="closing_float"]').forEach(function(input) {
-        totalFloat += parseFloat(input.value.replace(/,/g, '')) || 0;
-    });
-
-    document.querySelectorAll('input[name^="closing_cash"]').forEach(function(input) {
-        totalCash += parseFloat(input.value.replace(/,/g, '')) || 0;
-    });
-
-    var grandTotal = totalFloat + totalCash;
-
-    var tf = document.getElementById('totalFloat');
-    var tc = document.getElementById('totalCash');
-    var gt = document.getElementById('grandTotal');
-    if (tf) tf.textContent = 'TSh ' + totalFloat.toLocaleString('en-US');
-    if (tc) tc.textContent = 'TSh ' + totalCash.toLocaleString('en-US');
-    if (gt) gt.textContent = 'TSh ' + grandTotal.toLocaleString('en-US');
-}
-
-// ============================================================
-// VALIDATE FORM
+// VALIDATE FORM (bila kuedit)
 // ============================================================
 function validateForm() {
     var submitBtn = document.getElementById('submitBtn');
@@ -1493,16 +1418,10 @@ function validateForm() {
     return true;
 }
 
-function confirmReset() {
-    return confirm('Are you sure you want to reset the form?\n\nAny unsaved changes will be lost.');
-}
-
 // ============================================================
 // INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    updateTotals();
-
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1512,7 +1431,6 @@ document.addEventListener('DOMContentLoaded', function() {
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
 
-    // Auto-hide alerts
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {
         setTimeout(function() {
