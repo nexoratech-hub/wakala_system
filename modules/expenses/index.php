@@ -4,7 +4,7 @@
 // WAKALA FINANCIAL SYSTEM - EXPENSES LIST (ADMIN)
 // ✅ RED THEME ONLY (like commissions design)
 // ✅ Branch filter, search, scroll, export
-// ✅ Employee & admin support
+// ✅ NEW: Time Filter (Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -116,6 +116,57 @@ if ($role === 'employee') {
 }
 
 // ============================================================
+// ✅ TIME FILTER LOGIC
+// ============================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$custom_from = isset($_GET['from_date']) ? $_GET['from_date'] : '';
+$custom_to = isset($_GET['to_date']) ? $_GET['to_date'] : '';
+
+$today = date('Y-m-d');
+
+switch ($filter) {
+    case 'all':
+        $from_date = '';
+        $to_date = '';
+        break;
+    case 'today':
+        $from_date = $today;
+        $to_date = $today;
+        break;
+    case '1d':
+        $from_date = date('Y-m-d', strtotime('-1 day'));
+        $to_date = $today;
+        break;
+    case '1w':
+        $from_date = date('Y-m-d', strtotime('-7 days'));
+        $to_date = $today;
+        break;
+    case '1m':
+        $from_date = date('Y-m-d', strtotime('-1 month'));
+        $to_date = $today;
+        break;
+    case '3m':
+        $from_date = date('Y-m-d', strtotime('-3 months'));
+        $to_date = $today;
+        break;
+    case '6m':
+        $from_date = date('Y-m-d', strtotime('-6 months'));
+        $to_date = $today;
+        break;
+    case '1y':
+        $from_date = date('Y-m-d', strtotime('-1 year'));
+        $to_date = $today;
+        break;
+    case 'custom':
+        $from_date = !empty($custom_from) ? $custom_from : date('Y-m-01');
+        $to_date = !empty($custom_to) ? $custom_to : $today;
+        break;
+    default:
+        $from_date = '';
+        $to_date = '';
+}
+
+// ============================================================
 // SEARCH
 // ============================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
@@ -137,9 +188,6 @@ if (!empty($search)) {
 // ============================================================
 // DATE FILTER
 // ============================================================
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : '';
-$to_date = isset($_GET['to_date']) ? $_GET['to_date'] : '';
-
 $date_filter = '';
 $date_params = [];
 if (!empty($from_date)) {
@@ -207,20 +255,22 @@ foreach ($expenses as $e) {
 }
 
 // ============================================================
-// TODAY & THIS MONTH
+// ✅ TODAY & THIS MONTH - BASED ON FILTER RANGE
 // ============================================================
-$today = date('Y-m-d');
+$today_real = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
 
+// TODAY TOTAL
 $sql_today = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE DATE(expense_date) = ?";
-$params_today = [$today];
+$params_today = [$today_real];
 if ($selected_branch > 0) { $sql_today .= " AND branch_id = ?"; $params_today[] = $selected_branch; }
 if ($role === 'employee') { $sql_today .= " AND branch_id = ?"; $params_today[] = $user['branch_id']; }
 $stmt = $db->prepare($sql_today);
 $stmt->execute($params_today);
 $today_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
+// MONTH TOTAL
 $sql_month = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ?";
 $params_month = [$month, $year];
 if ($selected_branch > 0) { $sql_month .= " AND branch_id = ?"; $params_month[] = $selected_branch; }
@@ -230,12 +280,14 @@ $stmt->execute($params_month);
 $month_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 // ============================================================
-// CATEGORY BREAKDOWN
+// CATEGORY BREAKDOWN (kwa period iliyochaguliwa)
 // ============================================================
 $sql_cat = "SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE 1=1";
 $params_cat = [];
 if ($selected_branch > 0) { $sql_cat .= " AND branch_id = ?"; $params_cat[] = $selected_branch; }
 if ($role === 'employee') { $sql_cat .= " AND branch_id = ?"; $params_cat[] = $user['branch_id']; }
+if (!empty($from_date)) { $sql_cat .= " AND expense_date >= ?"; $params_cat[] = $from_date; }
+if (!empty($to_date)) { $sql_cat .= " AND expense_date <= ?"; $params_cat[] = $to_date; }
 $sql_cat .= " GROUP BY category ORDER BY total DESC LIMIT 5";
 $stmt = $db->prepare($sql_cat);
 $stmt->execute($params_cat);
@@ -335,6 +387,83 @@ if ($is_admin) {
             </div>
         <?php endif; ?>
 
+        <!-- ✅ TIME FILTER BAR -->
+        <div class="time-filter-bar">
+            <div class="time-filter-left">
+                <i class="fas fa-calendar-alt"></i>
+                <span class="time-filter-label">Period:</span>
+            </div>
+            <div class="time-filter-buttons">
+                <a href="?filter=all&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">
+                    All
+                </a>
+                <a href="?filter=today&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">
+                    Today
+                </a>
+                <a href="?filter=1d&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1d' ? 'active' : ''; ?>">
+                    1D
+                </a>
+                <a href="?filter=1w&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1w' ? 'active' : ''; ?>">
+                    1W
+                </a>
+                <a href="?filter=1m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1m' ? 'active' : ''; ?>">
+                    1M
+                </a>
+                <a href="?filter=3m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '3m' ? 'active' : ''; ?>">
+                    3M
+                </a>
+                <a href="?filter=6m&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '6m' ? 'active' : ''; ?>">
+                    6M
+                </a>
+                <a href="?filter=1y&branch_id=<?php echo $selected_branch; ?>" 
+                   class="time-btn <?php echo $filter === '1y' ? 'active' : ''; ?>">
+                    1Y
+                </a>
+                <a href="?filter=custom&branch_id=<?php echo $selected_branch; ?>&from_date=<?php echo date('Y-m-01'); ?>&to_date=<?php echo date('Y-m-d'); ?>" 
+                   class="time-btn time-btn-custom <?php echo $filter === 'custom' ? 'active' : ''; ?>">
+                    <i class="fas fa-sliders-h"></i> Custom
+                </a>
+            </div>
+        </div>
+
+        <!-- ✅ CUSTOM DATE FILTER (only shown when filter=custom) -->
+        <?php if ($filter === 'custom'): ?>
+        <div class="custom-date-filter">
+            <form method="GET" action="" class="custom-date-form">
+                <input type="hidden" name="filter" value="custom">
+                <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
+                
+                <div class="cdf-item">
+                    <label><i class="fas fa-calendar-day"></i> From</label>
+                    <input type="date" name="from_date" class="cdf-input" 
+                           value="<?php echo htmlspecialchars($from_date); ?>">
+                </div>
+                
+                <div class="cdf-item">
+                    <label><i class="fas fa-calendar-day"></i> To</label>
+                    <input type="date" name="to_date" class="cdf-input" 
+                           value="<?php echo htmlspecialchars($to_date); ?>">
+                </div>
+                
+                <div class="cdf-actions">
+                    <button type="submit" class="cdf-btn cdf-btn-apply">
+                        <i class="fas fa-search"></i> Apply
+                    </button>
+                    <a href="index.php?filter=all&branch_id=<?php echo $selected_branch; ?>" class="cdf-btn cdf-btn-reset">
+                        <i class="fas fa-undo"></i> Reset
+                    </a>
+                </div>
+            </form>
+        </div>
+        <?php endif; ?>
+
         <!-- RED HERO CARD -->
         <div class="expense-hero-card">
             <div class="hero-header">
@@ -344,7 +473,23 @@ if ($is_admin) {
                     </div>
                     <div class="hero-info">
                         <span class="hero-title">Expenses Overview</span>
-                        <span class="hero-subtitle"><?php echo htmlspecialchars($expense_branch_name); ?></span>
+                        <span class="hero-subtitle">
+                            <?php echo htmlspecialchars($expense_branch_name); ?>
+                            <?php 
+                            $period_labels = [
+                                'all' => 'All Time',
+                                'today' => 'Today',
+                                '1d' => 'Last 1 Day',
+                                '1w' => 'Last 1 Week',
+                                '1m' => 'Last 1 Month',
+                                '3m' => 'Last 3 Months',
+                                '6m' => 'Last 6 Months',
+                                '1y' => 'Last 1 Year',
+                                'custom' => 'Custom Period'
+                            ];
+                            echo ' • ' . ($period_labels[$filter] ?? 'All Time');
+                            ?>
+                        </span>
                     </div>
                 </div>
                 <div class="hero-badge">
@@ -408,7 +553,7 @@ if ($is_admin) {
         <?php if (count($category_breakdown) > 0): ?>
             <div class="category-section">
                 <div class="category-section-header">
-                    <h3><i class="fas fa-tags"></i> Top Categories</h3>
+                    <h3><i class="fas fa-tags"></i> Top Categories (Selected Period)</h3>
                 </div>
                 <div class="category-chips">
                     <?php foreach ($category_breakdown as $cat): ?>
@@ -573,7 +718,13 @@ if ($is_admin) {
                 <div class="empty-state">
                     <i class="fas fa-receipt"></i>
                     <h3>No Expenses Found</h3>
-                    <p>Start by adding your first expense.</p>
+                    <p>
+                        <?php if ($filter !== 'all' || $search !== '' || $selected_branch > 0): ?>
+                            No expenses in this period. Try changing the filter.
+                        <?php else: ?>
+                            Start by adding your first expense.
+                        <?php endif; ?>
+                    </p>
                     <a href="add.php<?php echo $branch_qs; ?>" class="btn btn-add-expense">
                         <i class="fas fa-plus-circle"></i> Add Expense
                     </a>
@@ -742,6 +893,227 @@ body {
 }
 .header-actions {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+
+/* ============================================================
+   ✅ TIME FILTER BAR
+   ============================================================ */
+.time-filter-bar {
+    background: var(--exp-card-bg);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    border: 1.5px solid var(--exp-border);
+    box-shadow: 0 2px 8px var(--exp-shadow);
+}
+
+.time-filter-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--exp-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+
+.time-filter-left i {
+    color: #DC2626;
+    font-size: 14px;
+}
+
+.time-filter-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.time-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--exp-hover);
+    color: var(--exp-text-secondary);
+    border: 1.5px solid var(--exp-border);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.time-btn:hover {
+    background: var(--exp-card-bg);
+    border-color: #DC2626;
+    color: #DC2626;
+    transform: translateY(-1px);
+}
+
+.time-btn.active {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    border-color: #B91C1C;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+    transform: translateY(-1px);
+}
+
+.time-btn-custom {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    color: #FFFFFF;
+    border-color: #6D28D9;
+}
+
+.time-btn-custom:hover {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    color: #FFFFFF;
+    border-color: #5B21B6;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+}
+
+.time-btn-custom.active {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    border-color: #5B21B6;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
+}
+
+/* ============================================================
+   ✅ CUSTOM DATE FILTER
+   ============================================================ */
+.custom-date-filter {
+    background: linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%);
+    border: 2px solid #A78BFA;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 14px;
+    animation: slideDown 0.3s ease forwards;
+}
+
+html.dark-mode .custom-date-filter {
+    background: linear-gradient(135deg, #2D1B5F 0%, #1E1B4B 100%);
+    border-color: #7C3AED;
+}
+
+.custom-date-form {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.cdf-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 180px;
+    flex: 1;
+}
+
+.cdf-item label {
+    font-size: 11px;
+    font-weight: 800;
+    color: #5B21B6;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+html.dark-mode .cdf-item label {
+    color: #C4B5FD;
+}
+
+.cdf-item label i {
+    font-size: 11px;
+}
+
+.cdf-input {
+    padding: 11px 14px;
+    border: 1.5px solid #A78BFA;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--exp-text);
+    background: #FFFFFF;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.25s ease;
+    width: 100%;
+}
+
+html.dark-mode .cdf-input {
+    background: #1E293B;
+    border-color: #7C3AED;
+    color: #F1F5F9;
+}
+
+.cdf-input:focus {
+    outline: none;
+    border-color: #7C3AED;
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+}
+
+.cdf-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    flex-shrink: 0;
+}
+
+.cdf-btn {
+    padding: 11px 22px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    border: none;
+}
+
+.cdf-btn-apply {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+}
+
+.cdf-btn-apply:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(124, 58, 237, 0.45);
+    color: #FFFFFF;
+}
+
+.cdf-btn-reset {
+    background: var(--exp-card-bg);
+    color: var(--exp-text-secondary);
+    border: 1.5px solid var(--exp-border);
+}
+
+.cdf-btn-reset:hover {
+    background: var(--exp-hover);
+    color: var(--exp-text);
+    transform: translateY(-2px);
 }
 
 /* BUTTONS */
@@ -1350,10 +1722,26 @@ html.dark-mode .btn-delete { background: #7F1D1D; color: #FCA5A5; border-color: 
     font-size: 13px; margin: 0 0 20px 0;
 }
 
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 /* RESPONSIVE */
 @media (max-width: 1024px) {
     .hero-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .hp-value { font-size: clamp(16px, 1.6vw, 20px); }
+    .time-filter-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+    .time-filter-left { justify-content: center; }
+    .time-filter-buttons { justify-content: center; }
+    .time-btn { flex: 1; min-width: 60px; }
+    .custom-date-form { flex-direction: column; }
+    .cdf-item { min-width: 100%; }
+    .cdf-actions { width: 100%; }
+    .cdf-btn { width: 100%; justify-content: center; }
 }
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
@@ -1380,6 +1768,7 @@ html.dark-mode .btn-delete { background: #7F1D1D; color: #FCA5A5; border-color: 
     .hp-value { font-size: 16px; }
     .data-table thead th,
     .data-table tbody td { padding: 8px 10px; font-size: 11px; }
+    .time-btn { font-size: 10px; padding: 6px 10px; }
 }
 </style>
 
@@ -1404,6 +1793,14 @@ function exportData(format) {
     if (sb && sb !== '0') params.set('branch_id', sb);
     var si = document.getElementById('expenseSearchInput');
     if (si && si.value.trim()) params.set('search', si.value.trim());
+    
+    // ✅ Export with time filter
+    params.set('filter', '<?php echo $filter; ?>');
+    <?php if ($filter === 'custom'): ?>
+    params.set('from_date', '<?php echo $from_date; ?>');
+    params.set('to_date', '<?php echo $to_date; ?>');
+    <?php endif; ?>
+    
     window.location.href = 'export.php?' + params.toString();
 }
 

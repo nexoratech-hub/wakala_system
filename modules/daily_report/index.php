@@ -7,6 +7,8 @@
 // ✅ FIXED: Date-aware summary
 // ✅ FIXED: All Branches inahesabu jumla
 // ✅ FIXED: Balance preview: Float juu, Cash chini
+// ✅ FIXED: Providers WOTE wa branch wanaonekana (hata bila transactions)
+// ✅ FIXED: MAX(id) subquery kuepuka duplicates
 // ✅ NEW: Reset Balance Modal (Float/Cash/Both) — bila reason
 // ✅ NEW: BRANCH CASH ROW — highlighted, yenye View/Edit/Delete
 // ================================================================
@@ -557,22 +559,55 @@ if ($selected_branch > 0) {
 }
 
 try {
+    // ============================================================
+    // ✅ FIXED: Query kuu — inaunganisha branch_providers + daily_report_providers
+    // Providers WOTE wa branch wanaonekana, hata kama hawana record
+    // ============================================================
     $sql = "SELECT 
                 dr.id as report_id, dr.report_number, dr.report_date, dr.created_at,
                 dr.net_profit, dr.current_capital, dr.current_cash, dr.current_float,
                 dr.branch_id,
                 e.full_name as employee_name,
                 b.branch_name as branch_name, b.branch_code as branch_code,
-                drp.id as provider_row_id, drp.provider_id, drp.provider_code, drp.provider_name,
-                drp.morning_float, drp.current_float,
-                drp.total_deposits as provider_deposits,
-                drp.total_withdrawals as provider_withdrawals,
-                p.icon_class, p.color_code, p.provider_type
+                
+                -- Provider info kutoka branch_providers (WAOTE)
+                bp.provider_id,
+                bp.provider_code,
+                p.provider_name,
+                p.icon_class, p.color_code, p.provider_type,
+                p.display_order,
+                
+                -- Record ya daily_report_providers (kama ipo)
+                drp.id as provider_row_id,
+                COALESCE(drp.morning_float, 0) as morning_float,
+                COALESCE(drp.current_float, 0) as current_float,
+                COALESCE(drp.total_deposits, 0) as provider_deposits,
+                COALESCE(drp.total_withdrawals, 0) as provider_withdrawals
+                
             FROM daily_reports dr
             LEFT JOIN employees e ON dr.employee_id = e.id
             LEFT JOIN branches b ON dr.branch_id = b.id
-            LEFT JOIN daily_report_providers drp ON dr.id = drp.daily_report_id
-            LEFT JOIN providers p ON drp.provider_id = p.id
+            
+            -- ✅ Providers WOTE wa branch
+            INNER JOIN branch_providers bp 
+                ON bp.branch_id = dr.branch_id 
+                AND bp.is_active = 1
+            INNER JOIN providers p 
+                ON p.id = bp.provider_id 
+                AND p.is_active = 1
+            
+            -- ✅ LEFT JOIN records za report (kama zipo) - MAX(id) subquery
+            LEFT JOIN (
+                SELECT drp1.*
+                FROM daily_report_providers drp1
+                INNER JOIN (
+                    SELECT daily_report_id, provider_id, MAX(id) as max_id
+                    FROM daily_report_providers
+                    GROUP BY daily_report_id, provider_id
+                ) drp2 ON drp1.id = drp2.max_id
+            ) drp ON dr.id = drp.daily_report_id 
+                AND drp.provider_id = bp.provider_id
+                
             WHERE dr.report_date BETWEEN ? AND ?";
     $params = [$from_date, $to_date];
 
@@ -581,12 +616,15 @@ try {
         $params[] = $selected_branch;
     }
 
-    $sql .= " ORDER BY dr.report_date DESC, dr.id DESC, drp.provider_name ASC";
+    $sql .= " ORDER BY dr.report_date DESC, dr.id DESC, p.display_order, p.provider_name ASC";
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $report_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // ✅ JENGA $reports ARRAY
+    // ============================================================
     $reports = [];
     foreach ($report_rows as $row) {
         $rid = $row['report_id'];
@@ -607,9 +645,11 @@ try {
                 'providers' => []
             ];
         }
+        
+        // ✅ Ongeza provider (hata kama hana record kwenye daily_report_providers)
         if (!empty($row['provider_id'])) {
             $reports[$rid]['providers'][] = [
-                'id' => $row['provider_row_id'],
+                'id' => $row['provider_row_id'], // inaweza kuwa NULL
                 'provider_id' => $row['provider_id'],
                 'provider_code' => $row['provider_code'],
                 'provider_name' => $row['provider_name'],
@@ -625,10 +665,16 @@ try {
     }
     $reports = array_values($reports);
 
+    // ============================================================
+    // GET BRANCHES
+    // ============================================================
     $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
     $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // SUMMARY
+    // ============================================================
     $sql_summary = "SELECT 
             COUNT(*) as total_reports,
             SUM(total_deposits) as total_deposits,
@@ -648,6 +694,9 @@ try {
     $stmt->execute($params_summary);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // TRANSACTION COUNTS
+    // ============================================================
     $sql_txn_count = "SELECT 
             COUNT(*) as total_count,
             SUM(CASE WHEN transaction_type = 'deposit' THEN 1 ELSE 0 END) as deposit_count,
@@ -669,6 +718,9 @@ try {
     $deposit_count = intval($txn_count_result['deposit_count'] ?? 0);
     $withdrawal_count = intval($txn_count_result['withdrawal_count'] ?? 0);
 
+    // ============================================================
+    // ✅ CURRENT FLOAT/CASH - DATE-AWARE
+    // ============================================================
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
@@ -708,6 +760,9 @@ try {
         $total_capital = $total_float + $total_cash;
     }
 
+    // ============================================================
+    // PROVIDERS FOR MODAL
+    // ============================================================
     $providers_for_modal = [];
     if ($selected_branch > 0) {
         $stmt = $db->prepare("
@@ -1023,10 +1078,11 @@ include_once '../../includes/admin_topbar.php';
                                         $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code']);
                                         $provider_color = $p['color_code'] ?? '#3B82F6';
                                         $provider_icon = $p['icon_class'] ?? 'fas fa-university';
+                                        $has_record = !empty($p['id']); // ✅ Je, provider hana record?
                                     ?>
                                         <tr class="provider-row" 
                                             data-provider-id="<?php echo $p['provider_id']; ?>"
-                                            data-provider-row-id="<?php echo $p['id']; ?>"
+                                            data-provider-row-id="<?php echo $p['id'] ?? ''; ?>"
                                             data-report-id="<?php echo $report['id']; ?>"
                                             data-report-date="<?php echo $report['report_date']; ?>"
                                             data-search="<?php echo htmlspecialchars($provider_search); ?>">
@@ -1067,24 +1123,31 @@ include_once '../../includes/admin_topbar.php';
                                                        class="btn-provider btn-provider-view" title="View Transactions">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
-                                                    <a href="edit_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>" 
-                                                       class="btn-provider btn-provider-edit" title="Edit Provider">
-                                                        <i class="fas fa-edit"></i>
-                                                    </a>
-                                                    <button type="button" 
-                                                            class="btn-provider btn-provider-delete" 
-                                                            onclick="openResetBalanceModal(
-                                                                <?php echo $p['id']; ?>, 
-                                                                <?php echo $report['id']; ?>, 
-                                                                '<?php echo addslashes($p['provider_name']); ?>', 
-                                                                '<?php echo addslashes($p['provider_code']); ?>', 
-                                                                '<?php echo addslashes($provider_color); ?>', 
-                                                                '<?php echo addslashes($provider_icon); ?>', 
-                                                                <?php echo floatval($p['current_float']); ?>
-                                                            )"
-                                                            title="Reset Float/Cash">
-                                                        <i class="fas fa-trash"></i>
-                                                    </button>
+                                                    
+                                                    <?php if ($has_record): ?>
+                                                        <a href="edit_provider.php?id=<?php echo $p['id']; ?>&branch_id=<?php echo $report['branch_id'] ?? 0; ?>" 
+                                                           class="btn-provider btn-provider-edit" title="Edit Provider">
+                                                            <i class="fas fa-edit"></i>
+                                                        </a>
+                                                        <button type="button" 
+                                                                class="btn-provider btn-provider-delete" 
+                                                                onclick="openResetBalanceModal(
+                                                                    <?php echo $p['id']; ?>, 
+                                                                    <?php echo $report['id']; ?>, 
+                                                                    '<?php echo addslashes($p['provider_name']); ?>', 
+                                                                    '<?php echo addslashes($p['provider_code']); ?>', 
+                                                                    '<?php echo addslashes($provider_color); ?>', 
+                                                                    '<?php echo addslashes($provider_icon); ?>', 
+                                                                    <?php echo floatval($p['current_float']); ?>
+                                                                )"
+                                                                title="Reset Float/Cash">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    <?php else: ?>
+                                                        <span class="btn-provider-disabled" title="No transaction yet">
+                                                            <i class="fas fa-minus-circle"></i>
+                                                        </span>
+                                                    <?php endif; ?>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1327,7 +1390,7 @@ include_once '../../includes/admin_topbar.php';
 </div>
 
 <!-- ============================================================
-     🔥 RESET PROVIDER BALANCE MODAL — bila reason
+     🔥 RESET PROVIDER BALANCE MODAL
      ============================================================ -->
 <div class="txn-modal-overlay" id="resetModalOverlay" onclick="closeResetModal(event)">
     <div class="txn-modal" onclick="event.stopPropagation()" style="max-width: 600px;">
@@ -1533,9 +1596,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper { background: var(--bg-body) !important; }
 .main-content { background: var(--bg-body) !important; }
 
-/* ============================================================
-   BRANCH CARD
-   ============================================================ */
+/* BRANCH CARD */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 10px; padding: 12px 20px; margin-bottom: 12px;
@@ -1567,9 +1628,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border-radius: 16px; display: flex; align-items: center; gap: 5px; white-space: nowrap;
 }
 
-/* ============================================================
-   CAPITAL CARD
-   ============================================================ */
+/* CAPITAL CARD */
 .capital-card-compact {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
     border-radius: 14px; padding: 18px 24px; margin-bottom: 16px;
@@ -1627,9 +1686,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     position: relative; z-index: 1;
 }
 
-/* ============================================================
-   TIME FILTER BAR
-   ============================================================ */
+/* TIME FILTER BAR */
 .time-filter-bar {
     background: var(--bg-card); border-radius: 12px;
     padding: 14px 18px; margin-bottom: 14px;
@@ -1680,9 +1737,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
 }
 
-/* ============================================================
-   MAIN FILTER BAR
-   ============================================================ */
+/* MAIN FILTER BAR */
 .filter-bar-main {
     background: var(--bg-card); border-radius: 12px;
     padding: 16px 20px; margin-bottom: 16px;
@@ -1732,9 +1787,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 }
 .btn-reset-main:hover { background: var(--bg-table-hover); color: var(--text-primary); border-color: #94A3B8; transform: translateY(-2px); }
 
-/* ============================================================
-   SUMMARY CARDS
-   ============================================================ */
+/* SUMMARY CARDS */
 .summary-cards-soft { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; max-width: 100%; }
 .summary-card-soft {
     position: relative; border-radius: 14px; padding: 18px 20px;
@@ -1794,9 +1847,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     background: rgba(255, 255, 255, 0.15); pointer-events: none;
 }
 
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
+/* PAGE HEADER */
 .page-header {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 16px; flex-wrap: wrap; gap: 12px; max-width: 100%;
@@ -1809,9 +1860,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 }
 .header-right { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; max-width: 100%; }
 
-/* ============================================================
-   BIGGER ACTION BUTTONS
-   ============================================================ */
+/* BIGGER ACTION BUTTONS */
 .btn-action-big {
     display: inline-flex; align-items: center; justify-content: center;
     gap: 10px; padding: 14px 26px; border: none; border-radius: 12px;
@@ -1840,9 +1889,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .btn-action-export:hover { background: linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%); color: #FFFFFF; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.45); }
 .btn-action-export .dropdown-arrow { font-size: 11px; transition: transform 0.3s ease; margin-left: 2px; }
 
-/* ============================================================
-   EXPORT DROPDOWN
-   ============================================================ */
+/* EXPORT DROPDOWN */
 .dropdown { position: relative; display: inline-block; }
 .export-dropdown.open .dropdown-arrow { transform: rotate(180deg); }
 .dropdown-menu {
@@ -1876,9 +1923,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .dropdown-item-title { font-size: 13px; font-weight: 800; color: var(--text-primary); }
 .dropdown-item-desc { font-size: 11px; font-weight: 500; color: var(--text-muted); }
 
-/* ============================================================
-   SEARCH BAR
-   ============================================================ */
+/* SEARCH BAR */
 .search-bar-wrapper {
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; margin-bottom: 16px; flex-wrap: wrap; max-width: 100%;
@@ -1917,9 +1962,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     white-space: nowrap;
 }
 
-/* ============================================================
-   REPORT GROUP
-   ============================================================ */
+/* REPORT GROUP */
 .report-group {
     background: var(--bg-card); border-radius: 12px;
     border: 1px solid var(--border-color); margin-bottom: 16px;
@@ -1980,9 +2023,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .btn-delete-report { background: rgba(248, 113, 113, 0.25); color: #FECACA; border: 1px solid rgba(248, 113, 113, 0.3); padding: 6px 10px; }
 .btn-delete-report:hover { background: #FCA5A5; color: #7F1D1D; }
 
-/* ============================================================
-   PROVIDERS TABLE
-   ============================================================ */
+/* PROVIDERS TABLE */
 .providers-table-wrapper {
     overflow-x: auto; overflow-y: hidden; max-width: 100%;
     -webkit-overflow-scrolling: touch; scroll-behavior: smooth;
@@ -2144,6 +2185,19 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .btn-provider-edit:hover { background: linear-gradient(135deg, #D97706, #F59E0B); color: #FFFFFF; transform: translateY(-3px) scale(1.05); box-shadow: 0 6px 16px rgba(217, 119, 6, 0.4); }
 .btn-provider-delete { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; border: 1.5px solid #FCA5A5; }
 .btn-provider-delete:hover { background: linear-gradient(135deg, #991B1B, #DC2626); color: #FFFFFF; transform: translateY(-3px) scale(1.05); box-shadow: 0 6px 16px rgba(153, 27, 27, 0.4); }
+
+/* ✅ DISABLED PROVIDER BUTTON (No transaction yet) */
+.btn-provider-disabled {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg-input);
+    color: var(--text-light);
+    border: 1.5px dashed var(--border-color);
+    font-size: 14px;
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
 .totals-row { background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important; border-top: 3px solid #bb0404; }
 .totals-row td { padding: 16px 16px; font-weight: 900; color: var(--text-primary); border-bottom: none; font-size: 13px; }
 .no-providers-message {
@@ -2174,9 +2228,7 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
 .btn-secondary:hover { background: var(--bg-table-hover); color: var(--text-primary); }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
 
-/* ============================================================
-   🔥 BRANCH CASH ROW (Highlighted)
-   ============================================================ */
+/* 🔥 BRANCH CASH ROW (Highlighted) */
 .branch-cash-row {
     background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 50%, #FCD34D 100%) !important;
     border-top: 3px solid #D97706 !important;
@@ -2184,7 +2236,6 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     position: relative;
     box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.2);
 }
-
 .branch-cash-row::before {
     content: '';
     position: absolute;
@@ -2193,22 +2244,18 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     background: linear-gradient(180deg, #D97706, #B45309);
     border-radius: 0 4px 4px 0;
 }
-
 .branch-cash-row:hover {
     background: linear-gradient(135deg, #FDE68A 0%, #FCD34D 50%, #FBBF24 100%) !important;
 }
-
 .branch-cash-row td {
     padding: 16px 16px !important;
     vertical-align: middle;
 }
-
 .branch-cash-label {
     display: flex;
     align-items: center;
     gap: 14px;
 }
-
 .branch-cash-label > i {
     width: 42px;
     height: 42px;
@@ -2223,14 +2270,12 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
     border: 2px solid rgba(255, 255, 255, 0.4);
 }
-
 .branch-cash-label > div {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
 }
-
 .branch-cash-title {
     font-size: 14px;
     font-weight: 900;
@@ -2239,7 +2284,6 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     text-transform: uppercase;
     text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
 }
-
 .branch-cash-subtitle {
     font-size: 10px;
     font-weight: 600;
@@ -2247,14 +2291,12 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     opacity: 0.8;
     letter-spacing: 0.3px;
 }
-
 .branch-cash-muted {
     color: #92400E;
     opacity: 0.4;
     font-weight: 700;
     font-size: 16px;
 }
-
 .amount-cash-branch {
     display: inline-flex;
     align-items: center;
@@ -2271,13 +2313,11 @@ html.dark-mode .summary-card-soft-blue .summary-value-soft { color: #93C5FD; }
     box-shadow: 0 4px 14px rgba(217, 119, 6, 0.4);
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
-
 .amount-cash-branch i {
     color: #FCD34D;
     font-size: 14px;
 }
 
-/* Dark mode */
 html.dark-mode .branch-cash-row {
     background: linear-gradient(135deg, #5F3A1E 0%, #78350F 50%, #92400E 100%) !important;
     border-top-color: #FBBF24 !important;
@@ -2293,9 +2333,7 @@ html.dark-mode .branch-cash-title { color: #FEF3C7; text-shadow: 0 1px 3px rgba(
 html.dark-mode .branch-cash-subtitle { color: #FCD34D; }
 html.dark-mode .branch-cash-muted { color: #FCD34D; }
 
-/* ============================================================
-   TRANSACTION MODAL
-   ============================================================ */
+/* TRANSACTION MODAL */
 .txn-modal-overlay {
     display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
@@ -2408,9 +2446,7 @@ html.dark-mode .branch-cash-muted { color: #FCD34D; }
     padding-right: 18px;
 }
 
-/* ============================================================
-   💰 BALANCE PREVIEW
-   ============================================================ */
+/* BALANCE PREVIEW */
 .txn-balance-preview {
     background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
     border: 2px solid #FCD34D;
@@ -2499,9 +2535,7 @@ html.dark-mode .branch-cash-muted { color: #FCD34D; }
 .txn-btn-submit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.5); }
 .txn-btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-/* ============================================================
-   🔥 RESET BALANCE MODAL
-   ============================================================ */
+/* RESET BALANCE MODAL */
 .reset-current-values {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2649,9 +2683,7 @@ html.dark-mode .reset-warning {
     border-color: #D97706;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+/* RESPONSIVE */
 @media (max-width: 1200px) {
     .summary-cards-soft { grid-template-columns: repeat(2, 1fr); }
 }
@@ -2957,7 +2989,7 @@ function showModalMessage(message, type) {
 }
 
 // ============================================================
-// 🔥 RESET PROVIDER BALANCE MODAL
+// RESET PROVIDER BALANCE MODAL
 // ============================================================
 function openResetBalanceModal(providerRowId, reportId, providerName, providerCode, providerColor, providerIcon, currentFloat) {
     const branchId = '<?php echo $selected_branch; ?>';
@@ -3055,7 +3087,7 @@ function showResetMessage(message, type) {
 }
 
 // ============================================================
-// 🔥 RESET BRANCH CASH MODAL
+// RESET BRANCH CASH MODAL
 // ============================================================
 function openResetCashModal(reportId, branchId, branchName, currentCash) {
     document.getElementById('resetCashReportId').value = reportId;

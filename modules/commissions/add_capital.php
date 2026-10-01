@@ -2,9 +2,13 @@
 // ================================================================
 // FILE: modules/commissions/add_capital.php
 // WAKALA FINANCIAL SYSTEM - ADD CAPITAL
-// ✅ All 4 cards INSIDE ONE main card
-// ✅ NEW: History table with View | Edit | Delete buttons
-// ✅ FIXED: No overflow, search left + scroll center in one row
+// ✅ GREEN THEME + BEAUTIFUL CARDS
+// ✅ Providers grid 3-per-row
+// ✅ Cash + Providers PAMOJA (shared pool)
+// ✅ Available Capital per provider (commission reference)
+// ✅ LIVE FILTER: Available Profit ina-update unapoingiza
+// ✅ History table with avatar + name + code
+// ✅ ALL TEXT IN ENGLISH
 // ================================================================
 
 error_reporting(E_ALL);
@@ -32,13 +36,34 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ============================================================
+function calculateTotalFloatFromReport($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
+
+// ============================================================
 // HANDLE DELETE CAPITAL ENTRY
 // ============================================================
 if (isset($_GET['delete_capital']) && !empty($_GET['delete_capital'])) {
     try {
         $delete_id = intval($_GET['delete_capital']);
         
-        // Get capital entry info
         $stmt = $db->prepare("SELECT * FROM commissions WHERE id = ? AND commission_number LIKE 'CAP-%'");
         $stmt->execute([$delete_id]);
         $capital_entry = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -54,9 +79,8 @@ if (isset($_GET['delete_capital']) && !empty($_GET['delete_capital'])) {
         
         $db->beginTransaction();
         
-        // Get latest daily report
         $stmt = $db->prepare("
-            SELECT id, current_cash, current_capital 
+            SELECT id, current_cash, current_capital, current_float
             FROM daily_reports 
             WHERE branch_id = ? 
             ORDER BY report_date DESC, id DESC 
@@ -68,34 +92,42 @@ if (isset($_GET['delete_capital']) && !empty($_GET['delete_capital'])) {
         if ($latest_dr) {
             $dr_id = $latest_dr['id'];
             
-            if ($capital_target === 'float') {
-                // Reverse float changes for each provider
-                if (isset($provider_data_decoded['entries']) && is_array($provider_data_decoded['entries'])) {
-                    // Old format - couldn't reverse individual providers reliably
-                    // Just remove from capital
+            if (isset($provider_data_decoded['entries']) && is_array($provider_data_decoded['entries'])) {
+                foreach ($provider_data_decoded['entries'] as $entry) {
+                    if (!isset($entry['provider_id'])) continue;
+                    
+                    $pid = intval($entry['provider_id']);
+                    $amt = floatval($entry['amount']);
+                    
+                    $stmt = $db->prepare("
+                        SELECT id, current_float 
+                        FROM daily_report_providers 
+                        WHERE daily_report_id = ? AND provider_id = ?
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $stmt->execute([$dr_id, $pid]);
+                    $drp = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($drp) {
+                        $new_float = max(0, floatval($drp['current_float']) - $amt);
+                        $stmt = $db->prepare("UPDATE daily_report_providers SET current_float = ?, updated_at = NOW() WHERE id = ?");
+                        $stmt->execute([$new_float, $drp['id']]);
+                    }
                 }
-                
-                $new_capital = max(0, floatval($latest_dr['current_capital']) - $amount_to_remove);
-                $stmt = $db->prepare("
-                    UPDATE daily_reports 
-                    SET current_capital = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_capital, $dr_id]);
-            } else {
-                // Reverse cash
-                $new_cash = max(0, floatval($latest_dr['current_cash']) - $amount_to_remove);
-                $new_capital = max(0, floatval($latest_dr['current_capital']) - $amount_to_remove);
-                $stmt = $db->prepare("
-                    UPDATE daily_reports 
-                    SET current_cash = ?, current_capital = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_cash, $new_capital, $dr_id]);
             }
+            
+            $new_total_float = calculateTotalFloatFromReport($db, $dr_id);
+            $current_cash = floatval($latest_dr['current_cash']);
+            $new_capital = $new_total_float + $current_cash;
+            
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_float = ?, current_capital = ?, updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$new_total_float, $new_capital, $dr_id]);
         }
         
-        // Delete capital entry
         $stmt = $db->prepare("DELETE FROM commissions WHERE id = ?");
         $stmt->execute([$delete_id]);
         
@@ -207,7 +239,7 @@ if ($selected_branch > 0) {
     if ($available_profit < 0) $available_profit = 0;
     
     $stmt = $db->prepare("
-        SELECT current_cash, current_capital 
+        SELECT id, current_cash, current_capital, current_float
         FROM daily_reports 
         WHERE branch_id = ? 
         ORDER BY report_date DESC, id DESC 
@@ -215,19 +247,11 @@ if ($selected_branch > 0) {
     ");
     $stmt->execute([$selected_branch]);
     $dr = $stmt->fetch(PDO::FETCH_ASSOC);
+    
     if ($dr) {
         $current_branch_cash = floatval($dr['current_cash'] ?? 0);
+        $current_branch_float = calculateTotalFloatFromReport($db, $dr['id']);
     }
-    
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(drp.current_float), 0) as total_float
-        FROM daily_report_providers drp
-        INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-        WHERE dr.branch_id = ?
-        AND dr.id = (SELECT MAX(id) FROM daily_reports WHERE branch_id = ?)
-    ");
-    $stmt->execute([$selected_branch, $selected_branch]);
-    $current_branch_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
     
     $current_branch_capital = $current_branch_float + $current_branch_cash;
 }
@@ -247,6 +271,8 @@ $sql = "SELECT
             c.created_at,
             c.branch_id,
             emp.full_name as employee_name,
+            emp.employee_id as employee_code,
+            emp.profile_pic as employee_avatar,
             b.branch_name as branch_name,
             b.branch_code as branch_code
         FROM commissions c
@@ -274,9 +300,24 @@ $total_capital_additions_count = count($capital_additions);
 
 // ============================================================
 // GET ALL PROVIDERS FOR SELECTED BRANCH
+// ✅ Pia tunachukua commission ya kila provider
 // ============================================================
 $providers_list = [];
+$provider_commissions = [];
+
 if ($selected_branch > 0) {
+    // Get latest daily report
+    $stmt = $db->prepare("
+        SELECT id FROM daily_reports 
+        WHERE branch_id = ? 
+        ORDER BY report_date DESC, id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$selected_branch]);
+    $latest_dr_info = $stmt->fetch(PDO::FETCH_ASSOC);
+    $latest_dr_id = $latest_dr_info ? $latest_dr_info['id'] : 0;
+    
+    // Get providers with float
     $stmt = $db->prepare("
         SELECT 
             p.id,
@@ -287,10 +328,10 @@ if ($selected_branch > 0) {
             p.provider_type,
             bp.provider_code as branch_provider_code,
             COALESCE(
-                (SELECT drp.current_float FROM daily_report_providers drp
-                 INNER JOIN daily_reports dr ON drp.daily_report_id = dr.id
-                 WHERE dr.branch_id = ? AND drp.provider_id = p.id
-                 ORDER BY dr.report_date DESC, dr.id DESC LIMIT 1),
+                (SELECT drp.current_float 
+                 FROM daily_report_providers drp
+                 WHERE drp.daily_report_id = ? AND drp.provider_id = p.id
+                 ORDER BY drp.id DESC LIMIT 1),
                 0
             ) as current_float
         FROM providers p
@@ -298,8 +339,34 @@ if ($selected_branch > 0) {
         WHERE bp.branch_id = ? AND bp.is_active = 1 AND p.is_active = 1
         ORDER BY p.display_order, p.provider_name
     ");
-    $stmt->execute([$selected_branch, $selected_branch]);
+    $stmt->execute([$latest_dr_id, $selected_branch]);
     $providers_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ✅ Get commission per provider (from provider_data JSON)
+    $stmt = $db->prepare("
+        SELECT provider_data
+        FROM commissions 
+        WHERE branch_id = ? 
+          AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)
+    ");
+    $stmt->execute([$selected_branch]);
+    $commission_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($commission_rows as $cr) {
+        $data = json_decode($cr['provider_data'] ?? '{}', true);
+        if (is_array($data)) {
+            foreach ($data as $pid => $amt) {
+                $pid = intval($pid);
+                $amt = floatval($amt);
+                if ($pid > 0 && $amt > 0) {
+                    if (!isset($provider_commissions[$pid])) {
+                        $provider_commissions[$pid] = 0;
+                    }
+                    $provider_commissions[$pid] += $amt;
+                }
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -312,13 +379,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $capital_date = $_POST['capital_date'] ?? date('Y-m-d');
         $branch_id = intval($_POST['branch_id'] ?? 0);
-        $capital_target = $_POST['capital_target'] ?? 'float';
         $notes = trim($_POST['notes'] ?? '');
         
         if ($branch_id <= 0) {
             throw new Exception('Please select a branch.');
         }
         
+        // Recalculate available
         $stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions WHERE branch_id = ?");
         $stmt->execute([$branch_id]);
         $comm = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
@@ -376,14 +443,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $dr_id = $latest_dr['id'];
         $grand_total_added = 0;
         $entries_added = [];
+        $cash_amount_submitted = floatval(str_replace(',', '', $_POST['cash_amount'] ?? 0));
+        $provider_amounts = $_POST['provider_amounts'] ?? [];
         
-        if ($capital_target === 'float') {
-            $provider_amounts = $_POST['provider_amounts'] ?? [];
-            
-            if (empty($provider_amounts)) {
-                throw new Exception('Please enter at least one provider amount.');
+        // ✅ PROCESS CASH FIRST
+        if ($cash_amount_submitted > 0) {
+            if ($cash_amount_submitted > $available) {
+                throw new Exception('Cash amount exceeds available profit (' . formatCurrency($available) . ').');
             }
             
+            $new_cash = floatval($latest_dr['current_cash']) + $cash_amount_submitted;
+            $new_total_float = calculateTotalFloatFromReport($db, $dr_id);
+            $new_capital = $new_total_float + $new_cash;
+            
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_cash = ?, current_float = ?, current_capital = ?, updated_at = NOW() 
+                WHERE id = ?
+            ");
+            $stmt->execute([$new_cash, $new_total_float, $new_capital, $dr_id]);
+            
+            $grand_total_added += $cash_amount_submitted;
+            $entries_added[] = [
+                'type' => 'cash',
+                'name' => 'Branch Cash',
+                'amount' => $cash_amount_submitted
+            ];
+            
+            $latest_dr['current_cash'] = $new_cash;
+        }
+        
+        // ✅ PROCESS PROVIDERS
+        if (!empty($provider_amounts)) {
             foreach ($provider_amounts as $provider_id => $amount_raw) {
                 $provider_id = intval($provider_id);
                 $amount = floatval(str_replace(',', '', $amount_raw));
@@ -433,40 +524,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 $grand_total_added += $amount;
                 $entries_added[] = [
+                    'type' => 'provider',
                     'provider_id' => $provider_id,
                     'provider_name' => $provider_info['provider_name'],
                     'amount' => $amount
                 ];
             }
             
-            if ($grand_total_added <= 0) {
-                throw new Exception('Please enter valid amounts for at least one provider.');
-            }
+            // ✅ Recalculate float
+            $new_total_float = calculateTotalFloatFromReport($db, $dr_id);
+            $new_cash = floatval($latest_dr['current_cash']);
+            $new_capital = $new_total_float + $new_cash;
             
-            $new_capital = floatval($latest_dr['current_capital']) + $grand_total_added;
-            $stmt = $db->prepare("UPDATE daily_reports SET current_capital = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$new_capital, $dr_id]);
-            
-        } else {
-            $amount = floatval(str_replace(',', '', $_POST['amount'] ?? 0));
-            
-            if ($amount <= 0) {
-                throw new Exception('Please enter a valid amount.');
-            }
-            
-            if ($amount > $available) {
-                throw new Exception('Amount exceeds available profit (' . formatCurrency($available) . ').');
-            }
-            
-            $new_cash = floatval($latest_dr['current_cash']) + $amount;
-            $new_capital = floatval($latest_dr['current_capital']) + $amount;
-            
-            $stmt = $db->prepare("UPDATE daily_reports SET current_cash = ?, current_capital = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$new_cash, $new_capital, $dr_id]);
-            
-            $grand_total_added = $amount;
-            $entries_added[] = 'Branch Cash: ' . formatCurrency($amount);
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_float = ?, current_capital = ?, updated_at = NOW() 
+                WHERE id = ?
+            ");
+            $stmt->execute([$new_total_float, $new_capital, $dr_id]);
         }
+        
+        if ($grand_total_added <= 0) {
+            throw new Exception('Please enter at least one amount (Cash or Provider).');
+        }
+        
+        // Determine main target for display
+        $capital_target = (count($entries_added) === 1 && $entries_added[0]['type'] === 'cash') ? 'cash' : 'float';
         
         $commission_number = 'CAP-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
         
@@ -475,8 +558,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             'entries' => $entries_added
         ]);
         
-        $notes_combined = '[CAPITAL ADDITION] ' . 
-            ($capital_target === 'float' ? 'To Provider Float' : 'To Branch Cash');
+        $notes_combined = '[CAPITAL ADDITION]';
         if (!empty($notes)) {
             $notes_combined .= ' - ' . $notes;
         }
@@ -614,7 +696,9 @@ include_once '../../includes/admin_topbar.php';
             
         <?php else: ?>
             
-            <!-- 4 CARDS INSIDE ONE MAIN CARD -->
+            <!-- ============================================================
+                 ✅ 4 CARDS INSIDE ONE MAIN CARD - GREEN THEME
+                 ============================================================ -->
             <div class="capital-summary-wrapper">
                 <div class="capital-summary-header">
                     <div class="csh-left">
@@ -625,7 +709,7 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     <div class="csh-badge">
-                        <i class="fas fa-check-circle"></i> Max to add: <?php echo formatCurrency($available_profit); ?>
+                        <i class="fas fa-check-circle"></i> Max to add: <span id="maxToAddBadge"><?php echo formatCurrency($available_profit); ?></span>
                     </div>
                 </div>
                 
@@ -639,13 +723,17 @@ include_once '../../includes/admin_topbar.php';
                         <div class="cci-sublabel"><i class="fas fa-calculator"></i> Float + Cash</div>
                     </div>
                     
-                    <div class="cc-inner card-inner-available">
+                    <!-- ✅ AVAILABLE PROFIT - LIVE FILTER -->
+                    <div class="cc-inner card-inner-available" id="availableProfitCard">
                         <div class="cci-header">
                             <div class="cci-icon cci-icon-yellow"><i class="fas fa-chart-line"></i></div>
                             <span class="cci-label">AVAILABLE PROFIT</span>
                         </div>
-                        <div class="cci-value cci-value-yellow"><?php echo formatCurrency($available_profit); ?></div>
-                        <div class="cci-sublabel"><i class="fas fa-check-circle"></i> Max to add</div>
+                        <div class="cci-value cci-value-yellow" id="availableProfitDisplay"><?php echo formatCurrency($available_profit); ?></div>
+                        <div class="cci-sublabel">
+                            <i class="fas fa-bolt"></i> 
+                            <span id="availableSublabel">Max to add</span>
+                        </div>
                     </div>
                     
                     <div class="cc-inner card-inner-added">
@@ -700,14 +788,18 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
             
-            <!-- MAIN FORM -->
+            <!-- ============================================================
+                 ✅ MAIN FORM - CASH + PROVIDERS PAMOJA
+                 ============================================================ -->
             <div class="form-container">
                 <form method="POST" action="" class="main-form" id="capitalForm" onsubmit="return validateForm()">
                     <input type="hidden" name="action" value="add_capital">
                     <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
                     <input type="hidden" name="available_profit" id="availableProfitInput" value="<?php echo $available_profit; ?>">
                     <input type="hidden" name="current_capital" id="currentCapitalInput" value="<?php echo $current_branch_capital; ?>">
+                    <input type="hidden" name="current_cash" id="currentCashInput" value="<?php echo $current_branch_cash; ?>">
                     
+                    <!-- CAPITAL INFORMATION -->
                     <div class="form-section">
                         <div class="section-header">
                             <h3><i class="fas fa-info-circle"></i> Capital Information</h3>
@@ -732,82 +824,107 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     
-                    <div class="form-section">
-                        <div class="section-header">
-                            <h3><i class="fas fa-bullseye"></i> Where to Add Capital?</h3>
-                        </div>
-                        
-                        <div class="target-options">
-                            <label class="target-card" id="targetFloatCard">
-                                <input type="radio" name="capital_target" value="float" onchange="onTargetChange('float')" checked>
-                                <div class="target-content">
-                                    <div class="target-icon target-icon-float">
-                                        <i class="fas fa-university"></i>
-                                    </div>
-                                    <div class="target-text">
-                                        <span class="target-title">Add to Provider Float</span>
-                                        <span class="target-desc">Select one or more providers to increase their float</span>
-                                    </div>
-                                </div>
-                            </label>
-                            
-                            <label class="target-card" id="targetCashCard">
-                                <input type="radio" name="capital_target" value="cash" onchange="onTargetChange('cash')">
-                                <div class="target-content">
-                                    <div class="target-icon target-icon-cash">
-                                        <i class="fas fa-money-bill-wave"></i>
-                                    </div>
-                                    <div class="target-text">
-                                        <span class="target-title">Add to Branch Cash</span>
-                                        <span class="target-desc">Increase the branch cash balance</span>
-                                    </div>
-                                </div>
-                            </label>
+                    <!-- ✅ AVAILABLE PROFIT INFO BANNER -->
+                    <div class="form-section available-profit-banner-section">
+                        <div class="available-profit-banner">
+                            <div class="apb-icon">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
+                            <div class="apb-content">
+                                <span class="apb-label">Available Profit (Shared Pool)</span>
+                                <span class="apb-value" id="apbRemainingDisplay"><?php echo formatCurrency($available_profit); ?></span>
+                                <span class="apb-sub">This is the maximum you can distribute between Cash and Providers</span>
+                            </div>
+                            <div class="apb-badge">
+                                <i class="fas fa-bolt"></i>
+                                <span id="apbUsedBadge">Used: TSh 0</span>
+                            </div>
                         </div>
                     </div>
                     
-                    <div class="form-section" id="providerSection">
+                    <!-- ✅ CASH SECTION - PAMOJA NA PROVIDERS -->
+                    <div class="form-section cash-section-container">
                         <div class="section-header">
-                            <h3><i class="fas fa-university"></i> Select Providers & Amounts</h3>
-                            <span class="section-badge">Check providers and enter amounts</span>
+                            <h3><i class="fas fa-money-bill-wave"></i> Add to Branch Cash (Optional)</h3>
+                            <span class="section-badge">
+                                Current Cash: <?php echo formatCurrency($current_branch_cash); ?>
+                            </span>
+                        </div>
+                        
+                        <div class="cash-input-wrapper">
+                            <label for="cash_amount" class="cash-input-label">
+                                <i class="fas fa-plus-circle"></i> Cash Amount (TSh)
+                            </label>
+                            <div class="cash-input-group">
+                                <span class="cash-currency">TSh</span>
+                                <input type="text" 
+                                       id="cash_amount" 
+                                       name="cash_amount" 
+                                       class="cash-input-field" 
+                                       placeholder="0" 
+                                       oninput="formatMoneyInput(this); updatePreview();">
+                            </div>
+                            <div class="cash-input-hint">
+                                <i class="fas fa-info-circle"></i>
+                                Leave empty if you only want to add to Provider Float
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- ✅ PROVIDERS SECTION - GRID 3-COL -->
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3><i class="fas fa-university"></i> Add to Provider Float (Optional)</h3>
+                            <span class="section-badge">
+                                <?php echo count($providers_list); ?> providers • Check providers and enter amounts
+                            </span>
                         </div>
                         
                         <?php if (count($providers_list) > 0): ?>
-                            <div class="providers-header-row">
-                                <div class="ph-checkbox"></div>
-                                <div class="ph-provider">Provider</div>
-                                <div class="ph-code">Code</div>
-                                <div class="ph-float">Current Float</div>
-                                <div class="ph-amount">Amount to Add</div>
-                            </div>
-                            
-                            <div class="providers-list">
-                                <?php foreach ($providers_list as $p): ?>
-                                    <div class="provider-row">
-                                        <div class="pr-checkbox">
+                            <div class="providers-cards-grid">
+                                <?php foreach ($providers_list as $p): 
+                                    $commission = $provider_commissions[$p['id']] ?? 0;
+                                ?>
+                                    <div class="provider-card-item" data-provider-id="<?php echo $p['id']; ?>">
+                                        <div class="pc-checkbox-wrapper">
                                             <input type="checkbox" 
                                                    class="provider-checkbox" 
                                                    data-provider-id="<?php echo $p['id']; ?>"
                                                    id="chk_<?php echo $p['id']; ?>"
                                                    onchange="onProviderCheck(this)">
+                                            <label for="chk_<?php echo $p['id']; ?>" class="pc-check-label"></label>
                                         </div>
-                                        <div class="pr-provider">
-                                            <div class="provider-icon-small" style="background: <?php echo htmlspecialchars($p['color_code']); ?>;">
+                                        
+                                        <div class="pc-header">
+                                            <div class="pc-icon" style="background: <?php echo htmlspecialchars($p['color_code']); ?>;">
                                                 <i class="<?php echo htmlspecialchars($p['icon_class']); ?>"></i>
                                             </div>
-                                            <span class="provider-name-small"><?php echo htmlspecialchars($p['provider_name']); ?></span>
+                                            <div class="pc-info">
+                                                <span class="pc-name"><?php echo htmlspecialchars($p['provider_name']); ?></span>
+                                                <span class="pc-code"><?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?></span>
+                                            </div>
                                         </div>
-                                        <div class="pr-code">
-                                            <span class="code-pill"><?php echo htmlspecialchars($p['branch_provider_code'] ?? $p['main_code']); ?></span>
+                                        
+                                        <div class="pc-float-row">
+                                            <span class="pc-float-label">
+                                                <i class="fas fa-coins"></i> Float:
+                                            </span>
+                                            <span class="pc-float-value"><?php echo formatCurrency($p['current_float']); ?></span>
                                         </div>
-                                        <div class="pr-float">
-                                            <span class="float-pill"><?php echo formatCurrency($p['current_float']); ?></span>
+                                        
+                                        <div class="pc-available-row">
+                                            <span class="pc-available-label">
+                                                <i class="fas fa-chart-line"></i> Commission:
+                                            </span>
+                                            <span class="pc-available-value"><?php echo formatCurrency($commission); ?></span>
                                         </div>
-                                        <div class="pr-amount">
+                                        
+                                        <div class="pc-input-wrapper">
+                                            <span class="pc-currency">TSh</span>
                                             <input type="text" 
                                                    name="provider_amounts[<?php echo $p['id']; ?>]" 
                                                    id="amt_<?php echo $p['id']; ?>"
-                                                   class="form-control amount-input" 
+                                                   class="pc-input amount-input" 
                                                    placeholder="0"
                                                    disabled
                                                    oninput="formatMoneyInput(this); updatePreview();">
@@ -817,8 +934,14 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                             
                             <div class="providers-footer">
-                                <div class="pf-selected">Selected: <strong id="selectedCount">0</strong> / <?php echo count($providers_list); ?></div>
-                                <div class="pf-total">Total to Add: <strong id="totalProvidersAmount">TSh 0</strong></div>
+                                <div class="pf-selected">
+                                    <i class="fas fa-check-circle"></i>
+                                    Selected: <strong id="selectedCount">0</strong> / <?php echo count($providers_list); ?>
+                                </div>
+                                <div class="pf-total">
+                                    <i class="fas fa-calculator"></i>
+                                    Total: <strong id="totalProvidersAmount">TSh 0</strong>
+                                </div>
                             </div>
                         <?php else: ?>
                             <div class="empty-providers">
@@ -828,52 +951,7 @@ include_once '../../includes/admin_topbar.php';
                         <?php endif; ?>
                     </div>
                     
-                    <div class="form-section cash-section-container" id="cashSection" style="display:none;">
-                        <div class="section-header">
-                            <h3><i class="fas fa-money-bill-wave"></i> Branch Cash Information</h3>
-                        </div>
-                        
-                        <div class="cash-status-card">
-                            <div class="cash-card-icon"><i class="fas fa-wallet"></i></div>
-                            <div class="cash-card-content">
-                                <div class="cash-card-item">
-                                    <span class="cash-card-label">Current Cash</span>
-                                    <span class="cash-card-value cash-current"><?php echo formatCurrency($current_branch_cash); ?></span>
-                                </div>
-                                <div class="cash-card-arrow"><i class="fas fa-arrow-right"></i></div>
-                                <div class="cash-card-item">
-                                    <span class="cash-card-label">After Adding</span>
-                                    <span class="cash-card-value cash-after" id="cashAfterDisplay"><?php echo formatCurrency($current_branch_cash); ?></span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="cash-input-wrapper">
-                            <label for="amount" class="cash-input-label">
-                                <i class="fas fa-plus-circle"></i> Amount to Add (TSh) <span class="required">*</span>
-                            </label>
-                            <div class="cash-input-group">
-                                <span class="cash-currency">TSh</span>
-                                <input type="text" id="amount" name="amount" class="cash-input-field" placeholder="0" oninput="formatMoneyInput(this); updatePreview();">
-                            </div>
-                            <div class="cash-input-hint">
-                                <i class="fas fa-info-circle"></i>
-                                Maximum you can add: <strong><?php echo formatCurrency($available_profit); ?></strong>
-                            </div>
-                        </div>
-                        
-                        <div class="quick-amounts">
-                            <span class="qa-label">Quick:</span>
-                            <button type="button" class="qa-btn" onclick="setQuickAmount(100000)">100K</button>
-                            <button type="button" class="qa-btn" onclick="setQuickAmount(500000)">500K</button>
-                            <button type="button" class="qa-btn" onclick="setQuickAmount(1000000)">1M</button>
-                            <button type="button" class="qa-btn" onclick="setQuickAmount(5000000)">5M</button>
-                            <button type="button" class="qa-btn qa-btn-max" onclick="setQuickAmount(<?php echo $available_profit; ?>)">
-                                <i class="fas fa-bolt"></i> MAX
-                            </button>
-                        </div>
-                    </div>
-                    
+                    <!-- NOTES -->
                     <div class="form-section">
                         <div class="section-header">
                             <h3><i class="fas fa-sticky-note"></i> Additional Notes</h3>
@@ -885,9 +963,10 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     
+                    <!-- ✅ SUMMARY - LIVE -->
                     <div class="form-section summary-section">
                         <div class="section-header">
-                            <h3><i class="fas fa-calculator"></i> Summary</h3>
+                            <h3><i class="fas fa-calculator"></i> Live Summary</h3>
                         </div>
                         <div class="summary-preview">
                             <div class="summary-preview-item">
@@ -895,16 +974,25 @@ include_once '../../includes/admin_topbar.php';
                                 <span class="sp-value"><?php echo formatCurrency($current_branch_capital); ?></span>
                             </div>
                             <div class="summary-preview-item">
-                                <span class="sp-label">Amount to Add:</span>
-                                <span class="sp-value sp-amount" id="previewAmount">TSh 0</span>
+                                <span class="sp-label">Cash Adding:</span>
+                                <span class="sp-value sp-amount" id="previewCash">TSh 0</span>
+                            </div>
+                            <div class="summary-preview-item">
+                                <span class="sp-label">Providers Adding:</span>
+                                <span class="sp-value sp-amount" id="previewProviders">TSh 0</span>
                             </div>
                             <div class="summary-preview-item highlight">
+                                <span class="sp-label">Total Adding:</span>
+                                <span class="sp-value sp-total" id="previewTotal">TSh 0</span>
+                            </div>
+                            <div class="summary-preview-item highlight-purple">
                                 <span class="sp-label">Capital After Add:</span>
                                 <span class="sp-value sp-after" id="previewAfter"><?php echo formatCurrency($current_branch_capital); ?></span>
                             </div>
                         </div>
                     </div>
                     
+                    <!-- ACTIONS -->
                     <div class="form-actions">
                         <button type="submit" class="btn btn-submit" id="submitBtn">
                             <i class="fas fa-save"></i> Save Capital
@@ -921,13 +1009,10 @@ include_once '../../includes/admin_topbar.php';
             
             <!-- ============================================================
                  ✅ CAPITAL ADDITIONS HISTORY TABLE
-                 Search + Scroll on SAME ROW
                  ============================================================ -->
             <div class="table-container-history">
                 
-                <!-- HEADER with Search + Scroll + Count on ONE ROW -->
                 <div class="history-header-row">
-                    <!-- LEFT: Search -->
                     <div class="hhr-left">
                         <div class="history-search-wrapper">
                             <i class="fas fa-search"></i>
@@ -942,7 +1027,6 @@ include_once '../../includes/admin_topbar.php';
                         </div>
                     </div>
                     
-                    <!-- CENTER: Scroll Arrows -->
                     <div class="hhr-center">
                         <button type="button" class="scroll-btn-history" onclick="scrollHistoryTable('left')" title="Scroll Left">
                             <i class="fas fa-chevron-left"></i>
@@ -955,7 +1039,6 @@ include_once '../../includes/admin_topbar.php';
                         </button>
                     </div>
                     
-                    <!-- RIGHT: Count -->
                     <div class="hhr-right">
                         <span class="history-count-badge">
                             <i class="fas fa-history"></i>
@@ -1000,11 +1083,15 @@ include_once '../../includes/admin_topbar.php';
                                     $history_search = strtolower(
                                         $cap['commission_number'] . ' ' .
                                         ($cap['employee_name'] ?? '') . ' ' .
+                                        ($cap['employee_code'] ?? '') . ' ' .
                                         ($cap['branch_name'] ?? '') . ' ' .
                                         $cap['commission_date'] . ' ' .
                                         $target_label . ' ' .
                                         ($cap['notes'] ?? '')
                                     );
+                                    
+                                    $emp_avatar = $cap['employee_avatar'] ?? '';
+                                    $emp_initial = strtoupper(substr($cap['employee_name'] ?? 'N', 0, 1));
                                 ?>
                                     <tr class="history-row-item" data-search="<?php echo htmlspecialchars($history_search); ?>">
                                         <td><span class="row-num-history"><?php echo $h_counter++; ?></span></td>
@@ -1027,10 +1114,31 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                         <td>
-                                            <span class="employee-badge-history">
-                                                <i class="fas fa-user-circle"></i>
-                                                <?php echo htmlspecialchars($cap['employee_name'] ?? 'N/A'); ?>
-                                            </span>
+                                            <div class="employee-cell">
+                                                <?php if ($emp_avatar && file_exists('../../' . $emp_avatar)): ?>
+                                                    <img src="../../<?php echo htmlspecialchars($emp_avatar); ?>" 
+                                                         alt="<?php echo htmlspecialchars($cap['employee_name']); ?>"
+                                                         class="employee-avatar-img"
+                                                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                                    <div class="employee-avatar-letter" style="display:none;">
+                                                        <?php echo $emp_initial; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div class="employee-avatar-letter">
+                                                        <?php echo $emp_initial; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <div class="employee-name-wrapper">
+                                                    <span class="employee-name-text">
+                                                        <?php echo htmlspecialchars($cap['employee_name'] ?? 'N/A'); ?>
+                                                    </span>
+                                                    <?php if (!empty($cap['employee_code'])): ?>
+                                                        <span class="employee-code-text">
+                                                            <?php echo htmlspecialchars($cap['employee_code']); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
                                         </td>
                                         <td>
                                             <span class="target-badge target-<?php echo $target_class; ?>">
@@ -1055,23 +1163,19 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                         <td>
-                                            <!-- ✅ ACTION BUTTONS -->
                                             <div class="history-actions">
-                                                <!-- ✅ VIEW -->
                                                 <a href="view_capital.php?id=<?php echo $cap['id']; ?>" 
                                                    class="btn-history btn-history-view" 
                                                    title="View Details">
                                                     <i class="fas fa-eye"></i>
                                                 </a>
                                                 
-                                                <!-- ✅ EDIT -->
                                                 <a href="edit_capital.php?id=<?php echo $cap['id']; ?>" 
                                                    class="btn-history btn-history-edit" 
                                                    title="Edit Capital">
                                                     <i class="fas fa-edit"></i>
                                                 </a>
                                                 
-                                                <!-- ✅ DELETE (reverses daily_reports) -->
                                                 <a href="add_capital.php?delete_capital=<?php echo $cap['id']; ?>&branch_id=<?php echo $cap['branch_id']; ?>" 
                                                    class="btn-history btn-history-delete" 
                                                    onclick="return confirmDeleteCapital('<?php echo addslashes($cap['commission_number']); ?>', '<?php echo formatCurrency($cap['allocated_amount']); ?>')"
@@ -1097,7 +1201,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="empty-history">
                         <i class="fas fa-history"></i>
                         <h3>No Capital Additions Yet</h3>
-                        <p>Capital additions utaonekana hapa mara baada ya kuongeza capital.</p>
+                        <p>Capital additions will appear here once you add capital.</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -1110,7 +1214,7 @@ include_once '../../includes/admin_topbar.php';
 
 <style>
 /* ============================================================
-   GLOBAL RESET - PREVENT OVERFLOW
+   GLOBAL
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 html, body {
@@ -1140,7 +1244,10 @@ html, body {
     --text-light: #9ca3af;
     --border-color: #e5e7eb;
     --shadow-color: rgba(0,0,0,0.06);
-    --shadow-hover: rgba(0,0,0,0.12);
+    --green-primary: #059669;
+    --green-dark: #047857;
+    --green-light: #D1FAE5;
+    --green-accent: #10B981;
 }
 html.dark-mode {
     --bg-body: #0f172a;
@@ -1152,17 +1259,18 @@ html.dark-mode {
     --text-muted: #94a3b8;
     --text-light: #64748b;
     --border-color: #334155;
+    --green-light: #065F46;
 }
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* BRANCH CARD */
+/* BRANCH CARD - GREEN */
 .branch-status-card {
     display: flex; align-items: center; gap: 18px;
     padding: 18px 24px;
-    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
     border-radius: 12px; margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.35);
+    box-shadow: 0 4px 20px rgba(5, 150, 105, 0.35);
     flex-wrap: wrap; color: #FFFFFF;
     position: relative; overflow: hidden;
 }
@@ -1176,7 +1284,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     width: 56px; height: 56px;
     background: rgba(255, 255, 255, 0.15);
     border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    font-size: 24px; color: #FFFFFF; flex-shrink: 0;
+    font-size: 24px; color: #FCD34D; flex-shrink: 0;
     position: relative; z-index: 1;
 }
 .branch-status-info {
@@ -1191,10 +1299,11 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .branch-status-name { font-size: 20px; font-weight: 700; color: #FFFFFF; }
 .branch-status-code {
     font-size: 12px; font-weight: 600;
-    color: rgba(255, 255, 255, 0.85);
+    color: #FCD34D;
     padding: 3px 12px;
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(252, 211, 77, 0.2);
     border-radius: 12px;
+    border: 1px solid rgba(252, 211, 77, 0.3);
 }
 .btn-back-card {
     display: flex; align-items: center; gap: 6px;
@@ -1218,7 +1327,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     font-size: 20px; font-weight: 700;
     color: var(--text-primary); margin: 0;
 }
-.page-header-left h2 i { color: #F59E0B; margin-right: 8px; }
+.page-header-left h2 i { color: #10B981; margin-right: 8px; }
 .page-subtitle {
     font-size: 13px; color: var(--text-muted);
     background: var(--bg-hover);
@@ -1280,14 +1389,14 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
     transition: all 0.3s ease;
 }
 .branch-select-card:hover {
-    border-color: #F59E0B;
+    border-color: #10B981;
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(245, 158, 11, 0.2);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.2);
 }
 .branch-select-icon {
     width: 48px; height: 48px;
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #D97706;
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    color: #059669;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
     font-size: 20px; flex-shrink: 0;
@@ -1295,20 +1404,20 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
 .branch-select-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .branch-select-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
 .branch-select-code {
-    font-size: 11px; font-weight: 700; color: #D97706;
-    background: #FEF3C7; padding: 2px 8px; border-radius: 8px;
+    font-size: 11px; font-weight: 700; color: #059669;
+    background: #D1FAE5; padding: 2px 8px; border-radius: 8px;
     align-self: flex-start; font-family: 'Courier New', monospace;
 }
 .branch-select-arrow { color: var(--text-light); font-size: 14px; transition: all 0.3s ease; }
-.branch-select-card:hover .branch-select-arrow { color: #F59E0B; transform: translateX(4px); }
+.branch-select-card:hover .branch-select-arrow { color: #10B981; transform: translateX(4px); }
 
-/* CAPITAL SUMMARY WRAPPER */
+/* CAPITAL SUMMARY WRAPPER - GREEN */
 .capital-summary-wrapper {
-    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
     border-radius: 16px;
     padding: 24px;
     margin-bottom: 20px;
-    box-shadow: 0 8px 32px rgba(124, 58, 237, 0.35);
+    box-shadow: 0 8px 32px rgba(5, 150, 105, 0.35);
     position: relative;
     overflow: hidden;
     color: #FFFFFF;
@@ -1394,6 +1503,16 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
 .card-inner-added::before { background: #86EFAC; }
 .card-inner-after::before { background: #E879F9; }
 
+/* Pulse kama available profit imebadilika */
+.card-inner-available.live-updated {
+    animation: availablePulse 0.6s ease;
+}
+@keyframes availablePulse {
+    0% { background: rgba(255, 255, 255, 0.1); }
+    50% { background: rgba(252, 211, 77, 0.35); box-shadow: 0 0 30px rgba(252, 211, 77, 0.6); }
+    100% { background: rgba(255, 255, 255, 0.1); }
+}
+
 .cci-header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .cci-icon {
     width: 42px; height: 42px;
@@ -1434,12 +1553,6 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
     border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 .cci-sublabel i { font-size: 9px; }
-
-@keyframes pulse-purple {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.08); text-shadow: 0 0 20px rgba(240, 171, 252, 0.8); }
-}
-.cci-value-purple.updated { animation: pulse-purple 0.6s ease; }
 
 /* BREAKDOWN */
 .breakdown-grid {
@@ -1503,7 +1616,7 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
     flex-wrap: wrap; gap: 8px;
 }
 .section-header h3 { font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0; }
-.section-header h3 i { color: #F59E0B; margin-right: 8px; }
+.section-header h3 i { color: #10B981; margin-right: 8px; }
 .section-badge {
     font-size: 11px; color: var(--text-muted);
     background: var(--bg-hover);
@@ -1535,183 +1648,105 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
 }
 .form-control.textarea-control { padding: 12px 14px; min-height: 80px; resize: vertical; }
 .form-control:focus {
-    border-color: #F59E0B;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+    border-color: #10B981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
 }
 .form-control:disabled { opacity: 0.7; cursor: not-allowed; }
 
-.target-options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.target-card { position: relative; display: block; cursor: pointer; border-radius: 12px; overflow: hidden; }
-.target-card input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
-.target-content {
-    display: flex; align-items: center; gap: 14px;
-    padding: 16px 18px;
-    background: var(--bg-input);
-    border: 2px solid var(--border-color);
-    border-radius: 12px;
-    transition: all 0.3s ease;
+/* ✅ AVAILABLE PROFIT BANNER */
+.available-profit-banner-section {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+    padding: 20px 24px !important;
 }
-.target-card:hover .target-content { border-color: #FCD34D; }
-.target-card input[type="radio"]:checked + .target-content {
-    border-color: #F59E0B;
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+html.dark-mode .available-profit-banner-section {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
 }
-html.dark-mode .target-card input[type="radio"]:checked + .target-content {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-}
-.target-icon {
-    width: 52px; height: 52px;
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0;
-}
-.target-icon-float { background: #DBEAFE; color: #1D4ED8; }
-.target-icon-cash { background: #D1FAE5; color: #059669; }
-.target-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.target-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.target-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
-
-.providers-header-row {
-    display: grid;
-    grid-template-columns: 40px 2fr 1fr 1.2fr 1.5fr;
-    gap: 12px;
-    padding: 10px 14px;
-    background: var(--bg-hover);
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    margin-bottom: 8px;
-}
-.providers-list { display: flex; flex-direction: column; gap: 8px; }
-.provider-row {
-    display: grid;
-    grid-template-columns: 40px 2fr 1fr 1.2fr 1.5fr;
-    gap: 12px;
-    padding: 12px 14px;
-    background: var(--bg-input);
-    border: 1.5px solid var(--border-color);
-    border-radius: 10px;
+.available-profit-banner {
+    display: flex;
     align-items: center;
-    transition: all 0.3s ease;
+    gap: 20px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 50%, #5B21B6 100%);
+    border-radius: 14px;
+    color: #FFFFFF;
+    box-shadow: 0 8px 28px rgba(124, 58, 237, 0.35);
+    position: relative;
+    overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    flex-wrap: wrap;
 }
-.provider-row.checked {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    border-color: #FCD34D;
+.available-profit-banner::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 300px; height: 300px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    pointer-events: none;
 }
-html.dark-mode .provider-row.checked {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-    border-color: #F59E0B;
-}
-.pr-checkbox { display: flex; align-items: center; justify-content: center; }
-.provider-checkbox {
-    width: 20px; height: 20px;
-    cursor: pointer;
-    accent-color: #F59E0B;
-}
-.pr-provider { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.provider-icon-small {
-    width: 34px; height: 34px;
-    border-radius: 8px;
+.apb-icon {
+    width: 60px; height: 60px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF; font-size: 14px; flex-shrink: 0;
+    font-size: 26px; color: #FCD34D;
+    flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    position: relative; z-index: 1;
+    backdrop-filter: blur(10px);
 }
-.provider-name-small {
-    font-size: 13px; font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.apb-content {
+    display: flex; flex-direction: column; gap: 4px;
+    flex: 1; min-width: 240px;
+    position: relative; z-index: 1;
 }
-.pr-code { display: flex; align-items: center; }
-.code-pill {
-    font-size: 10px; font-weight: 700;
-    color: #1D4ED8; background: #DBEAFE;
-    padding: 3px 10px; border-radius: 8px;
-    font-family: 'Courier New', monospace;
+.apb-label {
+    font-size: 11px; font-weight: 800;
+    color: rgba(255, 255, 255, 0.85);
+    text-transform: uppercase; letter-spacing: 1.5px;
 }
-html.dark-mode .code-pill { background: #1E3A5F; color: #60A5FA; }
-.pr-float { display: flex; align-items: center; }
-.float-pill {
-    font-size: 12px; font-weight: 800;
-    color: #059669; background: #D1FAE5;
-    padding: 4px 10px; border-radius: 8px;
-    font-family: 'Courier New', monospace;
+.apb-value {
+    font-size: 30px; font-weight: 900;
+    color: #FFFFFF;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.5px;
+    line-height: 1.1;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+.apb-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.8);
+    font-weight: 500;
+}
+.apb-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(252, 211, 77, 0.25);
+    color: #FCD34D;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1.5px solid rgba(252, 211, 77, 0.4);
+    position: relative;
+    z-index: 1;
     white-space: nowrap;
 }
-html.dark-mode .float-pill { background: #065F46; color: #34D399; }
-.pr-amount { display: flex; align-items: center; }
-.amount-input {
-    width: 100%;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 2px solid var(--border-color);
-    font-size: 13px;
-    font-weight: 700;
-    text-align: right;
-    font-family: 'Courier New', monospace;
-    background: var(--bg-card);
-    color: var(--text-primary);
-    outline: none;
-}
-.amount-input:focus { border-color: #F59E0B; }
-.amount-input:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg-hover); }
 
-.providers-footer {
-    display: flex; justify-content: space-between;
-    align-items: center; margin-top: 14px;
-    padding: 12px 16px;
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    border-radius: 10px;
-    border: 1.5px solid #FCD34D;
-    flex-wrap: wrap; gap: 10px;
-}
-html.dark-mode .providers-footer { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #F59E0B; }
-.pf-selected, .pf-total { font-size: 13px; font-weight: 600; color: #92400E; }
-.pf-selected strong, .pf-total strong { font-weight: 800; color: #78350F; font-size: 15px; }
-
+/* ✅ CASH SECTION - PAMOJA NA PROVIDERS */
 .cash-section-container {
     background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%) !important;
     border-left: 4px solid #10B981;
 }
-html.dark-mode .cash-section-container { background: linear-gradient(135deg, #064E3B 0%, #065F46 100%) !important; }
-
-.cash-status-card {
-    display: flex; align-items: center; gap: 20px;
-    padding: 20px 24px;
-    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
-    border-radius: 14px; margin-bottom: 20px;
-    color: #FFFFFF;
-    position: relative; overflow: hidden;
+html.dark-mode .cash-section-container {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%) !important;
 }
-.cash-card-icon {
-    width: 68px; height: 68px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; color: #FFFFFF; flex-shrink: 0;
-}
-.cash-card-content { display: flex; align-items: center; gap: 24px; flex: 1; flex-wrap: wrap; }
-.cash-card-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
-.cash-card-label { font-size: 11px; font-weight: 700; color: rgba(255, 255, 255, 0.8); text-transform: uppercase; }
-.cash-card-value { font-size: 24px; font-weight: 900; color: #FFFFFF; font-family: 'Inter', 'Courier New', monospace; word-break: break-word; }
-.cash-after { color: #FCD34D !important; font-size: 26px !important; }
-.cash-card-arrow {
-    width: 48px; height: 48px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; color: #FFFFFF; flex-shrink: 0;
-    animation: pulse-arrow 2s infinite;
-}
-@keyframes pulse-arrow { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
-
 .cash-input-wrapper {
     background: var(--bg-card);
     border-radius: 12px;
     padding: 20px 24px;
     border: 2px solid #10B981;
-    margin-bottom: 16px;
 }
 .cash-input-label {
     display: flex; align-items: center; gap: 8px;
@@ -1719,14 +1754,16 @@ html.dark-mode .cash-section-container { background: linear-gradient(135deg, #06
     color: var(--text-primary); margin-bottom: 12px;
 }
 .cash-input-label i { color: #10B981; }
-.cash-input-label .required { color: #DC2626; }
 .cash-input-group {
     display: flex; align-items: center;
     background: var(--bg-input);
     border: 2px solid var(--border-color);
     border-radius: 12px; padding: 4px 8px;
 }
-.cash-input-group:focus-within { border-color: #10B981; box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15); }
+.cash-input-group:focus-within {
+    border-color: #10B981;
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+}
 .cash-currency {
     font-size: 15px; font-weight: 800;
     color: #10B981;
@@ -1753,45 +1790,219 @@ html.dark-mode .cash-section-container { background: linear-gradient(135deg, #06
     margin-top: 10px; font-weight: 600;
 }
 .cash-input-hint i { color: #10B981; }
-.cash-input-hint strong { color: #059669; font-weight: 800; }
 
-.quick-amounts {
-    display: flex; align-items: center; gap: 8px;
-    flex-wrap: wrap;
-    padding: 14px 18px;
-    background: var(--bg-card);
-    border-radius: 10px;
-    border: 1.5px dashed #10B981;
+/* ✅ PROVIDERS CARDS GRID - 3 PER ROW */
+.providers-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
 }
-.qa-label {
-    font-size: 12px; font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    margin-right: 4px;
+
+.provider-card-item {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 14px;
+    padding: 14px;
+    position: relative;
+    transition: all 0.3s ease;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
-.qa-btn {
-    padding: 8px 16px;
-    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-    color: #059669;
-    border: 1.5px solid #6EE7B7;
-    border-radius: 8px;
-    font-weight: 800;
-    font-size: 12px;
+html.dark-mode .provider-card-item {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+}
+.provider-card-item:hover {
+    border-color: #059669;
+    transform: translateY(-3px);
+    box-shadow: 0 12px 28px rgba(5, 150, 105, 0.25);
+}
+.provider-card-item.checked {
+    border-color: #059669;
+    box-shadow: 0 8px 24px rgba(5, 150, 105, 0.35);
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 50%, #6EE7B7 100%);
+}
+html.dark-mode .provider-card-item.checked {
+    background: linear-gradient(135deg, #047857 0%, #059669 50%, #10B981 100%);
+}
+
+.pc-checkbox-wrapper {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+}
+.provider-checkbox {
+    width: 22px;
+    height: 22px;
     cursor: pointer;
-    transition: all 0.25s ease;
+    accent-color: #059669;
+    border-radius: 6px;
 }
-.qa-btn:hover {
-    background: linear-gradient(135deg, #10B981, #059669);
+.pc-check-label {
+    display: none;
+}
+
+.pc-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
+    padding-right: 28px;
+}
+.pc-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
     color: #FFFFFF;
-    transform: translateY(-2px);
+    font-size: 15px;
+    flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
 }
-.qa-btn-max {
+.pc-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.pc-name {
+    font-size: 12px;
+    font-weight: 800;
+    color: #065F46;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+html.dark-mode .pc-name { color: #D1FAE5; }
+.pc-code {
+    font-size: 9px;
+    font-weight: 700;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.6);
+    padding: 2px 7px;
+    border-radius: 6px;
+    align-self: flex-start;
+    font-family: 'Courier New', monospace;
+    border: 1px solid rgba(5, 150, 105, 0.3);
+}
+html.dark-mode .pc-code { background: rgba(15, 23, 42, 0.4); color: #6EE7B7; }
+
+.pc-float-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    font-size: 11px;
+}
+.pc-float-label {
+    color: #047857;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    display: flex; align-items: center; gap: 4px;
+}
+.pc-float-label i { color: #059669; font-size: 10px; }
+.pc-float-value {
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    color: #059669;
+    font-size: 13px;
+}
+
+.pc-available-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    font-size: 11px;
+}
+.pc-available-label {
+    color: #6D28D9;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    display: flex; align-items: center; gap: 4px;
+}
+.pc-available-label i { color: #7C3AED; font-size: 10px; }
+.pc-available-value {
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    color: #6D28D9;
+    font-size: 13px;
+}
+html.dark-mode .pc-available-label { color: #C4B5FD; }
+html.dark-mode .pc-available-value { color: #C4B5FD; }
+
+.pc-input-wrapper {
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 10px;
+    padding: 4px 10px;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+    margin-top: 4px;
+    transition: all 0.3s ease;
+}
+.provider-card-item.checked .pc-input-wrapper {
+    border-color: #059669;
+    box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+}
+html.dark-mode .pc-input-wrapper { background: rgba(15, 23, 42, 0.5); }
+.pc-currency {
+    font-size: 11px;
+    font-weight: 900;
+    color: #059669;
+    padding-right: 8px;
+    border-right: 2px solid #D1FAE5;
+    margin-right: 8px;
+    font-family: 'Courier New', monospace;
+}
+.pc-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 8px 4px;
+    font-size: 15px;
+    font-weight: 900;
+    color: #065F46;
+    font-family: 'Courier New', monospace;
+    text-align: right;
+    outline: none;
+    min-width: 0;
+}
+html.dark-mode .pc-input { color: #A7F3D0; }
+.pc-input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* PROVIDERS FOOTER */
+.providers-footer {
+    display: flex; justify-content: space-between;
+    align-items: center; margin-top: 16px;
+    padding: 12px 18px;
     background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #92400E;
-    border-color: #FCD34D;
+    border-radius: 10px;
+    border: 1.5px solid #FCD34D;
+    flex-wrap: wrap; gap: 10px;
 }
-html.dark-mode .qa-btn { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; border-color: #10B981; }
-html.dark-mode .qa-btn-max { background: linear-gradient(135deg, #5F3A1E, #78350F); color: #FCD34D; border-color: #F59E0B; }
+html.dark-mode .providers-footer { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #F59E0B; }
+.pf-selected, .pf-total {
+    font-size: 13px; font-weight: 700;
+    color: #92400E;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pf-selected i, .pf-total i { color: #D97706; }
+.pf-selected strong, .pf-total strong {
+    font-weight: 900;
+    color: #78350F;
+    font-size: 15px;
+}
 
 .empty-providers {
     text-align: center; padding: 30px 20px;
@@ -1802,32 +2013,44 @@ html.dark-mode .qa-btn-max { background: linear-gradient(135deg, #5F3A1E, #78350
 }
 .empty-providers i { font-size: 36px; opacity: 0.4; display: block; margin-bottom: 10px; }
 
+/* SUMMARY */
 .summary-section { background: var(--bg-hover); }
-.summary-preview { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.summary-preview {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+}
 .summary-preview-item {
     background: var(--bg-card);
     border-radius: 10px;
     padding: 14px 18px;
     display: flex; flex-direction: column; gap: 4px;
     border: 1px solid var(--border-color);
+    min-width: 0;
 }
 .summary-preview-item.highlight {
     background: linear-gradient(135deg, #FEF3C7, #FDE68A);
     border-color: #FCD34D;
 }
+.summary-preview-item.highlight-purple {
+    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
+    border-color: #C4B5FD;
+}
 html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #F59E0B; }
+html.dark-mode .summary-preview-item.highlight-purple { background: linear-gradient(135deg, #4C1D95, #5B21B6); border-color: #8B5CF6; }
 .sp-label {
     font-size: 11px; font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
 }
 .sp-value {
-    font-size: 17px; font-weight: 800;
+    font-size: 15px; font-weight: 800;
     font-family: 'Inter', 'Courier New', monospace;
     color: var(--text-primary);
     word-break: break-word;
 }
-.sp-amount { color: #F59E0B; }
+.sp-amount { color: #10B981; }
+.sp-total { color: #F59E0B; }
 .sp-after { color: #7C3AED; }
 
 .form-actions {
@@ -1846,8 +2069,15 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     display: inline-flex; align-items: center; gap: 8px;
     text-decoration: none;
 }
-.btn-submit { background: #F59E0B; color: white; }
-.btn-submit:hover { background: #D97706; transform: translateY(-2px); }
+.btn-submit {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+}
+.btn-submit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.45);
+}
 .btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 .btn-reset, .btn-cancel {
     background: var(--bg-card); color: var(--text-secondary);
@@ -1857,7 +2087,7 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
 .btn-cancel:hover { background: #FEE2E2; color: #991B1B; border-color: #FECACA; }
 
 /* ============================================================
-   ✅ HISTORY TABLE - FIXED OVERFLOW + SAME ROW LAYOUT
+   HISTORY TABLE
    ============================================================ */
 .table-container-history {
     background: var(--bg-card);
@@ -1870,14 +2100,13 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     width: 100%;
 }
 
-/* ✅ Header: Search LEFT | Scroll CENTER | Count RIGHT - SAME ROW */
 .history-header-row {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 12px;
     padding: 14px 18px;
-    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
     color: #FFFFFF;
     position: relative;
     overflow: hidden;
@@ -1936,7 +2165,7 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     background: #FFFFFF;
 }
 .history-search-wrapper i {
-    color: #7C3AED;
+    color: #059669;
     font-size: 12px;
     flex-shrink: 0;
 }
@@ -1983,14 +2212,13 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     white-space: nowrap;
 }
 
-/* Scroll buttons */
 .scroll-btn-history {
     width: 34px;
     height: 34px;
     border-radius: 8px;
     border: 2px solid #FFFFFF;
     background: #FFFFFF;
-    color: #7C3AED;
+    color: #059669;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -2042,7 +2270,6 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     color: #FCD34D;
 }
 
-/* ✅ Table wrapper - overflow kwa table tu, sio page */
 .history-table-wrapper {
     overflow-x: auto;
     overflow-y: hidden;
@@ -2057,21 +2284,21 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     border-radius: 4px;
 }
 .history-table-wrapper::-webkit-scrollbar-thumb {
-    background: #7C3AED;
+    background: #059669;
     border-radius: 4px;
 }
 .history-table-wrapper::-webkit-scrollbar-thumb:hover {
-    background: #6D28D9;
+    background: #047857;
 }
 
 .history-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
-    min-width: 1000px;
+    min-width: 1100px;
 }
 .history-table thead {
-    background: #7C3AED;
+    background: #059669;
 }
 .history-table thead th {
     padding: 12px 14px;
@@ -2081,7 +2308,7 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
     text-transform: uppercase;
     font-size: 10px;
     letter-spacing: 0.5px;
-    border-bottom: 2px solid #5B21B6;
+    border-bottom: 2px solid #047857;
     white-space: nowrap;
 }
 .history-table thead th.text-right { text-align: right; }
@@ -2111,18 +2338,18 @@ html.dark-mode .summary-preview-item.highlight { background: linear-gradient(135
 .reference-badge {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #5B21B6;
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    color: #065F46;
     border-radius: 8px;
     font-size: 11px; font-weight: 800;
     font-family: 'Courier New', monospace;
-    border: 1.5px solid #C4B5FD;
+    border: 1.5px solid #6EE7B7;
     white-space: nowrap;
 }
 html.dark-mode .reference-badge {
-    background: linear-gradient(135deg, #4C1D95, #5B21B6);
-    color: #C4B5FD;
-    border-color: #A78BFA;
+    background: linear-gradient(135deg, #065F46, #047857);
+    color: #A7F3D0;
+    border-color: #10B981;
 }
 .date-cell-history {
     display: inline-flex; align-items: center; gap: 5px;
@@ -2130,7 +2357,7 @@ html.dark-mode .reference-badge {
     color: var(--text-secondary);
     white-space: nowrap;
 }
-.date-cell-history i { color: #7C3AED; font-size: 10px; }
+.date-cell-history i { color: #059669; font-size: 10px; }
 .branch-badge-history {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
@@ -2142,17 +2369,62 @@ html.dark-mode .reference-badge {
     white-space: nowrap;
 }
 .branch-badge-history i { font-size: 10px; color: #2563EB; }
-.employee-badge-history {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px;
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #92400E;
-    border-radius: 8px;
-    font-size: 11px; font-weight: 700;
-    border: 1px solid #FCD34D;
-    white-space: nowrap;
+
+.employee-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
 }
-.employee-badge-history i { color: #D97706; font-size: 12px; }
+.employee-avatar-img {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #10B981;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+.employee-avatar-letter {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #FFFFFF;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800;
+    font-size: 14px;
+    flex-shrink: 0;
+    border: 2px solid #6EE7B7;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+.employee-name-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.employee-name-text {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+.employee-code-text {
+    font-size: 10px;
+    font-weight: 600;
+    color: #059669;
+    background: #D1FAE5;
+    padding: 1px 8px;
+    border-radius: 6px;
+    align-self: flex-start;
+    font-family: 'Courier New', monospace;
+}
+html.dark-mode .employee-code-text { background: #065F46; color: #6EE7B7; }
+
 .target-badge {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
@@ -2171,16 +2443,16 @@ html.dark-mode .target-cash { background: #14532D; color: #4ADE80; border-color:
 .amount-badge-history {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 6px 12px;
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #5B21B6;
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    color: #065F46;
     border-radius: 8px;
     font-weight: 800;
     font-size: 12px;
     font-family: 'Courier New', monospace;
-    border: 1.5px solid #C4B5FD;
+    border: 1.5px solid #6EE7B7;
     white-space: nowrap;
 }
-.amount-badge-history i { font-size: 10px; color: #7C3AED; }
+.amount-badge-history i { font-size: 10px; color: #059669; }
 .notes-cell {
     font-size: 11px;
     color: var(--text-muted);
@@ -2192,7 +2464,6 @@ html.dark-mode .target-cash { background: #14532D; color: #4ADE80; border-color:
     font-style: italic;
 }
 
-/* ✅ History Actions */
 .history-actions {
     display: flex;
     gap: 5px;
@@ -2278,7 +2549,7 @@ html.dark-mode .btn-history-delete { background: linear-gradient(135deg, #7F1D1D
 }
 .empty-history i {
     font-size: 50px;
-    color: #7C3AED;
+    color: #10B981;
     opacity: 0.3;
     display: block;
     margin-bottom: 14px;
@@ -2298,6 +2569,8 @@ html.dark-mode .btn-history-delete { background: linear-gradient(135deg, #7F1D1D
 @media (max-width: 1200px) {
     .capital-cards-inside { grid-template-columns: repeat(2, 1fr); }
     .cci-value { font-size: 18px; }
+    .providers-cards-grid { grid-template-columns: repeat(2, 1fr); }
+    .summary-preview { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1024px) {
     .breakdown-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2318,21 +2591,15 @@ html.dark-mode .btn-history-delete { background: linear-gradient(135deg, #7F1D1D
     .capital-summary-header { flex-direction: column; align-items: flex-start; }
     .capital-cards-inside { grid-template-columns: 1fr; }
     .breakdown-grid { grid-template-columns: 1fr; }
-    .target-options { grid-template-columns: 1fr; }
     .summary-preview { grid-template-columns: 1fr; }
     .form-row { grid-template-columns: 1fr; }
     .form-row .full-width { grid-column: span 1; }
     .form-actions { flex-direction: column; }
     .form-actions .btn { justify-content: center; width: 100%; }
-    .providers-header-row { display: none; }
-    .provider-row {
-        grid-template-columns: 40px 1fr;
-        gap: 8px;
-    }
-    .pr-provider { grid-column: 2; }
-    .pr-code, .pr-float, .pr-amount { grid-column: 2; }
-    .cash-card-content { flex-direction: column; align-items: flex-start; }
-    .cash-card-arrow { transform: rotate(90deg); }
+    .providers-cards-grid { grid-template-columns: 1fr; }
+    .available-profit-banner { flex-direction: column; align-items: flex-start; }
+    .apb-icon { width: 48px; height: 48px; font-size: 20px; }
+    .apb-value { font-size: 22px; }
 }
 @media (max-width: 480px) {
     .main-content { padding: 10px !important; }
@@ -2345,7 +2612,7 @@ html.dark-mode .btn-history-delete { background: linear-gradient(135deg, #7F1D1D
     .csh-icon { width: 42px; height: 42px; font-size: 18px; }
     .form-section { padding: 16px 14px; }
     .cash-input-field { font-size: 17px; }
-    .cash-card-value { font-size: 20px; }
+    .apb-value { font-size: 20px; }
 }
 </style>
 
@@ -2376,99 +2643,77 @@ function formatMoneyInput(input) {
     updatePreview();
 }
 
-function setQuickAmount(amount) {
-    var amountInput = document.getElementById('amount');
-    if (!amountInput) return;
-    
-    var available = parseFloat(document.getElementById('availableProfitInput').value) || 0;
-    if (amount > available) amount = available;
-    
-    var formatted = '';
-    var value = String(amount);
-    var count = 0;
-    for (var i = value.length - 1; i >= 0; i--) {
-        if (count > 0 && count % 3 === 0) formatted = ',' + formatted;
-        formatted = value[i] + formatted;
-        count++;
-    }
-    
-    amountInput.value = formatted;
-    updatePreview();
-}
-
-function onTargetChange(target) {
-    var providerSection = document.getElementById('providerSection');
-    var cashSection = document.getElementById('cashSection');
-    
-    if (target === 'float') {
-        providerSection.style.display = 'block';
-        cashSection.style.display = 'none';
-    } else {
-        providerSection.style.display = 'none';
-        cashSection.style.display = 'block';
-    }
-    
-    updatePreview();
-}
-
 function onProviderCheck(checkbox) {
     var providerId = checkbox.getAttribute('data-provider-id');
     var amountInput = document.getElementById('amt_' + providerId);
-    var row = checkbox.closest('.provider-row');
+    var card = checkbox.closest('.provider-card-item');
     
     if (checkbox.checked) {
         amountInput.disabled = false;
-        row.classList.add('checked');
+        card.classList.add('checked');
         amountInput.focus();
     } else {
         amountInput.disabled = true;
         amountInput.value = '';
-        row.classList.remove('checked');
+        card.classList.remove('checked');
     }
     
     updatePreview();
 }
 
+// ============================================================
+// ✅ UPDATE PREVIEW + LIVE FILTER
+// ✅ Cash + Providers ZOTE zinahesabiwa
+// ============================================================
 function updatePreview() {
     var available = parseFloat(document.getElementById('availableProfitInput').value) || 0;
     var currentCapital = parseFloat(document.getElementById('currentCapitalInput').value) || 0;
-    var target = document.querySelector('input[name="capital_target"]:checked');
-    var totalAmount = 0;
-    var selectedCount = 0;
+    var currentCash = parseFloat(document.getElementById('currentCashInput').value) || 0;
     
-    if (target && target.value === 'float') {
-        document.querySelectorAll('.provider-checkbox:checked').forEach(function(chk) {
-            var providerId = chk.getAttribute('data-provider-id');
-            var amountInput = document.getElementById('amt_' + providerId);
-            if (amountInput && amountInput.value) {
-                var amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
-                totalAmount += amount;
-                selectedCount++;
-            }
-        });
-        
-        var selectedCountEl = document.getElementById('selectedCount');
-        if (selectedCountEl) selectedCountEl.textContent = selectedCount;
-        
-        var totalProvEl = document.getElementById('totalProvidersAmount');
-        if (totalProvEl) totalProvEl.textContent = 'TSh ' + totalAmount.toLocaleString('en-US');
-        
-    } else {
-        var amountInput = document.getElementById('amount');
-        if (amountInput && amountInput.value) {
-            totalAmount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
-        }
-        
-        var cashAfterEl = document.getElementById('cashAfterDisplay');
-        if (cashAfterEl) {
-            var currentCash = <?php echo floatval($current_branch_cash); ?>;
-            cashAfterEl.textContent = 'TSh ' + (currentCash + totalAmount).toLocaleString('en-US');
-        }
+    // ✅ Get cash amount
+    var cashInput = document.getElementById('cash_amount');
+    var cashAmount = 0;
+    if (cashInput && cashInput.value) {
+        cashAmount = parseFloat(cashInput.value.replace(/,/g, '')) || 0;
     }
     
-    var amountEl = document.getElementById('previewAmount');
-    if (amountEl) amountEl.textContent = 'TSh ' + totalAmount.toLocaleString('en-US');
+    // ✅ Get providers total
+    var providersAmount = 0;
+    var selectedCount = 0;
     
+    document.querySelectorAll('.provider-checkbox:checked').forEach(function(chk) {
+        var providerId = chk.getAttribute('data-provider-id');
+        var amountInput = document.getElementById('amt_' + providerId);
+        if (amountInput && amountInput.value) {
+            var amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
+            if (amount > 0) {
+                providersAmount += amount;
+                selectedCount++;
+            }
+        }
+    });
+    
+    // ✅ Total = Cash + Providers
+    var totalAmount = cashAmount + providersAmount;
+    
+    // ✅ Update Selected count
+    var selectedCountEl = document.getElementById('selectedCount');
+    if (selectedCountEl) selectedCountEl.textContent = selectedCount;
+    
+    var totalProvEl = document.getElementById('totalProvidersAmount');
+    if (totalProvEl) totalProvEl.textContent = 'TSh ' + providersAmount.toLocaleString('en-US');
+    
+    // ✅ Update preview elements
+    var previewCashEl = document.getElementById('previewCash');
+    if (previewCashEl) previewCashEl.textContent = 'TSh ' + cashAmount.toLocaleString('en-US');
+    
+    var previewProvidersEl = document.getElementById('previewProviders');
+    if (previewProvidersEl) previewProvidersEl.textContent = 'TSh ' + providersAmount.toLocaleString('en-US');
+    
+    var previewTotalEl = document.getElementById('previewTotal');
+    if (previewTotalEl) previewTotalEl.textContent = 'TSh ' + totalAmount.toLocaleString('en-US');
+    
+    // ✅ Update Capital After Add
     var capitalAfter = currentCapital + totalAmount;
     var capitalAfterEl = document.getElementById('capitalAfterDisplay');
     if (capitalAfterEl) {
@@ -2483,6 +2728,55 @@ function updatePreview() {
     if (previewAfterEl) {
         previewAfterEl.textContent = 'TSh ' + capitalAfter.toLocaleString('en-US');
     }
+    
+    // ✅ Update Available Profit - LIVE FILTER
+    var remainingAvailable = Math.max(0, available - totalAmount);
+    
+    var availableDisplayEl = document.getElementById('availableProfitDisplay');
+    var availableSublabelEl = document.getElementById('availableSublabel');
+    var maxToAddBadgeEl = document.getElementById('maxToAddBadge');
+    var apbRemainingDisplayEl = document.getElementById('apbRemainingDisplay');
+    var apbUsedBadgeEl = document.getElementById('apbUsedBadge');
+    var availableCard = document.getElementById('availableProfitCard');
+    
+    if (availableDisplayEl) {
+        availableDisplayEl.textContent = 'TSh ' + remainingAvailable.toLocaleString('en-US');
+        
+        if (remainingAvailable === 0 && totalAmount > 0) {
+            availableDisplayEl.style.color = '#FCA5A5';
+        } else {
+            availableDisplayEl.style.color = '#FCD34D';
+        }
+    }
+    
+    if (availableSublabelEl) {
+        if (totalAmount > 0) {
+            availableSublabelEl.textContent = 'Remaining from TSh ' + available.toLocaleString('en-US');
+        } else {
+            availableSublabelEl.textContent = 'Max to add';
+        }
+    }
+    
+    if (maxToAddBadgeEl) {
+        maxToAddBadgeEl.textContent = 'TSh ' + remainingAvailable.toLocaleString('en-US');
+    }
+    
+    if (apbRemainingDisplayEl) {
+        apbRemainingDisplayEl.textContent = 'TSh ' + remainingAvailable.toLocaleString('en-US');
+        apbRemainingDisplayEl.style.color = (remainingAvailable === 0 && totalAmount > 0) ? '#FCA5A5' : '#FFFFFF';
+    }
+    
+    if (apbUsedBadgeEl) {
+        apbUsedBadgeEl.textContent = 'Used: TSh ' + totalAmount.toLocaleString('en-US');
+    }
+    
+    // ✅ Pulse animation
+    if (availableCard && totalAmount > 0) {
+        availableCard.classList.add('live-updated');
+        setTimeout(function() {
+            availableCard.classList.remove('live-updated');
+        }, 600);
+    }
 }
 
 function validateForm() {
@@ -2492,46 +2786,33 @@ function validateForm() {
         return false;
     }
     
-    var target = document.querySelector('input[name="capital_target"]:checked');
-    if (!target) {
-        alert('Please select where to add capital.');
-        return false;
+    var available = parseFloat(document.getElementById('availableProfitInput').value) || 0;
+    var cashInput = document.getElementById('cash_amount');
+    var cashAmount = 0;
+    if (cashInput && cashInput.value) {
+        cashAmount = parseFloat(cashInput.value.replace(/,/g, '')) || 0;
     }
     
-    var available = parseFloat(document.getElementById('availableProfitInput').value) || 0;
-    var totalAmount = 0;
+    var providersAmount = 0;
+    var hasProvider = false;
     
-    if (target.value === 'float') {
-        var hasSelection = false;
-        
-        document.querySelectorAll('.provider-checkbox:checked').forEach(function(chk) {
-            var providerId = chk.getAttribute('data-provider-id');
-            var amountInput = document.getElementById('amt_' + providerId);
-            if (amountInput && amountInput.value) {
-                var amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
-                if (amount > 0) {
-                    hasSelection = true;
-                    totalAmount += amount;
-                }
-            }
-        });
-        
-        if (!hasSelection) {
-            alert('Please select at least one provider and enter an amount.');
-            return false;
-        }
-        
-    } else {
-        var amountInput = document.getElementById('amount');
+    document.querySelectorAll('.provider-checkbox:checked').forEach(function(chk) {
+        var providerId = chk.getAttribute('data-provider-id');
+        var amountInput = document.getElementById('amt_' + providerId);
         if (amountInput && amountInput.value) {
-            totalAmount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
+            var amount = parseFloat(amountInput.value.replace(/,/g, '')) || 0;
+            if (amount > 0) {
+                hasProvider = true;
+                providersAmount += amount;
+            }
         }
-        
-        if (totalAmount <= 0) {
-            alert('Please enter a valid amount.');
-            amountInput.focus();
-            return false;
-        }
+    });
+    
+    var totalAmount = cashAmount + providersAmount;
+    
+    if (totalAmount <= 0) {
+        alert('Please enter at least one amount (Cash or Provider).');
+        return false;
     }
     
     if (totalAmount > available) {
@@ -2599,9 +2880,6 @@ function clearHistorySearch() {
     }
 }
 
-// ============================================================
-// ✅ SCROLL HISTORY TABLE
-// ============================================================
 function scrollHistoryTable(direction) {
     var wrapper = document.getElementById('historyTableWrapper');
     if (!wrapper) return;
@@ -2612,15 +2890,11 @@ function scrollHistoryTable(direction) {
     });
 }
 
-// ============================================================
-// ✅ CONFIRM DELETE CAPITAL
-// ============================================================
 function confirmDeleteCapital(reference, amount) {
     var msg = 'Are you sure you want to DELETE this capital addition?\n\n' +
               'Reference: ' + reference + '\n' +
               'Amount: ' + amount + '\n\n' +
               'WARNING: This will REVERSE the capital addition from daily reports.\n' +
-              'The branch capital will be reduced by this amount.\n\n' +
               'This action cannot be undone.';
     return confirm(msg);
 }
@@ -2629,7 +2903,6 @@ function confirmDeleteCapital(reference, amount) {
 // INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    onTargetChange('float');
     updatePreview();
     
     function syncDarkMode() {

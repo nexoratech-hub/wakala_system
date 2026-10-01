@@ -2,10 +2,11 @@
 // ================================================================
 // FILE: modules/commissions/index_employee.php
 // WAKALA FINANCIAL SYSTEM - EMPLOYEE COMMISSIONS VIEW
-// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
-// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
+// ✅ FIXED: total_float kutoka LATEST record per provider
+// ✅ FIXED: total_cash kutoka latest daily_report
 // ✅ FIXED: current_capital = total_float + total_cash
-// ✅ Employee sees ONLY THEIR OWN commissions & other income
+// ✅ NEW: Time filters (All, Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom)
+// ✅ NEW: Filters zinaathiri summary cards, provider table, quick stats
 // ================================================================
 
 require_once '../../config/config.php';
@@ -30,23 +31,18 @@ if ($role !== 'employee') {
 }
 
 // ============================================================
-// ✅ HELPER: Get latest daily report for a branch
+// ✅ HELPER: Get daily report by date (for capital display)
 // ============================================================
-function getLatestDailyReport($db, $branch_id) {
+function getDailyReportByDate($db, $branch_id, $report_date) {
     $stmt = $db->prepare("
         SELECT * FROM daily_reports 
-        WHERE branch_id = ? 
-        ORDER BY report_date DESC, id DESC 
-        LIMIT 1
+        WHERE branch_id = ? AND report_date = ?
+        ORDER BY id DESC LIMIT 1
     ");
-    $stmt->execute([$branch_id]);
+    $stmt->execute([$branch_id, $report_date]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// ============================================================
-// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
-// Inaepuka double-counting ya duplicate records
-// ============================================================
 function calculateTotalFloat($db, $daily_report_id) {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(latest.current_float), 0) as total_float
@@ -80,7 +76,6 @@ if (!$employee) {
 
 $employee_branch_id = intval($employee['branch_id'] ?? 0);
 
-// Branch info
 $branch_name = 'My Branch';
 $branch_code = '';
 $branch_location = '';
@@ -96,66 +91,121 @@ if ($employee_branch_id > 0) {
 }
 
 // ============================================================
-// ✅ CAPITAL DATA - FIXED!
-// Total Float + Cash + Total Capital for MY BRANCH
+// ✅ TIME FILTER LOGIC
+// ============================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : '1m';
+$custom_from = isset($_GET['from_date']) ? $_GET['from_date'] : '';
+$custom_to = isset($_GET['to_date']) ? $_GET['to_date'] : '';
+$today = date('Y-m-d');
+
+switch ($filter) {
+    case 'all':
+        $from_date = '2000-01-01';
+        $to_date = $today;
+        break;
+    case 'today':
+        $from_date = $today;
+        $to_date = $today;
+        break;
+    case '1d':
+        $from_date = date('Y-m-d', strtotime('-1 day'));
+        $to_date = $today;
+        break;
+    case '1w':
+        $from_date = date('Y-m-d', strtotime('-7 days'));
+        $to_date = $today;
+        break;
+    case '1m':
+        $from_date = date('Y-m-d', strtotime('-1 month'));
+        $to_date = $today;
+        break;
+    case '3m':
+        $from_date = date('Y-m-d', strtotime('-3 months'));
+        $to_date = $today;
+        break;
+    case '6m':
+        $from_date = date('Y-m-d', strtotime('-6 months'));
+        $to_date = $today;
+        break;
+    case '1y':
+        $from_date = date('Y-m-d', strtotime('-1 year'));
+        $to_date = $today;
+        break;
+    case 'custom':
+        $from_date = !empty($custom_from) ? $custom_from : date('Y-m-01');
+        $to_date = !empty($custom_to) ? $custom_to : $today;
+        break;
+    default:
+        $from_date = date('Y-m-01');
+        $to_date = $today;
+}
+
+// ============================================================
+// ✅ CAPITAL DATA - kutoka daily report ya tarehe `$to_date`
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
+$summary_date = $to_date;
 
 if ($employee_branch_id > 0) {
-    // ✅ Chukua latest daily report ya branch yangu
-    $latest_dr = getLatestDailyReport($db, $employee_branch_id);
+    $latest_dr = getDailyReportByDate($db, $employee_branch_id, $summary_date);
     
     if ($latest_dr) {
-        // ✅ Hesabu total float kutoka LATEST record per provider
         $total_float = calculateTotalFloat($db, $latest_dr['id']);
-        
-        // ✅ Cash kutoka latest daily report
         $total_cash = floatval($latest_dr['current_cash'] ?? 0);
-        
-        // ✅ Capital = Float + Cash
         $total_capital = $total_float + $total_cash;
     }
 }
 
 // ============================================================
-// SUMMARY CARDS - MY OWN
+// ✅ SUMMARY CARDS - kwa kipindi kilichochaguliwa
 // ============================================================
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE branch_id = ? AND employee_id = ?");
-$stmt->execute([$employee_branch_id, $user_id]);
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(total_commission), 0) as total 
+    FROM commissions 
+    WHERE branch_id = ? AND employee_id = ?
+      AND commission_date BETWEEN ? AND ?
+");
+$stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
 $card_commissions = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(other_income), 0) as total 
-                      FROM commissions 
-                      WHERE branch_id = ? AND employee_id = ?");
-$stmt->execute([$employee_branch_id, $user_id]);
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(other_income), 0) as total 
+    FROM commissions 
+    WHERE branch_id = ? AND employee_id = ?
+      AND commission_date BETWEEN ? AND ?
+");
+$stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
 $card_other_income = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 $card_total_income = $card_commissions + $card_other_income;
 
-// Quick Stats - MY OWN
-$today = date('Y-m-d');
+// ============================================================
+// ✅ QUICK STATS (Today & This Month - hazitegemei filter)
+// ============================================================
 $month = date('m');
 $year = date('Y');
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE DATE(commission_date) = ? AND branch_id = ? AND employee_id = ?");
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(total_commission), 0) as total 
+    FROM commissions 
+    WHERE DATE(commission_date) = ? AND branch_id = ? AND employee_id = ?
+");
 $stmt->execute([$today, $employee_branch_id, $user_id]);
 $today_commission = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
-                      AND branch_id = ? AND employee_id = ?");
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(total_commission), 0) as total 
+    FROM commissions 
+    WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
+      AND branch_id = ? AND employee_id = ?
+");
 $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
 $this_month_commission = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 // ============================================================
-// GET ALL PROVIDERS FOR MY BRANCH (with MY commission amounts)
+// ✅ GET ALL PROVIDERS FOR MY BRANCH (with commission kwa kipindi)
 // ============================================================
 $all_providers_flat = [];
 
@@ -174,13 +224,15 @@ $sql = "SELECT
             (SELECT SUM(CAST(JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) AS DECIMAL(15,2)))
              FROM commissions c 
              WHERE c.branch_id = b.id 
-             AND c.employee_id = ?
-             AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL) as my_provider_commission,
+               AND c.employee_id = ?
+               AND c.commission_date BETWEEN ? AND ?
+               AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL) as my_provider_commission,
             (SELECT c.commission_date 
              FROM commissions c 
              WHERE c.branch_id = b.id 
-             AND c.employee_id = ?
-             AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL
+               AND c.employee_id = ?
+               AND c.commission_date BETWEEN ? AND ?
+               AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL
              ORDER BY c.id DESC LIMIT 1) as my_last_commission_date
         FROM branches b
         INNER JOIN branch_providers bp ON b.id = bp.branch_id AND bp.is_active = 1
@@ -189,7 +241,11 @@ $sql = "SELECT
         ORDER BY p.display_order ASC, p.provider_name ASC";
 
 $stmt = $db->prepare($sql);
-$stmt->execute([$user_id, $user_id, $employee_branch_id]);
+$stmt->execute([
+    $user_id, $from_date, $to_date,
+    $user_id, $from_date, $to_date,
+    $employee_branch_id
+]);
 $provider_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 foreach ($provider_rows as $row) {
@@ -283,6 +339,47 @@ include_once '../../includes/employee_topbar.php';
             </div>
         <?php endif; ?>
 
+        <!-- ✅ TIME FILTER BAR -->
+        <div class="time-filter-bar">
+            <div class="time-filter-left">
+                <i class="fas fa-calendar-alt"></i>
+                <span class="time-filter-label">Period:</span>
+            </div>
+            <div class="time-filter-buttons">
+                <a href="?filter=all" class="time-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">All</a>
+                <a href="?filter=today" class="time-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">Today</a>
+                <a href="?filter=1d" class="time-btn <?php echo $filter === '1d' ? 'active' : ''; ?>">1D</a>
+                <a href="?filter=1w" class="time-btn <?php echo $filter === '1w' ? 'active' : ''; ?>">1W</a>
+                <a href="?filter=1m" class="time-btn <?php echo $filter === '1m' ? 'active' : ''; ?>">1M</a>
+                <a href="?filter=3m" class="time-btn <?php echo $filter === '3m' ? 'active' : ''; ?>">3M</a>
+                <a href="?filter=6m" class="time-btn <?php echo $filter === '6m' ? 'active' : ''; ?>">6M</a>
+                <a href="?filter=1y" class="time-btn <?php echo $filter === '1y' ? 'active' : ''; ?>">1Y</a>
+                <a href="?filter=custom&from_date=<?php echo date('Y-m-01'); ?>&to_date=<?php echo date('Y-m-d'); ?>" 
+                   class="time-btn time-btn-custom <?php echo $filter === 'custom' ? 'active' : ''; ?>">
+                    <i class="fas fa-sliders-h"></i> Custom
+                </a>
+            </div>
+        </div>
+
+        <!-- ✅ CUSTOM DATE FILTER FORM -->
+        <div class="filter-bar-main">
+            <form method="GET" action="" class="filter-form-main">
+                <input type="hidden" name="filter" value="custom">
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> From</label>
+                    <input type="date" name="from_date" class="filter-input" value="<?php echo htmlspecialchars($from_date); ?>">
+                </div>
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> To</label>
+                    <input type="date" name="to_date" class="filter-input" value="<?php echo htmlspecialchars($to_date); ?>">
+                </div>
+                <div class="filter-actions">
+                    <button type="submit" class="btn-filter-main"><i class="fas fa-search"></i> Filter</button>
+                    <a href="index_employee.php" class="btn-reset-main"><i class="fas fa-undo"></i> Reset</a>
+                </div>
+            </form>
+        </div>
+
         <!-- CAPITAL SECTION (3 Parts) -->
         <div class="capital-section-wrapper">
             <div class="capital-section-header">
@@ -292,7 +389,7 @@ include_once '../../includes/employee_topbar.php';
                     </div>
                     <div class="csh-info">
                         <span class="csh-title">Branch Capital</span>
-                        <span class="csh-subtitle"><?php echo htmlspecialchars($branch_name); ?></span>
+                        <span class="csh-subtitle"><?php echo htmlspecialchars($branch_name); ?> — <?php echo date('d M Y', strtotime($summary_date)); ?></span>
                     </div>
                 </div>
                 <div class="csh-badge">
@@ -348,14 +445,16 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
-        <!-- 3 SUMMARY CARDS - MY OWN -->
+        <!-- 3 SUMMARY CARDS - FILTERED -->
         <div class="summaries-grid-3">
             <div class="summary-card card-commissions">
                 <div class="summary-icon"><i class="fas fa-hand-holding-usd"></i></div>
                 <div class="summary-content">
                     <div class="summary-label">MY COMMISSIONS</div>
                     <div class="summary-value"><?php echo formatCurrency($card_commissions); ?></div>
-                    <div class="summary-sub">Total from me</div>
+                    <div class="summary-sub">
+                        <?php echo date('d M', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
+                    </div>
                 </div>
             </div>
 
@@ -364,7 +463,9 @@ include_once '../../includes/employee_topbar.php';
                 <div class="summary-content">
                     <div class="summary-label">MY OTHER INCOME</div>
                     <div class="summary-value"><?php echo formatCurrency($card_other_income); ?></div>
-                    <div class="summary-sub">Total from me</div>
+                    <div class="summary-sub">
+                        <?php echo date('d M', strtotime($from_date)); ?> - <?php echo date('d M Y', strtotime($to_date)); ?>
+                    </div>
                 </div>
             </div>
 
@@ -498,11 +599,11 @@ include_once '../../includes/employee_topbar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <!-- VIEW BUTTON -->
                                         <div class="provider-actions">
-                                            <a href="view_provider_employee.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>" 
+                                            <a href="view_provider_employee.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>&from_date=<?php echo $from_date; ?>&to_date=<?php echo $to_date; ?>" 
                                                class="btn-provider btn-provider-view" 
-                                               title="View My Commissions">
+                                               title="View My Commissions"
+                                               target="_blank">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                         </div>
@@ -597,6 +698,160 @@ html.dark-mode {
 }
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
+
+/* ============================================================
+   ✅ TIME FILTER BAR
+   ============================================================ */
+.time-filter-bar {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.time-filter-left {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 1px;
+    flex-shrink: 0;
+}
+.time-filter-left i { color: #DC2626; font-size: 14px; }
+.time-filter-buttons {
+    display: flex; align-items: center; gap: 6px;
+    flex-wrap: wrap; flex: 1;
+}
+.time-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; padding: 8px 16px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 12px; font-weight: 700;
+    text-decoration: none;
+    cursor: pointer; transition: all 0.25s ease;
+    white-space: nowrap;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.time-btn:hover {
+    background: var(--bg-hover);
+    border-color: #DC2626;
+    color: #DC2626;
+    transform: translateY(-1px);
+}
+.time-btn.active {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF;
+    border-color: #B91C1C;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+    transform: translateY(-1px);
+}
+.time-btn-custom {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    color: #FFFFFF;
+    border-color: #6D28D9;
+}
+.time-btn-custom:hover {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    color: #FFFFFF;
+    border-color: #5B21B6;
+}
+.time-btn-custom.active {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    border-color: #5B21B6;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
+}
+
+/* CUSTOM DATE FILTER FORM */
+.filter-bar-main {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.filter-form-main {
+    display: flex; align-items: flex-end;
+    gap: 14px; flex-wrap: wrap;
+}
+.filter-item {
+    display: flex; flex-direction: column;
+    gap: 6px; flex: 1; min-width: 160px;
+}
+.filter-item label {
+    font-size: 11px; font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+    display: flex; align-items: center; gap: 6px;
+}
+.filter-item label i { color: #DC2626; font-size: 11px; }
+.filter-input {
+    padding: 11px 14px;
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px; font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    font-family: 'Inter', sans-serif;
+    transition: all 0.25s ease;
+    width: 100%;
+}
+.filter-input:focus {
+    outline: none;
+    border-color: #DC2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+    background: var(--bg-card);
+}
+.filter-actions {
+    display: flex; gap: 8px;
+    align-items: flex-end; flex-shrink: 0;
+}
+.btn-filter-main {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 22px;
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: #FFFFFF; border: none;
+    border-radius: 10px;
+    font-size: 13px; font-weight: 800;
+    cursor: pointer; transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    white-space: nowrap;
+}
+.btn-filter-main:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.45);
+    color: #FFFFFF;
+}
+.btn-reset-main {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 22px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 13px; font-weight: 800;
+    text-decoration: none; cursor: pointer;
+    transition: all 0.25s ease;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.btn-reset-main:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: #94A3B8;
+    transform: translateY(-2px);
+}
 
 /* BLUE BRANCH CARD */
 .branch-status-card-blue {
@@ -1251,6 +1506,20 @@ html.dark-mode .btn-provider-view {
     .cp-value { font-size: clamp(16px, 1.6vw, 20px); }
 }
 @media (max-width: 768px) {
+    .time-filter-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+    .time-filter-left { justify-content: center; }
+    .time-filter-buttons { justify-content: center; }
+    .time-btn { flex: 1; min-width: 60px; }
+    
+    .filter-form-main { flex-direction: column; align-items: stretch; }
+    .filter-item { min-width: 100%; }
+    .filter-actions { width: 100%; flex-direction: column; }
+    .btn-filter-main, .btn-reset-main { width: 100%; justify-content: center; }
+    
     .branch-status-card-blue { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 14px; }
     .branch-status-info-blue { width: 100%; }
     .branch-status-date-blue { align-self: flex-start; }

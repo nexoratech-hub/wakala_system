@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/dashboard/employee.php
-// WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD - FINAL FIXED
-// ✅ FIXED: Capital data inachukua LATEST daily report pekee
-// ✅ FIXED: Float inasoma kutoka daily_reports.current_float
-// ✅ FIXED: Fallback inasoma kutoka daily_report_providers (kama current_float = 0)
-// ✅ FIXED: Profile picture inaonekana kwenye welcome card
-// ✅ NEW: Fallback kwa initials kama profile pic haipo
+// WAKALA FINANCIAL SYSTEM - EMPLOYEE DASHBOARD
+// ✅ All Time + This Month values
+// ✅ MY SALARY card with status: upcoming / waiting / paid
+// ✅ 4 cards grid 2x2 (row 2 + row 2)
+// ✅ My Financial Overview
+// ✅ Profile picture
 // ================================================================
 
 require_once '../../config/config.php';
@@ -45,13 +45,12 @@ if (!$employee) {
 $employee_branch_id = intval($employee['branch_id'] ?? 0);
 
 // ============================================================
-// PROFILE PICTURE HANDLING
+// PROFILE PICTURE
 // ============================================================
 $profile_pic_url = '';
 $profile_pic_exists = false;
 $profile_initials = '';
 
-// Chukua initials (fallback)
 $name_parts = explode(' ', trim($employee['full_name']));
 if (count($name_parts) >= 2) {
     $profile_initials = strtoupper(substr($name_parts[0], 0, 1) . substr(end($name_parts), 0, 1));
@@ -59,16 +58,10 @@ if (count($name_parts) >= 2) {
     $profile_initials = strtoupper(substr($employee['full_name'] ?? 'U', 0, 2));
 }
 
-// Check kama profile_pic ipo kwenye database
 if (!empty($employee['profile_pic'])) {
     $pic_path = $employee['profile_pic'];
-    
-    // ✅ Full path kwenye filesystem (kwa checking)
     $full_path = __DIR__ . '/../../' . $pic_path;
-    
-    // ✅ URL path (kwa browser)
     $profile_pic_url = '../../' . $pic_path;
-    
     if (file_exists($full_path)) {
         $profile_pic_exists = true;
     }
@@ -91,21 +84,13 @@ if ($employee_branch_id > 0) {
 
 // ============================================================
 // CAPITAL DATA
-// ✅ FIX: Chukua data kwa LATEST DAILY REPORT pekee
-// ✅ FLOAT: daily_reports.current_float (KAMA ipo)
-// ✅ FALLBACK: SUM ya daily_report_providers.current_float
-// ✅ CASH: daily_reports.current_cash
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
 $latest_dr_id = 0;
 $latest_dr_date = null;
-$latest_dr_number = '';
 
-// ------------------------------------------------------------
-// STEP 1: Tafuta LATEST daily report ya branch hii
-// ------------------------------------------------------------
 $stmt = $db->prepare("
     SELECT id, report_number, report_date, current_cash, current_float, current_capital
     FROM daily_reports
@@ -117,17 +102,12 @@ $stmt->execute([$employee_branch_id]);
 $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if ($latest_dr) {
-    $latest_dr_id     = intval($latest_dr['id']);
-    $latest_dr_date   = $latest_dr['report_date'];
-    $latest_dr_number = $latest_dr['report_number'];
-    $total_cash       = floatval($latest_dr['current_cash'] ?? 0);
-    $total_float      = floatval($latest_dr['current_float'] ?? 0);
-    $total_capital    = floatval($latest_dr['current_capital'] ?? 0);
+    $latest_dr_id   = intval($latest_dr['id']);
+    $latest_dr_date = $latest_dr['report_date'];
+    $total_cash     = floatval($latest_dr['current_cash'] ?? 0);
+    $total_float    = floatval($latest_dr['current_float'] ?? 0);
+    $total_capital  = floatval($latest_dr['current_capital'] ?? 0);
 
-    // ------------------------------------------------------------
-    // STEP 2: Kama current_float ya DR ni 0, hesabu kutoka providers
-    // (fallback kwa DR za zamani ambazo hazina current_float)
-    // ------------------------------------------------------------
     if ($total_float <= 0) {
         $stmt = $db->prepare("
             SELECT COALESCE(SUM(current_float), 0) as total_float
@@ -138,47 +118,190 @@ if ($latest_dr) {
         $total_float = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total_float'] ?? 0);
     }
 
-    // ------------------------------------------------------------
-    // STEP 3: Recalculate capital kama haipo au 0
-    // ------------------------------------------------------------
     if ($total_capital <= 0) {
         $total_capital = $total_float + $total_cash;
     }
 }
 
 // ============================================================
-// SUMMARY DATA - MY OWN
+// SUMMARY DATA - ALL TIME + THIS MONTH
 // ============================================================
 $today = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
+$day = intval(date('d'));
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
-                      FROM commissions 
-                      WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
-                      AND branch_id = ? AND employee_id = ?");
-$stmt->execute([$month, $year, $employee_branch_id, $user_id]);
-$my_commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+// ============================================================
+// MY COMMISSION
+// ============================================================
+$my_commission_month = 0;
+$my_commission_total = 0;
 
-$stmt = $db->prepare("SELECT COALESCE(SUM(other_income), 0) as total 
-                      FROM commissions 
-                      WHERE branch_id = ? AND employee_id = ?");
-$stmt->execute([$employee_branch_id, $user_id]);
-$my_other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+try {
+    $stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
+                          FROM commissions 
+                          WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
+                          AND branch_id = ? AND employee_id = ?
+                          AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)");
+    $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
+    $my_commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
+    $stmt = $db->prepare("SELECT COALESCE(SUM(total_commission), 0) as total 
+                          FROM commissions 
+                          WHERE branch_id = ? AND employee_id = ?
+                          AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_commission_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// MY OTHER INCOME
+// ============================================================
+$my_other_income_month = 0;
+$my_other_income_total = 0;
+
+try {
+    $stmt = $db->prepare("SELECT COALESCE(SUM(other_income), 0) as total 
+                          FROM commissions 
+                          WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ? 
+                          AND branch_id = ? AND employee_id = ?
+                          AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)");
+    $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
+    $my_other_income_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $stmt = $db->prepare("SELECT COALESCE(SUM(other_income), 0) as total 
+                          FROM commissions 
+                          WHERE branch_id = ? AND employee_id = ?
+                          AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// MY EXPENSES
+// ============================================================
 $my_expenses_month = 0;
+$my_expenses_total = 0;
+$my_expenses_count = 0;
+
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
                           FROM expenses 
                           WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ? 
-                          AND branch_id = ? AND employee_id = ?");
+                          AND branch_id = ? AND employee_id = ?
+                          AND is_business_expense = 1");
     $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
     $my_expenses_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) {
-    $my_expenses_month = 0;
-}
 
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
+                          FROM expenses 
+                          WHERE branch_id = ? AND employee_id = ?
+                          AND is_business_expense = 1");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_expenses_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $stmt = $db->prepare("SELECT COUNT(*) as total 
+                          FROM expenses 
+                          WHERE branch_id = ? AND employee_id = ?
+                          AND is_business_expense = 1");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_expenses_count = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ MY SALARY - Latest + Status
+// ✅ Status Logic:
+//    - paid      → ipo kwenye employee_salaries na status = 'paid'
+//    - waiting   → tarehe >= 28, salary bado haijalipwa
+//    - upcoming  → tarehe 21-27
+//    - none      → hakuna salary bado
+// ============================================================
+$my_salary_current = 0;
+$my_salary_total = 0;
+$my_salary_paid = 0;
+$my_salary_pending = 0;
+$my_salary_status = 'none';
+$my_salary_month_label = '';
+$my_salary_month_date = '';
+
+try {
+    // Latest salary entry
+    $stmt = $db->prepare("
+        SELECT * 
+        FROM employee_salaries 
+        WHERE branch_id = ? AND employee_id = ?
+        ORDER BY salary_month DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $latest_salary = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($latest_salary) {
+        $my_salary_current = floatval($latest_salary['net_pay'] ?? 0);
+        $my_salary_month_date = $latest_salary['salary_month'] ?? '';
+        
+        if ($my_salary_month_date) {
+            $my_salary_month_label = date('M Y', strtotime($my_salary_month_date));
+        }
+
+        $salary_status_db = strtolower($latest_salary['status'] ?? 'pending');
+
+        // ✅ Determine status kulingana na DB + current date
+        if ($salary_status_db === 'paid') {
+            $my_salary_status = 'paid';
+        } else {
+            // Kama bado haijalipwa, tumia tarehe ya sasa
+            if ($day >= 28) {
+                $my_salary_status = 'waiting';
+            } elseif ($day >= 21 && $day <= 27) {
+                $my_salary_status = 'upcoming';
+            } else {
+                $my_salary_status = 'upcoming'; // 1-20 bado upcoming
+            }
+        }
+    }
+
+    // Total salaries (paid only)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(net_pay), 0) as total 
+        FROM employee_salaries 
+        WHERE branch_id = ? AND employee_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_salary_paid = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Pending salaries
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(net_pay), 0) as total 
+        FROM employee_salaries 
+        WHERE branch_id = ? AND employee_id = ? AND status != 'paid'
+    ");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_salary_pending = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Total all salaries
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(net_pay), 0) as total 
+        FROM employee_salaries 
+        WHERE branch_id = ? AND employee_id = ?
+    ");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_salary_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+} catch (PDOException $e) { }
+
+// ============================================================
+// MY AVAILABLE PROFIT
+// ============================================================
+$my_available_profit = ($my_commission_total + $my_other_income_total) - $my_expenses_total;
+if ($my_available_profit < 0) $my_available_profit = 0;
+
+// ============================================================
+// MY TRANSACTIONS
+// ============================================================
 $my_transactions_month = 0;
+$my_transactions_total = 0;
+
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total 
                           FROM transactions 
@@ -186,11 +309,20 @@ try {
                           AND branch_id = ? AND employee_id = ?");
     $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
     $my_transactions_month = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) {
-    $my_transactions_month = 0;
-}
 
+    $stmt = $db->prepare("SELECT COUNT(*) as total 
+                          FROM transactions 
+                          WHERE branch_id = ? AND employee_id = ?");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_transactions_total = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// MY CASH OUT
+// ============================================================
 $my_cash_out_month = 0;
+$my_cash_out_total = 0;
+
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
                           FROM store_cash_out 
@@ -198,11 +330,20 @@ try {
                           AND branch_id = ? AND employee_id = ?");
     $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
     $my_cash_out_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) {
-    $my_cash_out_month = 0;
-}
 
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
+                          FROM store_cash_out 
+                          WHERE branch_id = ? AND employee_id = ?");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_cash_out_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// MY TRANSFERS
+// ============================================================
 $my_transfer_month = 0;
+$my_transfer_total = 0;
+
 try {
     $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
                           FROM transfers 
@@ -210,12 +351,16 @@ try {
                           AND branch_id = ? AND employee_id = ?");
     $stmt->execute([$month, $year, $employee_branch_id, $user_id]);
     $my_transfer_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) {
-    $my_transfer_month = 0;
-}
+
+    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total 
+                          FROM transfers 
+                          WHERE branch_id = ? AND employee_id = ?");
+    $stmt->execute([$employee_branch_id, $user_id]);
+    $my_transfer_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
 
 // ============================================================
-// RECENT TRANSACTIONS
+// RECENT COMMISSIONS
 // ============================================================
 $stmt = $db->prepare("
     SELECT 
@@ -229,11 +374,33 @@ $stmt = $db->prepare("
         c.created_at
     FROM commissions c
     WHERE c.branch_id = ? AND c.employee_id = ?
+      AND (c.commission_number NOT LIKE 'CAP-%' OR c.commission_number IS NULL)
     ORDER BY c.commission_date DESC, c.id DESC
     LIMIT 5
 ");
 $stmt->execute([$employee_branch_id, $user_id]);
 $recent_transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ============================================================
+// RECENT EXPENSES
+// ============================================================
+$stmt = $db->prepare("
+    SELECT 
+        e.id,
+        e.expense_number,
+        e.expense_date,
+        e.expense_name,
+        e.category,
+        e.amount,
+        e.description
+    FROM expenses e
+    WHERE e.branch_id = ? AND e.employee_id = ?
+      AND e.is_business_expense = 1
+    ORDER BY e.expense_date DESC, e.id DESC
+    LIMIT 5
+");
+$stmt->execute([$employee_branch_id, $user_id]);
+$recent_expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 include_once '../../includes/employee_header.php';
 include_once '../../includes/employee_sidebar.php';
@@ -243,12 +410,9 @@ include_once '../../includes/employee_topbar.php';
 <div class="main-wrapper">
     <div class="main-content">
         
-        <!-- ============================================================
-             WELCOME CARD - WITH PROFILE PICTURE
-             ============================================================ -->
+        <!-- WELCOME CARD -->
         <div class="welcome-card-blue">
             <div class="welcome-content">
-                <!-- PROFILE PICTURE -->
                 <div class="welcome-avatar">
                     <?php if ($profile_pic_exists): ?>
                         <img src="<?php echo htmlspecialchars($profile_pic_url); ?>" 
@@ -265,7 +429,6 @@ include_once '../../includes/employee_topbar.php';
                     <?php endif; ?>
                 </div>
                 
-                <!-- WELCOME INFO -->
                 <div class="welcome-info">
                     <span class="welcome-label">Welcome back,</span>
                     <h1 class="welcome-name"><?php echo htmlspecialchars($employee['full_name']); ?></h1>
@@ -295,9 +458,7 @@ include_once '../../includes/employee_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-             CAPITAL SECTION (3 Parts)
-             ============================================================ -->
+        <!-- CAPITAL SECTION -->
         <div class="capital-section-wrapper">
             <div class="capital-section-header">
                 <div class="csh-left">
@@ -368,29 +529,36 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             INCOME CARDS
+             MY INCOME - 4 CARDS (2x2 GRID)
              ============================================================ -->
         <div class="section-title-bar">
             <h3><i class="fas fa-chart-line"></i> My Income</h3>
         </div>
         
-        <div class="cards-grid-3">
+        <div class="income-cards-grid">
+            <!-- MY COMMISSION -->
             <a href="../commissions/index_employee.php" class="nav-card nav-card-commission">
                 <div class="nav-card-icon">
                     <i class="fas fa-hand-holding-usd"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">MY COMMISSION</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($my_commission_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo formatCurrency($my_commission_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($my_commission_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- MY OTHER INCOME -->
             <a href="../commissions/index_employee.php?type=other" class="nav-card nav-card-other">
                 <div class="nav-card-icon">
                     <i class="fas fa-coins"></i>
@@ -398,25 +566,98 @@ include_once '../../includes/employee_topbar.php';
                 <div class="nav-card-content">
                     <span class="nav-card-label">MY OTHER INCOME</span>
                     <span class="nav-card-value"><?php echo formatCurrency($my_other_income_total); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-plus"></i> All time
-                    </span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($my_other_income_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- MY EXPENSES -->
             <a href="../expenses/index_employee.php" class="nav-card nav-card-expenses">
                 <div class="nav-card-icon">
                     <i class="fas fa-receipt"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">MY EXPENSES</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($my_expenses_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo formatCurrency($my_expenses_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-list"></i> <?php echo $my_expenses_count; ?> records
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($my_expenses_month); ?>
+                        </span>
+                    </div>
+                </div>
+                <div class="nav-card-arrow">
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+            </a>
+            
+            <!-- ✅ MY SALARY -->
+            <?php 
+                // Status classes
+                $status_class = 'status-' . $my_salary_status;
+                $status_label = '';
+                $status_icon = '';
+                
+                switch ($my_salary_status) {
+                    case 'paid':
+                        $status_label = 'PAID';
+                        $status_icon = 'fa-check-circle';
+                        break;
+                    case 'waiting':
+                        $status_label = 'WAITING';
+                        $status_icon = 'fa-clock';
+                        break;
+                    case 'upcoming':
+                        $status_label = 'UPCOMING';
+                        $status_icon = 'fa-hourglass-half';
+                        break;
+                    default:
+                        $status_label = 'NO SALARY';
+                        $status_icon = 'fa-info-circle';
+                }
+            ?>
+            <a href="../salaries/index_employee.php" class="nav-card nav-card-salary <?php echo $status_class; ?>">
+                <div class="nav-card-icon">
+                    <i class="fas fa-money-bill-wave"></i>
+                </div>
+                <div class="nav-card-content">
+                    <span class="nav-card-label">MY SALARY</span>
+                    <span class="nav-card-value"><?php echo formatCurrency($my_salary_current); ?></span>
+                    
+                    <div class="nav-card-subs">
+                        <?php if ($my_salary_status !== 'none' && $my_salary_month_label): ?>
+                            <span class="nav-card-sub-item salary-status-badge <?php echo $status_class; ?>">
+                                <i class="fas <?php echo $status_icon; ?>"></i> 
+                                <?php echo $status_label; ?> • <?php echo htmlspecialchars($my_salary_month_label); ?>
+                            </span>
+                        <?php else: ?>
+                            <span class="nav-card-sub-item salary-status-badge status-none">
+                                <i class="fas fa-info-circle"></i> 
+                                No salary yet
+                            </span>
+                        <?php endif; ?>
+                        
+                        <?php if ($my_salary_paid > 0 || $my_salary_pending > 0): ?>
+                            <span class="nav-card-sub-item nav-card-sub-highlight">
+                                <i class="fas fa-wallet"></i> 
+                                Paid: <?php echo formatCurrency($my_salary_paid); ?>
+                                <?php if ($my_salary_pending > 0): ?>
+                                    • Pending: <?php echo formatCurrency($my_salary_pending); ?>
+                                <?php endif; ?>
+                            </span>
+                        <?php endif; ?>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
@@ -425,55 +666,136 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             ACTIVITY CARDS
+             MY FINANCIAL OVERVIEW
+             ============================================================ -->
+        <div class="section-title-bar">
+            <h3><i class="fas fa-calculator"></i> My Financial Overview</h3>
+        </div>
+
+        <div class="financial-overview-wrapper">
+            <div class="fin-overview-grid">
+                <!-- COMMISSION -->
+                <div class="fin-card fin-card-green">
+                    <div class="fin-icon"><i class="fas fa-hand-holding-usd"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Commission</span>
+                        <span class="fin-value"><?php echo formatCurrency($my_commission_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($my_commission_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- OTHER INCOME -->
+                <div class="fin-card fin-card-purple">
+                    <div class="fin-icon"><i class="fas fa-coins"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Other Income</span>
+                        <span class="fin-value"><?php echo formatCurrency($my_other_income_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($my_other_income_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- EXPENSES -->
+                <div class="fin-card fin-card-red">
+                    <div class="fin-icon"><i class="fas fa-receipt"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Expenses</span>
+                        <span class="fin-value">- <?php echo formatCurrency($my_expenses_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($my_expenses_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- MY AVAILABLE PROFIT -->
+                <div class="fin-card fin-card-highlight">
+                    <div class="fin-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">My Available Profit</span>
+                        <span class="fin-value"><?php echo formatCurrency($my_available_profit); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-check-circle"></i> 
+                            Commission + Income - Expenses
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             MY ACTIVITY
              ============================================================ -->
         <div class="section-title-bar">
             <h3><i class="fas fa-exchange-alt"></i> My Activity</h3>
         </div>
         
         <div class="cards-grid-3">
+            <!-- TRANSACTIONS -->
             <a href="../daily_report/index_employee.php" class="nav-card nav-card-transactions">
                 <div class="nav-card-icon">
                     <i class="fas fa-exchange-alt"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">MY TRANSACTIONS</span>
-                    <span class="nav-card-value"><?php echo number_format($my_transactions_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo number_format($my_transactions_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo number_format($my_transactions_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- CASH OUT -->
             <a href="../cash_out/index_employee.php" class="nav-card nav-card-cashout">
                 <div class="nav-card-icon">
                     <i class="fas fa-money-bill-transfer"></i>
                 </div>
                 <div class="nav-card-content">
-                    <span class="nav-card-label">CASH OUT</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($my_cash_out_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-label">MY CASH OUT</span>
+                    <span class="nav-card-value"><?php echo formatCurrency($my_cash_out_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($my_cash_out_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- TRANSFER -->
             <a href="../transfers/index_employee.php" class="nav-card nav-card-transfer">
                 <div class="nav-card-icon">
                     <i class="fas fa-arrow-right-arrow-left"></i>
                 </div>
                 <div class="nav-card-content">
-                    <span class="nav-card-label">TRANSFER</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($my_transfer_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-label">MY TRANSFERS</span>
+                    <span class="nav-card-value"><?php echo formatCurrency($my_transfer_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($my_transfer_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
@@ -482,13 +804,13 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             RECENT TRANSACTIONS
+             RECENT COMMISSIONS
              ============================================================ -->
         <div class="section-container">
             <div class="section-header-view">
                 <h3>
                     <i class="fas fa-history"></i>
-                    Recent Transactions
+                    Recent Commissions
                     <span class="section-count-view"><?php echo count($recent_transactions); ?></span>
                 </h3>
                 <a href="../commissions/index_employee.php" class="btn-view-all">
@@ -500,7 +822,6 @@ include_once '../../includes/employee_topbar.php';
                 <div class="recent-list">
                     <?php foreach ($recent_transactions as $txn): 
                         $is_commission = $txn['total_commission'] > 0;
-                        $is_other = $txn['other_income'] > 0;
                         $amount = $is_commission ? floatval($txn['total_commission']) : floatval($txn['other_income']);
                         $type_label = $is_commission ? 'COMMISSION' : 'OTHER INCOME';
                         $type_class = $is_commission ? 'commission' : 'other';
@@ -533,7 +854,7 @@ include_once '../../includes/employee_topbar.php';
             <?php else: ?>
                 <div class="empty-recent">
                     <i class="fas fa-inbox"></i>
-                    <p>No recent transactions yet.</p>
+                    <p>No recent commissions yet.</p>
                     <div class="empty-actions">
                         <a href="../commissions/add_employee.php?branch_id=<?php echo $employee_branch_id; ?>" class="btn btn-add-commission">
                             <i class="fas fa-plus-circle"></i> Add Commission
@@ -544,8 +865,59 @@ include_once '../../includes/employee_topbar.php';
         </div>
 
         <!-- ============================================================
-             QUICK ACTIONS
+             RECENT EXPENSES
              ============================================================ -->
+        <div class="section-container">
+            <div class="section-header-view section-header-expenses">
+                <h3>
+                    <i class="fas fa-receipt"></i>
+                    Recent Expenses
+                    <span class="section-count-view"><?php echo count($recent_expenses); ?></span>
+                </h3>
+                <a href="../expenses/index_employee.php" class="btn-view-all">
+                    <i class="fas fa-eye"></i> View All
+                </a>
+            </div>
+
+            <?php if (count($recent_expenses) > 0): ?>
+                <div class="recent-list">
+                    <?php foreach ($recent_expenses as $exp): ?>
+                        <div class="recent-item">
+                            <div class="ri-icon ri-icon-expense">
+                                <i class="fas fa-receipt"></i>
+                            </div>
+                            <div class="ri-content">
+                                <div class="ri-top">
+                                    <span class="ri-badge ri-badge-expense">
+                                        <?php echo htmlspecialchars($exp['category']); ?>
+                                    </span>
+                                    <span class="ri-ref"><?php echo htmlspecialchars($exp['expense_number']); ?></span>
+                                </div>
+                                <div class="ri-meta">
+                                    <span class="ri-date">
+                                        <i class="far fa-calendar"></i>
+                                        <?php echo date('d M Y', strtotime($exp['expense_date'])); ?>
+                                    </span>
+                                    <span class="ri-name">
+                                        <?php echo htmlspecialchars($exp['expense_name']); ?>
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="ri-amount ri-amount-expense">
+                                - <?php echo formatCurrency($exp['amount']); ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="empty-recent">
+                    <i class="fas fa-inbox"></i>
+                    <p>No recent expenses yet.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- QUICK ACTIONS -->
         <div class="quick-actions-wrapper">
             <div class="qa-header">
                 <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
@@ -664,9 +1036,7 @@ html.dark-mode {
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* ============================================================
-   WELCOME CARD - WITH PROFILE PICTURE
-   ============================================================ */
+/* WELCOME CARD */
 .welcome-card-blue {
     display: flex;
     align-items: center;
@@ -700,8 +1070,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     position: relative;
     z-index: 1;
 }
-
-/* PROFILE PICTURE */
 .welcome-avatar {
     width: 72px;
     height: 72px;
@@ -738,16 +1106,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     background: linear-gradient(135deg, #FCD34D 0%, #F59E0B 100%);
     border-radius: 50%;
 }
-html.dark-mode .welcome-avatar {
-    border-color: rgba(252, 211, 77, 0.5);
-}
-
-.welcome-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-}
+.welcome-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .welcome-label {
     font-size: 11px; font-weight: 700;
     color: rgba(255, 255, 255, 0.75);
@@ -755,30 +1114,23 @@ html.dark-mode .welcome-avatar {
 }
 .welcome-name {
     font-size: 22px; font-weight: 900;
-    color: #FFFFFF;
-    margin: 0;
-    letter-spacing: 0.3px;
-    line-height: 1.1;
+    color: #FFFFFF; margin: 0;
+    letter-spacing: 0.3px; line-height: 1.1;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     word-break: break-word;
 }
 .welcome-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 6px;
+    display: flex; align-items: center;
+    gap: 8px; flex-wrap: wrap; margin-top: 6px;
 }
 .welcome-meta-item {
     display: inline-flex; align-items: center; gap: 5px;
     font-size: 11px; font-weight: 600;
     color: rgba(255, 255, 255, 0.95);
     background: rgba(255, 255, 255, 0.15);
-    padding: 4px 11px;
-    border-radius: 12px;
+    padding: 4px 11px; border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.15);
-    backdrop-filter: blur(4px);
-    white-space: nowrap;
+    backdrop-filter: blur(4px); white-space: nowrap;
 }
 .welcome-date {
     display: inline-flex; align-items: center; gap: 8px;
@@ -789,24 +1141,18 @@ html.dark-mode .welcome-avatar {
     color: #FFFFFF;
     border: 1px solid rgba(255, 255, 255, 0.2);
     backdrop-filter: blur(8px);
-    position: relative;
-    z-index: 1;
-    white-space: nowrap;
+    position: relative; z-index: 1; white-space: nowrap;
 }
 .welcome-date i { color: #FCD34D; }
 
-/* ============================================================
-   CAPITAL SECTION
-   ============================================================ */
+/* CAPITAL SECTION */
 .capital-section-wrapper {
     background: linear-gradient(135deg, #1E40AF 0%, #1D4ED8 50%, #2563EB 100%);
     border-radius: 16px;
     padding: 20px 24px;
     margin-bottom: 14px;
     box-shadow: 0 6px 24px rgba(30, 64, 175, 0.35);
-    position: relative;
-    overflow: hidden;
-    color: #FFFFFF;
+    position: relative; overflow: hidden; color: #FFFFFF;
 }
 .capital-section-wrapper::before {
     content: '';
@@ -814,20 +1160,14 @@ html.dark-mode .welcome-avatar {
     top: -50%; right: -10%;
     width: 350px; height: 350px;
     background: rgba(255, 255, 255, 0.06);
-    border-radius: 50%;
-    pointer-events: none;
+    border-radius: 50%; pointer-events: none;
 }
 .capital-section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
+    display: flex; justify-content: space-between;
+    align-items: center; gap: 16px;
+    margin-bottom: 16px; padding-bottom: 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-    position: relative;
-    z-index: 1;
-    flex-wrap: wrap;
+    position: relative; z-index: 1; flex-wrap: wrap;
 }
 .csh-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .csh-icon {
@@ -846,25 +1186,19 @@ html.dark-mode .welcome-avatar {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 8px 16px;
     background: rgba(252, 211, 77, 0.25);
-    color: #FCD34D;
-    border-radius: 20px;
+    color: #FCD34D; border-radius: 20px;
     font-size: 11px; font-weight: 800;
     border: 1.5px solid rgba(252, 211, 77, 0.4);
-    white-space: nowrap;
-    text-transform: uppercase;
+    white-space: nowrap; text-transform: uppercase;
     letter-spacing: 0.8px;
 }
 .capital-grid-3 {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    position: relative;
-    z-index: 1;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 14px; position: relative; z-index: 1;
 }
 .capital-part {
     background: rgba(255, 255, 255, 0.1);
-    border-radius: 14px;
-    padding: 16px 18px;
+    border-radius: 14px; padding: 16px 18px;
     display: flex; flex-direction: column; gap: 8px;
     border: 1.5px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(10px);
@@ -872,10 +1206,8 @@ html.dark-mode .welcome-avatar {
     min-width: 0; position: relative; overflow: hidden;
 }
 .capital-part::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 4px; height: 100%;
+    content: ''; position: absolute;
+    top: 0; left: 0; width: 4px; height: 100%;
 }
 .capital-part:hover {
     background: rgba(255, 255, 255, 0.15);
@@ -884,11 +1216,9 @@ html.dark-mode .welcome-avatar {
 .part-float::before { background: #60A5FA; }
 .part-cash::before { background: #86EFAC; }
 .part-total::before { background: #FCD34D; }
-
 .cp-header { display: flex; align-items: center; gap: 10px; }
 .cp-icon {
-    width: 40px; height: 40px;
-    border-radius: 10px;
+    width: 40px; height: 40px; border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     font-size: 17px; flex-shrink: 0;
     border: 1.5px solid rgba(255, 255, 255, 0.3);
@@ -899,8 +1229,7 @@ html.dark-mode .welcome-avatar {
 .cp-label {
     font-size: 10px; font-weight: 800;
     color: rgba(255, 255, 255, 0.85);
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
+    text-transform: uppercase; letter-spacing: 1.2px;
 }
 .cp-value {
     font-size: clamp(18px, 1.6vw, 24px);
@@ -920,36 +1249,26 @@ html.dark-mode .welcome-avatar {
     border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* ============================================================
-   SECTION TITLE BAR
-   ============================================================ */
+/* SECTION TITLE */
 .section-title-bar {
     margin: 18px 0 10px 0;
     padding-bottom: 8px;
     border-bottom: 2px solid var(--border-color);
 }
 .section-title-bar h3 {
-    font-size: 13px;
-    font-weight: 800;
-    color: var(--text-primary);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-size: 13px; font-weight: 800;
+    color: var(--text-primary); margin: 0;
+    display: flex; align-items: center; gap: 8px;
+    text-transform: uppercase; letter-spacing: 1px;
 }
-.section-title-bar h3 i {
-    color: #2563EB;
-    font-size: 15px;
-}
+.section-title-bar h3 i { color: #2563EB; font-size: 15px; }
 
 /* ============================================================
-   NAVIGATION CARDS
+   ✅ INCOME CARDS GRID - 2 COLUMNS (2 ROWS)
    ============================================================ */
-.cards-grid-3 {
+.income-cards-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 14px;
     margin-bottom: 16px;
     width: 100%;
@@ -965,31 +1284,22 @@ html.dark-mode .welcome-avatar {
     box-shadow: 0 2px 8px var(--shadow-color);
     border: 1.5px solid var(--border-color);
     transition: all 0.3s ease;
-    min-height: 100px;
-    position: relative;
-    overflow: hidden;
-    min-width: 0;
-    text-decoration: none;
-    color: inherit;
-    cursor: pointer;
+    min-height: 130px;
+    position: relative; overflow: hidden;
+    min-width: 0; text-decoration: none;
+    color: inherit; cursor: pointer;
 }
-
 .nav-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 4px; height: 100%;
+    content: ''; position: absolute;
+    top: 0; left: 0; width: 4px; height: 100%;
     transition: all 0.3s ease;
 }
-
 .nav-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 12px 28px var(--shadow-hover);
-    text-decoration: none;
-    color: inherit;
+    text-decoration: none; color: inherit;
     border-color: currentColor;
 }
-
 .nav-card-icon {
     width: 50px; height: 50px;
     border-radius: 13px;
@@ -997,192 +1307,314 @@ html.dark-mode .welcome-avatar {
     font-size: 22px; flex-shrink: 0;
     transition: all 0.3s ease;
 }
-
 .nav-card:hover .nav-card-icon {
     transform: scale(1.08) rotate(-4deg);
 }
-
 .nav-card-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 4px;
 }
-
 .nav-card-label {
-    font-size: 10px;
-    font-weight: 800;
+    font-size: 10px; font-weight: 800;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
 .nav-card-value {
     font-size: clamp(15px, 1.2vw, 20px);
-    font-weight: 900;
-    color: var(--text-primary);
+    font-weight: 900; color: var(--text-primary);
     font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px;
-    line-height: 1.15;
+    letter-spacing: -0.3px; line-height: 1.15;
     word-break: break-word;
 }
-
-.nav-card-sub {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-light);
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 2px;
+.nav-card-subs {
+    display: flex; flex-direction: column;
+    gap: 3px; margin-top: 4px;
 }
+.nav-card-sub-item {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-light);
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nav-card-sub-item i { font-size: 9px; }
+.nav-card-sub-highlight {
+    color: #F59E0B !important; font-weight: 800;
+}
+html.dark-mode .nav-card-sub-highlight { color: #FCD34D !important; }
 
 .nav-card-arrow {
-    width: 30px;
-    height: 30px;
+    width: 30px; height: 30px;
     border-radius: 50%;
     background: var(--bg-input);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    color: var(--text-muted);
-    transition: all 0.3s ease;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--text-muted);
+    transition: all 0.3s ease; flex-shrink: 0;
+    align-self: flex-start;
 }
-
 .nav-card:hover .nav-card-arrow {
-    transform: translateX(4px);
-    color: #FFFFFF;
+    transform: translateX(4px); color: #FFFFFF;
 }
 
-/* COMMISSION CARD */
+/* CARD COLORS */
 .nav-card-commission::before { background: #10B981; }
 .nav-card-commission .nav-card-icon {
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-    color: #059669;
-    border: 1.5px solid #6EE7B7;
+    color: #059669; border: 1.5px solid #6EE7B7;
 }
 .nav-card-commission .nav-card-value { color: #059669; }
 .nav-card-commission:hover { border-color: #10B981; }
-.nav-card-commission:hover .nav-card-arrow {
-    background: #10B981;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-commission .nav-card-icon {
-    background: linear-gradient(135deg, #065F46, #047857);
-    color: #34D399;
-    border-color: #10B981;
-}
+.nav-card-commission:hover .nav-card-arrow { background: #10B981; color: #FFFFFF; }
+html.dark-mode .nav-card-commission .nav-card-icon { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; border-color: #10B981; }
 html.dark-mode .nav-card-commission .nav-card-value { color: #34D399; }
 
-/* OTHER INCOME CARD */
 .nav-card-other::before { background: #7C3AED; }
 .nav-card-other .nav-card-icon {
     background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #7C3AED;
-    border: 1.5px solid #C4B5FD;
+    color: #7C3AED; border: 1.5px solid #C4B5FD;
 }
 .nav-card-other .nav-card-value { color: #7C3AED; }
 .nav-card-other:hover { border-color: #7C3AED; }
-.nav-card-other:hover .nav-card-arrow {
-    background: #7C3AED;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-other .nav-card-icon {
-    background: linear-gradient(135deg, #4C1D95, #5B21B6);
-    color: #C4B5FD;
-    border-color: #A78BFA;
-}
+.nav-card-other:hover .nav-card-arrow { background: #7C3AED; color: #FFFFFF; }
+html.dark-mode .nav-card-other .nav-card-icon { background: linear-gradient(135deg, #4C1D95, #5B21B6); color: #C4B5FD; border-color: #A78BFA; }
 html.dark-mode .nav-card-other .nav-card-value { color: #C4B5FD; }
 
-/* EXPENSES CARD */
 .nav-card-expenses::before { background: #DC2626; }
 .nav-card-expenses .nav-card-icon {
     background: linear-gradient(135deg, #FEE2E2, #FECACA);
-    color: #DC2626;
-    border: 1.5px solid #FCA5A5;
+    color: #DC2626; border: 1.5px solid #FCA5A5;
 }
 .nav-card-expenses .nav-card-value { color: #DC2626; }
 .nav-card-expenses:hover { border-color: #DC2626; }
-.nav-card-expenses:hover .nav-card-arrow {
-    background: #DC2626;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-expenses .nav-card-icon {
-    background: linear-gradient(135deg, #7F1D1D, #991B1B);
-    color: #FCA5A5;
-    border-color: #DC2626;
-}
+.nav-card-expenses:hover .nav-card-arrow { background: #DC2626; color: #FFFFFF; }
+html.dark-mode .nav-card-expenses .nav-card-icon { background: linear-gradient(135deg, #7F1D1D, #991B1B); color: #FCA5A5; border-color: #DC2626; }
 html.dark-mode .nav-card-expenses .nav-card-value { color: #FCA5A5; }
 
-/* TRANSACTIONS CARD */
+/* ✅ MY SALARY CARD */
+.nav-card-salary::before { background: #0EA5E9; }
+.nav-card-salary .nav-card-icon {
+    background: linear-gradient(135deg, #E0F2FE, #BAE6FD);
+    color: #0284C7; border: 1.5px solid #7DD3FC;
+}
+.nav-card-salary .nav-card-value { color: #0284C7; }
+.nav-card-salary:hover { border-color: #0EA5E9; }
+.nav-card-salary:hover .nav-card-arrow { background: #0EA5E9; color: #FFFFFF; }
+html.dark-mode .nav-card-salary .nav-card-icon { background: linear-gradient(135deg, #0C4A6E, #075985); color: #38BDF8; border-color: #0EA5E9; }
+html.dark-mode .nav-card-salary .nav-card-value { color: #38BDF8; }
+
+/* Salary status colors */
+.nav-card-salary.status-paid::before { background: #10B981; }
+.nav-card-salary.status-paid .nav-card-icon {
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    color: #059669; border-color: #6EE7B7;
+}
+.nav-card-salary.status-paid .nav-card-value { color: #059669; }
+
+.nav-card-salary.status-waiting::before { background: #F59E0B; }
+.nav-card-salary.status-waiting .nav-card-icon {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    color: #D97706; border-color: #FCD34D;
+}
+.nav-card-salary.status-waiting .nav-card-value { color: #D97706; }
+
+.nav-card-salary.status-upcoming::before { background: #3B82F6; }
+.nav-card-salary.status-upcoming .nav-card-icon {
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #1D4ED8; border-color: #93C5FD;
+}
+.nav-card-salary.status-upcoming .nav-card-value { color: #1D4ED8; }
+
+/* Salary status badge */
+.salary-status-badge {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px !important;
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    width: fit-content;
+}
+.salary-status-badge.status-paid {
+    background: #DCFCE7 !important;
+    color: #15803D !important;
+    border: 1.5px solid #10B981 !important;
+}
+.salary-status-badge.status-waiting {
+    background: #FEF3C7 !important;
+    color: #92400E !important;
+    border: 1.5px solid #F59E0B !important;
+}
+.salary-status-badge.status-upcoming {
+    background: #DBEAFE !important;
+    color: #1E40AF !important;
+    border: 1.5px solid #3B82F6 !important;
+}
+.salary-status-badge.status-none {
+    background: #F3F4F6 !important;
+    color: #6B7280 !important;
+    border: 1.5px solid #D1D5DB !important;
+}
+html.dark-mode .salary-status-badge.status-paid { background: #14532D !important; color: #4ADE80 !important; }
+html.dark-mode .salary-status-badge.status-waiting { background: #5F3A1E !important; color: #FBBF24 !important; }
+html.dark-mode .salary-status-badge.status-upcoming { background: #1E3A5F !important; color: #60A5FA !important; }
+
+/* ============================================================
+   NAV CARDS - 3 COLUMN (MY ACTIVITY)
+   ============================================================ */
+.cards-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+    width: 100%;
+}
+
+/* Transaction, Cashout, Transfer */
 .nav-card-transactions::before { background: #2563EB; }
 .nav-card-transactions .nav-card-icon {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    border: 1.5px solid #93C5FD;
+    color: #1D4ED8; border: 1.5px solid #93C5FD;
 }
 .nav-card-transactions .nav-card-value { color: #1D4ED8; }
 .nav-card-transactions:hover { border-color: #2563EB; }
-.nav-card-transactions:hover .nav-card-arrow {
-    background: #2563EB;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-transactions .nav-card-icon {
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
-    color: #60A5FA;
-    border-color: #3B82F6;
-}
+.nav-card-transactions:hover .nav-card-arrow { background: #2563EB; color: #FFFFFF; }
+html.dark-mode .nav-card-transactions .nav-card-icon { background: linear-gradient(135deg, #1E3A5F, #1E40AF); color: #60A5FA; border-color: #3B82F6; }
 html.dark-mode .nav-card-transactions .nav-card-value { color: #60A5FA; }
 
-/* CASH OUT CARD */
 .nav-card-cashout::before { background: #F59E0B; }
 .nav-card-cashout .nav-card-icon {
     background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #D97706;
-    border: 1.5px solid #FCD34D;
+    color: #D97706; border: 1.5px solid #FCD34D;
 }
 .nav-card-cashout .nav-card-value { color: #D97706; }
 .nav-card-cashout:hover { border-color: #F59E0B; }
-.nav-card-cashout:hover .nav-card-arrow {
-    background: #F59E0B;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-cashout .nav-card-icon {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-    color: #FBBF24;
-    border-color: #F59E0B;
-}
+.nav-card-cashout:hover .nav-card-arrow { background: #F59E0B; color: #FFFFFF; }
+html.dark-mode .nav-card-cashout .nav-card-icon { background: linear-gradient(135deg, #5F3A1E, #78350F); color: #FBBF24; border-color: #F59E0B; }
 html.dark-mode .nav-card-cashout .nav-card-value { color: #FBBF24; }
 
-/* TRANSFER CARD */
 .nav-card-transfer::before { background: #0D9488; }
 .nav-card-transfer .nav-card-icon {
     background: linear-gradient(135deg, #CCFBF1, #99F6E4);
-    color: #0D9488;
-    border: 1.5px solid #5EEAD4;
+    color: #0D9488; border: 1.5px solid #5EEAD4;
 }
 .nav-card-transfer .nav-card-value { color: #0D9488; }
 .nav-card-transfer:hover { border-color: #0D9488; }
-.nav-card-transfer:hover .nav-card-arrow {
-    background: #0D9488;
-    color: #FFFFFF;
-}
-html.dark-mode .nav-card-transfer .nav-card-icon {
-    background: linear-gradient(135deg, #134E4A, #115E59);
-    color: #5EEAD4;
-    border-color: #14B8A6;
-}
+.nav-card-transfer:hover .nav-card-arrow { background: #0D9488; color: #FFFFFF; }
+html.dark-mode .nav-card-transfer .nav-card-icon { background: linear-gradient(135deg, #134E4A, #115E59); color: #5EEAD4; border-color: #14B8A6; }
 html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
 
 /* ============================================================
-   SECTION CONTAINER
+   FINANCIAL OVERVIEW
    ============================================================ */
+.financial-overview-wrapper {
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    padding: 18px 20px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+.fin-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+.fin-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1.5px solid;
+    min-width: 0;
+    transition: all 0.3s ease;
+    position: relative; overflow: hidden;
+}
+.fin-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px var(--shadow-hover);
+}
+.fin-card::before {
+    content: ''; position: absolute;
+    top: -40px; right: -40px;
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+}
+.fin-card-green {
+    background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
+    border-color: #6EE7B7;
+}
+.fin-card-green .fin-icon { background: linear-gradient(135deg, #059669, #047857); color: #FFFFFF; }
+.fin-card-green .fin-value { color: #059669; }
+
+.fin-card-purple {
+    background: linear-gradient(135deg, #F5F3FF, #EDE9FE);
+    border-color: #C4B5FD;
+}
+.fin-card-purple .fin-icon { background: linear-gradient(135deg, #7C3AED, #6D28D9); color: #FFFFFF; }
+.fin-card-purple .fin-value { color: #7C3AED; }
+
+.fin-card-red {
+    background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
+    border-color: #FCA5A5;
+}
+.fin-card-red .fin-icon { background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFFFFF; }
+.fin-card-red .fin-value { color: #DC2626; }
+
+.fin-card-highlight {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    border-color: #F59E0B;
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.25);
+}
+.fin-card-highlight .fin-icon { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFFFFF; }
+.fin-card-highlight .fin-value { color: #B45309; }
+
+html.dark-mode .fin-card-green { background: linear-gradient(135deg, #064E3B, #065F46); border-color: #10B981; }
+html.dark-mode .fin-card-green .fin-value { color: #34D399; }
+html.dark-mode .fin-card-purple { background: linear-gradient(135deg, #4C1D95, #5B21B6); border-color: #A78BFA; }
+html.dark-mode .fin-card-purple .fin-value { color: #C4B5FD; }
+html.dark-mode .fin-card-red { background: linear-gradient(135deg, #7F1D1D, #991B1B); border-color: #DC2626; }
+html.dark-mode .fin-card-red .fin-value { color: #FCA5A5; }
+html.dark-mode .fin-card-highlight { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #F59E0B; }
+html.dark-mode .fin-card-highlight .fin-value { color: #FCD34D; }
+
+.fin-icon {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    position: relative; z-index: 1;
+}
+.fin-content {
+    display: flex; flex-direction: column;
+    gap: 3px; min-width: 0; flex: 1;
+    position: relative; z-index: 1;
+}
+.fin-label {
+    font-size: 10px; font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fin-value {
+    font-size: 18px; font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px; line-height: 1.15;
+    word-break: break-word;
+}
+.fin-sub {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-light);
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fin-sub i { font-size: 9px; }
+
+/* SECTION CONTAINER */
 .section-container {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1195,92 +1627,67 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     padding: 14px 20px;
     background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
     color: #FFFFFF;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-    position: relative;
-    overflow: hidden;
+    display: flex; justify-content: space-between;
+    align-items: center; gap: 16px;
+    flex-wrap: wrap; position: relative; overflow: hidden;
+}
+.section-header-view.section-header-expenses {
+    background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%);
 }
 .section-header-view::before {
-    content: '';
-    position: absolute;
+    content: ''; position: absolute;
     top: -50%; right: -5%;
     width: 200px; height: 200px;
     background: rgba(255, 255, 255, 0.06);
-    border-radius: 50%;
-    pointer-events: none;
+    border-radius: 50%; pointer-events: none;
 }
 .section-header-view h3 {
     font-size: 14px; font-weight: 800;
-    color: #FFFFFF;
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    position: relative;
-    z-index: 1;
+    color: #FFFFFF; margin: 0;
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; position: relative; z-index: 1;
 }
-.section-header-view h3 i {
-    color: #FCD34D;
-    font-size: 15px;
-}
+.section-header-view h3 i { color: #FCD34D; font-size: 15px; }
 .section-count-view {
     font-size: 11px; font-weight: 800;
-    color: #FCD34D;
-    padding: 3px 12px;
+    color: #FCD34D; padding: 3px 12px;
     background: rgba(252, 211, 77, 0.2);
     border-radius: 12px;
     border: 1px solid rgba(252, 211, 77, 0.35);
 }
 .btn-view-all {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
     padding: 8px 16px;
     background: rgba(255, 255, 255, 0.18);
-    color: #FFFFFF;
-    border-radius: 10px;
+    color: #FFFFFF; border-radius: 10px;
     text-decoration: none;
     font-size: 12px; font-weight: 700;
     border: 1.5px solid rgba(255, 255, 255, 0.25);
     transition: all 0.25s ease;
-    position: relative;
-    z-index: 1;
-    white-space: nowrap;
+    position: relative; z-index: 1; white-space: nowrap;
 }
 .btn-view-all:hover {
-    background: #FFFFFF;
-    color: #5B21B6;
+    background: #FFFFFF; color: #5B21B6;
     transform: translateY(-2px);
 }
 
 /* RECENT LIST */
 .recent-list {
     padding: 14px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: flex; flex-direction: column; gap: 10px;
 }
 .recent-item {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    display: flex; align-items: center; gap: 14px;
     padding: 12px 14px;
     background: var(--bg-input);
     border-radius: 10px;
     border: 1.5px solid var(--border-color);
-    position: relative;
-    overflow: hidden;
+    position: relative; overflow: hidden;
     transition: all 0.25s ease;
 }
 .recent-item::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0;
-    width: 4px; height: 100%;
+    content: ''; position: absolute;
+    left: 0; top: 0; width: 4px; height: 100%;
 }
 .ri-icon {
     width: 42px; height: 42px;
@@ -1291,122 +1698,95 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
 }
 .ri-icon-commission {
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-    color: #059669;
-    border-color: #10B981;
+    color: #059669; border-color: #10B981;
 }
 .ri-icon-other {
     background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #7C3AED;
-    border-color: #A78BFA;
+    color: #7C3AED; border-color: #A78BFA;
 }
-html.dark-mode .ri-icon-commission {
-    background: linear-gradient(135deg, #065F46, #047857);
-    color: #34D399;
+.ri-icon-expense {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    color: #DC2626; border-color: #FCA5A5;
 }
-html.dark-mode .ri-icon-other {
-    background: linear-gradient(135deg, #4C1D95, #5B21B6);
-    color: #C4B5FD;
-}
+html.dark-mode .ri-icon-commission { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; }
+html.dark-mode .ri-icon-other { background: linear-gradient(135deg, #4C1D95, #5B21B6); color: #C4B5FD; }
+html.dark-mode .ri-icon-expense { background: linear-gradient(135deg, #7F1D1D, #991B1B); color: #FCA5A5; }
+
 .recent-item:hover {
     background: var(--bg-card);
     transform: translateX(4px);
     box-shadow: 0 4px 16px var(--shadow-color);
 }
 .ri-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 6px;
 }
 .ri-top {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap;
 }
 .ri-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 10px;
-    border-radius: 8px;
+    display: inline-flex; align-items: center;
+    padding: 3px 10px; border-radius: 8px;
     font-size: 9px; font-weight: 800;
     letter-spacing: 0.8px;
 }
-.ri-badge-commission {
-    background: #DCFCE7;
-    color: #15803D;
-    border: 1.5px solid #10B981;
-}
-.ri-badge-other {
-    background: #EDE9FE;
-    color: #5B21B6;
-    border: 1.5px solid #A78BFA;
-}
+.ri-badge-commission { background: #DCFCE7; color: #15803D; border: 1.5px solid #10B981; }
+.ri-badge-other { background: #EDE9FE; color: #5B21B6; border: 1.5px solid #A78BFA; }
+.ri-badge-expense { background: #FEE2E2; color: #991B1B; border: 1.5px solid #FCA5A5; }
 html.dark-mode .ri-badge-commission { background: #14532D; color: #4ADE80; }
 html.dark-mode .ri-badge-other { background: #4C1D95; color: #C4B5FD; }
+html.dark-mode .ri-badge-expense { background: #7F1D1D; color: #FCA5A5; }
 
 .ri-ref {
     font-family: 'Courier New', monospace;
     font-size: 11px; font-weight: 800;
-    color: #1D4ED8;
-    background: #DBEAFE;
-    padding: 3px 10px;
-    border-radius: 6px;
+    color: #1D4ED8; background: #DBEAFE;
+    padding: 3px 10px; border-radius: 6px;
     white-space: nowrap;
 }
 html.dark-mode .ri-ref { background: #1E3A5F; color: #60A5FA; }
-
 .ri-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap;
 }
 .ri-date {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 11px; font-weight: 600;
     color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+    display: inline-flex; align-items: center; gap: 5px;
 }
 .ri-date i { font-size: 10px; color: #7C3AED; }
-
+.ri-name {
+    font-size: 11px; font-weight: 700;
+    color: var(--text-secondary);
+}
 .ri-amount {
     font-family: 'Inter', 'Courier New', monospace;
-    font-size: 15px;
-    font-weight: 900;
-    white-space: nowrap;
-    letter-spacing: -0.3px;
+    font-size: 15px; font-weight: 900;
+    white-space: nowrap; letter-spacing: -0.3px;
 }
 .ri-amount-commission { color: #059669; }
 .ri-amount-other { color: #7C3AED; }
+.ri-amount-expense { color: #DC2626; }
 html.dark-mode .ri-amount-commission { color: #34D399; }
 html.dark-mode .ri-amount-other { color: #C4B5FD; }
+html.dark-mode .ri-amount-expense { color: #FCA5A5; }
 
-/* EMPTY RECENT */
+/* EMPTY */
 .empty-recent {
-    text-align: center;
-    padding: 50px 20px;
+    text-align: center; padding: 50px 20px;
 }
 .empty-recent i {
-    font-size: 50px;
-    color: var(--text-light);
-    opacity: 0.4;
-    display: block;
-    margin-bottom: 12px;
+    font-size: 50px; color: var(--text-light);
+    opacity: 0.4; display: block; margin-bottom: 12px;
 }
 .empty-recent p {
-    font-size: 14px;
-    color: var(--text-muted);
+    font-size: 14px; color: var(--text-muted);
     margin: 0 0 16px 0;
 }
 .empty-actions { display: flex; justify-content: center; gap: 10px; }
 
-/* ============================================================
-   QUICK ACTIONS
-   ============================================================ */
+/* QUICK ACTIONS */
 .quick-actions-wrapper {
     background: var(--bg-card);
     border-radius: 14px;
@@ -1415,30 +1795,21 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 .qa-header {
-    margin-bottom: 14px;
-    padding-bottom: 12px;
+    margin-bottom: 14px; padding-bottom: 12px;
     border-bottom: 1.5px solid var(--border-color);
 }
 .qa-header h3 {
-    font-size: 14px;
-    font-weight: 800;
-    color: var(--text-primary);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    font-size: 14px; font-weight: 800;
+    color: var(--text-primary); margin: 0;
+    display: flex; align-items: center; gap: 8px;
 }
 .qa-header h3 i { color: #F59E0B; font-size: 15px; }
-
 .qa-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 12px;
 }
 .qa-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: flex; align-items: center; gap: 12px;
     padding: 14px 16px;
     background: var(--bg-input);
     border-radius: 12px;
@@ -1455,102 +1826,43 @@ html.dark-mode .ri-amount-other { color: #C4B5FD; }
     width: 42px; height: 42px;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 17px;
-    flex-shrink: 0;
+    font-size: 17px; flex-shrink: 0;
     transition: all 0.3s ease;
 }
 .qa-content {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
+    display: flex; flex-direction: column;
+    gap: 2px; min-width: 0; flex: 1;
 }
 .qa-title {
-    font-size: 12px;
-    font-weight: 800;
+    font-size: 12px; font-weight: 800;
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .qa-desc {
-    font-size: 10px;
-    font-weight: 600;
+    font-size: 10px; font-weight: 600;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-.qa-commission .qa-icon {
-    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
-    color: #059669;
-    border: 1.5px solid #10B981;
-}
-.qa-commission:hover {
-    border-color: #10B981;
-    background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
-}
-html.dark-mode .qa-commission .qa-icon {
-    background: linear-gradient(135deg, #065F46, #047857);
-    color: #34D399;
-}
-
-.qa-add .qa-icon {
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    border: 1.5px solid #3B82F6;
-}
-.qa-add:hover {
-    border-color: #3B82F6;
-    background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
-}
-html.dark-mode .qa-add .qa-icon {
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
-    color: #60A5FA;
-}
-
-.qa-other .qa-icon {
-    background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
-    color: #7C3AED;
-    border: 1.5px solid #A78BFA;
-}
-.qa-other:hover {
-    border-color: #A78BFA;
-    background: linear-gradient(135deg, #F5F3FF, #EDE9FE);
-}
-html.dark-mode .qa-other .qa-icon {
-    background: linear-gradient(135deg, #4C1D95, #5B21B6);
-    color: #C4B5FD;
-}
-
-.qa-report .qa-icon {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #D97706;
-    border: 1.5px solid #FCD34D;
-}
-.qa-report:hover {
-    border-color: #FCD34D;
-    background: linear-gradient(135deg, #FFFBEB, #FEF3C7);
-}
-html.dark-mode .qa-report .qa-icon {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-    color: #FBBF24;
-}
+.qa-commission .qa-icon { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: #059669; border: 1.5px solid #10B981; }
+.qa-commission:hover { border-color: #10B981; }
+html.dark-mode .qa-commission .qa-icon { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; }
+.qa-add .qa-icon { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1D4ED8; border: 1.5px solid #3B82F6; }
+.qa-add:hover { border-color: #3B82F6; }
+html.dark-mode .qa-add .qa-icon { background: linear-gradient(135deg, #1E3A5F, #1E40AF); color: #60A5FA; }
+.qa-other .qa-icon { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #7C3AED; border: 1.5px solid #A78BFA; }
+.qa-other:hover { border-color: #A78BFA; }
+html.dark-mode .qa-other .qa-icon { background: linear-gradient(135deg, #4C1D95, #5B21B6); color: #C4B5FD; }
+.qa-report .qa-icon { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #D97706; border: 1.5px solid #FCD34D; }
+.qa-report:hover { border-color: #FCD34D; }
+html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E, #78350F); color: #FBBF24; }
 
 /* BUTTONS */
 .btn {
     padding: 10px 22px;
-    border: none;
-    border-radius: 10px;
-    font-weight: 700;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
     transition: all 0.3s ease;
     font-family: 'Inter', sans-serif;
     white-space: nowrap;
@@ -1569,6 +1881,9 @@ html.dark-mode .qa-report .qa-icon {
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1400px) {
+    .fin-overview-grid { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 1200px) {
     .cards-grid-3 { grid-template-columns: repeat(2, 1fr); }
     .qa-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1579,6 +1894,7 @@ html.dark-mode .qa-report .qa-icon {
     .welcome-name { font-size: 20px; }
     .welcome-avatar { width: 64px; height: 64px; }
     .welcome-avatar-initials { font-size: 22px; }
+    .income-cards-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
     .welcome-card-blue { flex-direction: column; align-items: flex-start; padding: 16px 18px; }
@@ -1591,8 +1907,10 @@ html.dark-mode .qa-report .qa-icon {
     .capital-section-header { flex-direction: column; align-items: flex-start; }
     .capital-grid-3 { grid-template-columns: 1fr; gap: 10px; }
     
+    .income-cards-grid { grid-template-columns: 1fr; gap: 10px; }
     .cards-grid-3 { grid-template-columns: 1fr; gap: 10px; }
     .qa-grid { grid-template-columns: 1fr; gap: 10px; }
+    .fin-overview-grid { grid-template-columns: 1fr; gap: 10px; }
     
     .recent-item { flex-direction: column; align-items: flex-start; gap: 10px; }
     .ri-amount { font-size: 14px; align-self: flex-end; }
@@ -1606,7 +1924,7 @@ html.dark-mode .qa-report .qa-icon {
     .csh-icon { width: 40px; height: 40px; font-size: 18px; }
     .cp-value { font-size: 16px; }
     .cp-icon { width: 36px; height: 36px; font-size: 15px; }
-    .nav-card { padding: 12px 14px; gap: 12px; min-height: 90px; }
+    .nav-card { padding: 12px 14px; gap: 12px; min-height: 110px; }
     .nav-card-icon { width: 44px; height: 44px; font-size: 18px; }
     .nav-card-value { font-size: 16px; }
     .nav-card-arrow { width: 28px; height: 28px; font-size: 10px; }
@@ -1615,6 +1933,8 @@ html.dark-mode .qa-report .qa-icon {
     .qa-title { font-size: 11px; }
     .section-header-view { padding: 12px 16px; }
     .recent-list { padding: 12px 16px; }
+    .fin-value { font-size: 16px; }
+    .fin-icon { width: 42px; height: 42px; font-size: 18px; }
 }
 </style>
 
@@ -1630,7 +1950,8 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
     
     console.log('%c📊 Employee Dashboard', 'font-size:16px; font-weight:bold; color:#2563EB;');
-    console.log('%cProfile Picture: <?php echo $profile_pic_exists ? $profile_pic_url : "Fallback to initials"; ?>', 'font-size:11px; color:#059669;');
+    console.log('%cMy Salary: <?php echo formatCurrency($my_salary_current); ?> — Status: <?php echo $my_salary_status; ?>', 'font-size:13px; color:#0EA5E9; font-weight:bold;');
+    console.log('%cMy Commission: <?php echo formatCurrency($my_commission_total); ?>', 'font-size:13px; color:#059669;');
 });
 </script>
 </body>

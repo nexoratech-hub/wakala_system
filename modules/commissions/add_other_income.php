@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: modules/commissions/add_other_income.php
 // WAKALA FINANCIAL SYSTEM - ADD OTHER INCOME
-// FULL VERSION with optional Income Source (dropdown OR manual)
+// ✅ FIXED: Inaongeza current_cash & current_capital
+// ✅ FIXED: Dropdown CSS nzuri (custom arrow)
+// ✅ FIXED: Cards zina space nzuri (gap 24px)
 // ================================================================
 
 error_reporting(E_ALL);
@@ -23,6 +25,28 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
 
 $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+
+// ============================================================
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ============================================================
+function calculateTotalFloatFromReport($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
 
 // ============================================================
 // GET USER DATA
@@ -123,6 +147,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
+        // ============================================================
+        // ✅ START TRANSACTION
+        // ============================================================
+        $db->beginTransaction();
+        
         // Generate reference number
         $commission_number = 'OI-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
         
@@ -161,14 +190,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $income_id = $db->lastInsertId();
         
+        // ============================================================
+        // ✅ AGAR ALLOCATE TO CAPITAL = YES → UPDATE CASH & CAPITAL
+        // ============================================================
+        if ($allocate_to_capital == 'yes' && $amount > 0) {
+            // Get latest daily report for this branch
+            $stmt = $db->prepare("
+                SELECT id, current_cash, current_capital, current_float
+                FROM daily_reports 
+                WHERE branch_id = ? 
+                ORDER BY report_date DESC, id DESC 
+                LIMIT 1
+            ");
+            $stmt->execute([$branch_id]);
+            $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($latest_dr) {
+                $dr_id = $latest_dr['id'];
+                $current_float = calculateTotalFloatFromReport($db, $dr_id);
+                $new_cash = floatval($latest_dr['current_cash']) + $amount;
+                $new_capital = $current_float + $new_cash;
+                
+                // UPDATE daily_reports
+                $stmt = $db->prepare("
+                    UPDATE daily_reports 
+                    SET current_cash = ?, current_float = ?, current_capital = ?, updated_at = NOW() 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_cash, $current_float, $new_capital, $dr_id]);
+            }
+        }
+        
+        // Commit
+        $db->commit();
+        
         // Log activity
-        logActivity($user_id, 'Add Other Income', 'Commissions', $income_id, '', 'Added other income: ' . $commission_number . ' - ' . formatCurrency($amount));
+        logActivity($user_id, 'Add Other Income', 'Commissions', $income_id, '', 
+            'Added other income: ' . $commission_number . ' - ' . formatCurrency($amount) .
+            ($allocate_to_capital == 'yes' ? ' (Allocated to Capital)' : ' (Kept as Profit)'));
         
         $_SESSION['success_message'] = 'Other income of ' . formatCurrency($amount) . ' added successfully! Reference: ' . $commission_number;
         header('Location: index.php' . ($branch_id > 0 ? '?branch_id=' . $branch_id : ''));
         exit();
         
     } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
         $show_error = true;
     }
@@ -241,6 +307,17 @@ include_once '../../includes/admin_topbar.php';
         </div>
 
         <!-- ============================================================
+        INFO BANNER - ALLOCATE TO CAPITAL
+        ============================================================ -->
+        <div class="info-banner">
+            <i class="fas fa-vault"></i>
+            <div>
+                <strong>Kama "Allocate to Capital = Yes":</strong>
+                <p>Other income itaongezwa kwenye <strong>Branch Cash</strong> na <strong>Branch Capital</strong> baada ya ku-save.</p>
+            </div>
+        </div>
+
+        <!-- ============================================================
         FORM
         ============================================================ -->
         <div class="form-container">
@@ -270,7 +347,7 @@ include_once '../../includes/admin_topbar.php';
                             <div class="input-group">
                                 <span class="input-icon"><i class="fas fa-store-alt"></i></span>
                                 <select id="branch_id" name="branch_id" class="form-control" required>
-                                    <option value="">Select Branch</option>
+                                    <option value="">-- Select Branch --</option>
                                     <?php foreach ($all_branches as $br): ?>
                                         <option value="<?php echo $br['id']; ?>" <?php echo ($selected_branch == $br['id']) ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($br['branch_name']); ?>
@@ -352,7 +429,7 @@ include_once '../../includes/admin_topbar.php';
                     <div class="form-row">
                         <div class="form-group">
                             <label for="allocate_to_capital">Allocate to Capital</label>
-                            <div class="input-group">
+                            <div class="input-group select-group">
                                 <span class="input-icon"><i class="fas fa-building"></i></span>
                                 <select id="allocate_to_capital" name="allocate_to_capital" class="form-control">
                                     <option value="yes">Yes - Add to Capital</option>
@@ -483,7 +560,10 @@ body {
 }
 
 .main-wrapper { background: var(--form-bg) !important; }
-.main-content { background: var(--form-bg) !important; }
+.main-content { 
+    background: var(--form-bg) !important; 
+    padding: 20px 24px !important;
+}
 
 /* ============================================================
    PERSISTENT RED BRANCH STATUS CARD
@@ -495,7 +575,7 @@ body {
     padding: 18px 24px;
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 12px;
-    margin-bottom: 20px;
+    margin-bottom: 24px;
     box-shadow: 0 4px 20px rgba(220, 38, 38, 0.35);
     position: relative;
     overflow: hidden;
@@ -511,18 +591,6 @@ body {
     width: 250px;
     height: 250px;
     background: rgba(255, 255, 255, 0.05);
-    border-radius: 50%;
-    pointer-events: none;
-}
-
-.branch-status-card::after {
-    content: '';
-    position: absolute;
-    bottom: -60%;
-    left: 20%;
-    width: 200px;
-    height: 200px;
-    background: rgba(255, 255, 255, 0.03);
     border-radius: 50%;
     pointer-events: none;
 }
@@ -617,7 +685,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     padding: 0 4px;
 }
 
@@ -684,12 +752,64 @@ body {
 }
 
 /* ============================================================
+   INFO BANNER (Allocate to Capital)
+   ============================================================ */
+.info-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+    border: 2px solid #10B981;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    color: #065F46;
+    animation: slideDown 0.3s ease forwards;
+}
+
+html.dark-mode .info-banner {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
+    border-color: #10B981;
+    color: #D1FAE5;
+}
+
+.info-banner i {
+    font-size: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #059669;
+}
+
+html.dark-mode .info-banner i { color: #34D399; }
+
+.info-banner strong {
+    font-weight: 700;
+    font-size: 14px;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.info-banner p {
+    font-size: 13px;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.info-banner p strong {
+    display: inline;
+    font-weight: 800;
+    color: #059669;
+}
+
+html.dark-mode .info-banner p strong { color: #34D399; }
+
+/* ============================================================
    ALERTS
    ============================================================ */
 .alert {
     padding: 14px 18px;
     border-radius: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -736,15 +856,15 @@ body {
    ============================================================ */
 .form-container {
     background: var(--form-card-bg);
-    border-radius: 12px;
-    box-shadow: 0 1px 3px var(--form-shadow);
+    border-radius: 14px;
+    box-shadow: 0 4px 16px var(--form-shadow);
     border: 1px solid var(--form-border);
     overflow: hidden;
     animation: fadeInUp 0.4s ease forwards;
 }
 
 .form-section {
-    padding: 20px 24px;
+    padding: 24px 28px;
     border-bottom: 1px solid var(--form-border);
 }
 
@@ -754,14 +874,14 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     flex-wrap: wrap;
     gap: 8px;
 }
 
 .section-header h3 {
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--form-text);
     margin: 0;
 }
@@ -773,10 +893,13 @@ body {
 
 .section-badge {
     font-size: 11px;
+    font-weight: 600;
     color: var(--form-text-secondary);
     background: var(--form-hover);
-    padding: 2px 12px;
+    padding: 4px 14px;
     border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 /* ============================================================
@@ -787,7 +910,7 @@ body {
     font-weight: 700;
     color: #7C3AED;
     background: rgba(124, 58, 237, 0.12);
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -802,12 +925,17 @@ html.dark-mode .optional-badge {
 }
 
 /* ============================================================
-   FORM ROWS
+   FORM ROWS - NA SPACE KUBWA
    ============================================================ */
 .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.form-row:last-child {
+    margin-bottom: 0;
 }
 
 .form-row .full-width {
@@ -817,20 +945,40 @@ html.dark-mode .optional-badge {
 .form-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
+    min-width: 0;
 }
 
 .form-group label {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--form-text);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .form-group label .required {
     color: #DC2626;
-    font-weight: 700;
+    font-weight: 800;
 }
 
+.form-group small {
+    font-size: 11px;
+    color: var(--form-text-secondary);
+    font-weight: 500;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.4;
+}
+
+/* ============================================================
+   INPUT GROUP
+   ============================================================ */
 .input-group {
     position: relative;
     display: flex;
@@ -839,17 +987,22 @@ html.dark-mode .optional-badge {
 
 .input-icon {
     position: absolute;
-    left: 12px;
-    color: var(--form-text-light);
-    font-size: 14px;
+    left: 14px;
+    color: #7C3AED;
+    font-size: 15px;
     z-index: 1;
     pointer-events: none;
+    transition: color 0.3s ease;
+}
+
+.input-group:focus-within .input-icon {
+    color: #5B21B6;
 }
 
 .input-group .form-control {
-    padding: 10px 14px 10px 40px;
-    border-radius: 8px;
-    border: 1px solid var(--form-border);
+    padding: 12px 16px 12px 44px;
+    border-radius: 10px;
+    border: 1.5px solid var(--form-border);
     font-size: 14px;
     outline: none;
     transition: all 0.3s ease;
@@ -857,46 +1010,70 @@ html.dark-mode .optional-badge {
     background: var(--form-input-bg);
     color: var(--form-text);
     width: 100%;
+    font-weight: 500;
+    min-height: 46px;
 }
 
 .input-group .form-control::placeholder {
     color: var(--form-text-light);
+    font-weight: 400;
 }
 
 .input-group .form-control:focus {
     border-color: #7C3AED;
-    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
+    background: var(--form-card-bg);
 }
 
+/* ============================================================
+   ✅ SELECT DROPDOWN - CUSTOM ARROW YENYE CSS NZURI
+   ============================================================ */
 .input-group select.form-control {
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
+    -moz-appearance: none;
+    padding-right: 48px;
     cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237C3AED' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 16px center;
+    background-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.input-group select.form-control:hover {
+    border-color: #A78BFA;
+    background-color: var(--form-card-bg);
+}
+
+.input-group select.form-control:focus {
+    border-color: #7C3AED;
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
+    background-color: var(--form-card-bg);
 }
 
 html.dark-mode .input-group select.form-control {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239CA3AF' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23A78BFA' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 .input-group select.form-control option {
     background: var(--form-dropdown-bg);
     color: var(--form-text);
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 500;
 }
 
+/* ============================================================
+   TEXTAREA
+   ============================================================ */
 .input-group textarea.form-control {
-    padding: 10px 14px 10px 40px;
+    padding: 12px 16px 12px 44px;
     resize: vertical;
-    min-height: 80px;
-}
-
-.form-group small {
-    font-size: 12px;
-    color: var(--form-text-secondary);
-    margin-top: 2px;
+    min-height: 100px;
+    line-height: 1.6;
+    font-weight: 400;
 }
 
 /* ============================================================
@@ -915,79 +1092,100 @@ input[list]::-webkit-calendar-picker-indicator {
    ============================================================ */
 .info-display {
     background: var(--form-hover);
-    border-radius: 8px;
-    padding: 10px 16px;
+    border-radius: 10px;
+    padding: 14px 18px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    border: 1px solid var(--form-border);
+    gap: 8px;
+    border: 1.5px solid var(--form-border);
     height: 100%;
     justify-content: center;
-    min-height: 42px;
+    min-height: 46px;
 }
 
 .info-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 2px 0;
+    padding: 4px 0;
+    gap: 12px;
 }
 
 .info-label {
     font-size: 12px;
     color: var(--form-text-secondary);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .info-value {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 700;
     color: var(--form-text);
+    text-align: right;
 }
 
 /* ============================================================
    SUMMARY SECTION
    ============================================================ */
 .summary-section {
-    background: var(--form-hover);
+    background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%);
+}
+
+html.dark-mode .summary-section {
+    background: linear-gradient(135deg, #4C1D95 0%, #5B21B6 100%);
 }
 
 .summary-grid {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 12px;
+    gap: 16px;
 }
 
 .summary-item {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: 4px;
-    padding: 14px;
-    border-radius: 8px;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 24px;
+    border-radius: 12px;
     background: var(--form-card-bg);
-    border: 1px solid var(--form-border);
+    border: 2px solid #7C3AED;
+    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.15);
 }
 
 .summary-item.total {
-    background: var(--form-info-bg);
-    border-color: var(--form-info-border);
+    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
+    border-color: #5B21B6;
+    box-shadow: 0 6px 24px rgba(124, 58, 237, 0.35);
 }
 
 .summary-label {
-    font-size: 11px;
+    font-size: 13px;
     text-transform: uppercase;
     color: var(--form-text-secondary);
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.summary-item.total .summary-label {
+    color: rgba(255, 255, 255, 0.85);
 }
 
 .summary-value {
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 24px;
+    font-weight: 900;
     color: #7C3AED;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.5px;
+    text-shadow: 0 2px 8px rgba(124, 58, 237, 0.2);
 }
 
-html.dark-mode .summary-item.total .summary-value {
-    color: #A78BFA;
+.summary-item.total .summary-value {
+    color: #FFFFFF;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
 /* ============================================================
@@ -996,16 +1194,16 @@ html.dark-mode .summary-item.total .summary-value {
 .form-actions {
     display: flex;
     gap: 12px;
-    padding: 16px 24px;
+    padding: 20px 28px;
     border-top: 1px solid var(--form-border);
     background: var(--form-hover);
     flex-wrap: wrap;
 }
 
 .btn {
-    padding: 10px 24px;
-    border-radius: 8px;
-    font-weight: 600;
+    padding: 12px 28px;
+    border-radius: 10px;
+    font-weight: 700;
     font-size: 14px;
     border: none;
     cursor: pointer;
@@ -1015,17 +1213,20 @@ html.dark-mode .summary-item.total .summary-value {
     align-items: center;
     gap: 8px;
     text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .btn-submit {
-    background: #7C3AED;
+    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
     color: white;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
 }
 
 .btn-submit:hover {
-    background: #6D28D9;
+    background: linear-gradient(135deg, #6D28D9 0%, #4C1D95 100%);
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4);
+    box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
 }
 
 .btn-submit:disabled {
@@ -1037,7 +1238,7 @@ html.dark-mode .summary-item.total .summary-value {
 .btn-reset {
     background: var(--form-card-bg);
     color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
+    border: 1.5px solid var(--form-border);
 }
 
 .btn-reset:hover {
@@ -1048,7 +1249,7 @@ html.dark-mode .summary-item.total .summary-value {
 .btn-cancel {
     background: var(--form-card-bg);
     color: var(--form-text-secondary);
-    border: 1px solid var(--form-border);
+    border: 1.5px solid var(--form-border);
 }
 
 .btn-cancel:hover {
@@ -1074,12 +1275,23 @@ html.dark-mode .btn-cancel:hover {
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1024px) {
+    .form-row {
+        gap: 20px;
+    }
+}
+
 @media (max-width: 768px) {
+    .main-content {
+        padding: 16px 14px !important;
+    }
+    
     .branch-status-card {
         flex-direction: column;
         align-items: flex-start;
         gap: 12px;
         padding: 16px 18px;
+        margin-bottom: 20px;
     }
     
     .branch-status-info {
@@ -1095,11 +1307,13 @@ html.dark-mode .btn-cancel:hover {
         flex-direction: column;
         gap: 12px;
         align-items: flex-start;
+        margin-bottom: 16px;
     }
     
     .form-row {
         grid-template-columns: 1fr;
-        gap: 12px;
+        gap: 20px;
+        margin-bottom: 20px;
     }
     
     .form-row .full-width {
@@ -1107,11 +1321,12 @@ html.dark-mode .btn-cancel:hover {
     }
     
     .form-section {
-        padding: 16px 14px;
+        padding: 20px 18px;
     }
     
     .form-actions {
         flex-direction: column;
+        padding: 16px 18px;
     }
     
     .form-actions .btn {
@@ -1122,10 +1337,25 @@ html.dark-mode .btn-cancel:hover {
     .section-header {
         flex-direction: column;
         align-items: flex-start;
+        margin-bottom: 16px;
+    }
+    
+    .summary-item {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 20px;
+    }
+    
+    .summary-value {
+        font-size: 20px;
     }
 }
 
 @media (max-width: 480px) {
+    .main-content {
+        padding: 12px 10px !important;
+    }
+    
     .branch-status-name {
         font-size: 16px;
     }
@@ -1140,23 +1370,38 @@ html.dark-mode .btn-cancel:hover {
         font-size: 17px;
     }
     
+    .form-section {
+        padding: 16px 14px;
+    }
+    
     .input-group .form-control {
-        padding: 8px 12px 8px 36px;
+        padding: 10px 14px 10px 40px;
         font-size: 13px;
+        min-height: 42px;
+    }
+    
+    .input-group select.form-control {
+        padding-right: 42px;
+        background-position: right 12px center;
     }
     
     .input-icon {
-        left: 10px;
-        font-size: 13px;
+        left: 12px;
+        font-size: 14px;
     }
     
     .btn {
-        padding: 8px 16px;
+        padding: 10px 20px;
         font-size: 13px;
     }
     
     .summary-value {
-        font-size: 17px;
+        font-size: 18px;
+    }
+    
+    .form-row {
+        gap: 16px;
+        margin-bottom: 16px;
     }
 }
 </style>
@@ -1186,7 +1431,6 @@ function formatMoneyInput(input) {
     
     input.value = formatted;
     
-    // Update summary
     updateSummary();
 }
 
@@ -1232,7 +1476,22 @@ function validateForm() {
         return false;
     }
     
-    // Income source is OPTIONAL - no validation required
+    var allocateSelect = document.getElementById('allocate_to_capital');
+    var allocateValue = allocateSelect ? allocateSelect.value : 'yes';
+    
+    var amountText = 'TSh ' + amount.toLocaleString('en-US');
+    
+    if (allocateValue === 'yes') {
+        var msg = 'Save Other Income and ALLOCATE TO CAPITAL?\n\n' +
+                  'Amount: ' + amountText + '\n\n' +
+                  'This will:\n' +
+                  '• Increase branch cash\n' +
+                  '• Increase branch capital\n\n' +
+                  'Continue?';
+        if (!confirm(msg)) {
+            return false;
+        }
+    }
     
     var submitBtn = document.getElementById('submitBtn');
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
@@ -1252,10 +1511,8 @@ function confirmReset() {
 // INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Update summary on load
     updateSummary();
     
-    // Update branch info display when branch changes
     var branchSelect = document.getElementById('branch_id');
     if (branchSelect) {
         branchSelect.addEventListener('change', function() {

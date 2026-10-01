@@ -4,7 +4,8 @@
 // WAKALA FINANCIAL SYSTEM - VIEW PROVIDER TRANSACTIONS
 // ✅ FIXED: Inafanya kazi kwa EMPLOYEE, ADMIN, na SUPER_ADMIN
 // ✅ FIXED: current_float kutoka LATEST record
-// ✅ FIXED: Layout sahihi (haipiti nyuma ya sidebar)
+// ✅ NEW: CHANGE Transaction (Deposit ↔ Withdrawal)
+// ✅ NEW: DELETE Transaction (inarudisha float/cash)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -52,6 +53,427 @@ if ($is_employee) {
     if (!$emp_data || intval($emp_data['branch_id']) !== $branch_id) {
         $_SESSION['error_message'] = 'You do not have permission for this branch.';
         header('Location: index_employee.php');
+        exit();
+    }
+}
+
+// ============================================================
+// HELPER: Sync daily_report totals from providers
+// ============================================================
+function syncDailyReportTotals($db, $daily_report_id, $current_cash) {
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(latest.current_float), 0) as total_float,
+            COALESCE(SUM(latest.total_deposits), 0) as total_deposits,
+            COALESCE(SUM(latest.total_withdrawals), 0) as total_withdrawals
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float, 
+                   drp1.total_deposits, drp1.total_withdrawals
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_float = floatval($totals['total_float'] ?? 0);
+    $total_deposits = floatval($totals['total_deposits'] ?? 0);
+    $total_withdrawals = floatval($totals['total_withdrawals'] ?? 0);
+    $current_capital = $total_float + $current_cash;
+    
+    $stmt = $db->prepare("
+        UPDATE daily_reports 
+        SET current_float = ?, current_capital = ?,
+            total_deposits = ?, total_withdrawals = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([$total_float, $current_capital, $total_deposits, $total_withdrawals, $daily_report_id]);
+    
+    return [
+        'total_float' => $total_float,
+        'current_capital' => $current_capital,
+        'total_deposits' => $total_deposits,
+        'total_withdrawals' => $total_withdrawals
+    ];
+}
+
+// ============================================================
+// HANDLE AJAX: CHANGE / DELETE TRANSACTION
+// ============================================================
+if (isset($_POST['ajax_action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        // ============================================================
+        // ✅ CHANGE TRANSACTION TYPE (Deposit ↔ Withdrawal)
+        // Inarudisha float/cash kwenye hali ya awali, kisha inatumia mpya
+        // ============================================================
+        if ($_POST['ajax_action'] === 'change_transaction') {
+            $txn_id = intval($_POST['transaction_id'] ?? 0);
+            
+            if ($txn_id <= 0) throw new Exception('Invalid transaction ID.');
+            
+            $db->beginTransaction();
+            
+            // Get transaction
+            $stmt = $db->prepare("
+                SELECT t.*, dr.id as daily_report_id, dr.current_cash
+                FROM transactions t
+                LEFT JOIN daily_reports dr ON t.branch_id = dr.branch_id 
+                    AND dr.report_date = DATE(t.transaction_date)
+                WHERE t.id = ?
+            ");
+            $stmt->execute([$txn_id]);
+            $txn = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$txn) throw new Exception('Transaction not found.');
+            if (intval($txn['branch_id']) !== $branch_id) {
+                throw new Exception('Unauthorized.');
+            }
+            
+            $daily_report_id = intval($txn['daily_report_id'] ?? 0);
+            if ($daily_report_id <= 0) {
+                throw new Exception('Daily report not found for this transaction.');
+            }
+            
+            $old_type = $txn['transaction_type'];
+            $new_type = ($old_type === 'deposit') ? 'withdrawal' : 'deposit';
+            $amount = floatval($txn['amount']);
+            
+            // Get provider row
+            $stmt = $db->prepare("
+                SELECT * FROM daily_report_providers 
+                WHERE daily_report_id = ? AND provider_id = ?
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt->execute([$daily_report_id, $provider_id]);
+            $dr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$dr_provider) {
+                throw new Exception('Provider record not found.');
+            }
+            
+            $current_float = floatval($dr_provider['current_float']);
+            
+            // Get current cash
+            $stmt = $db->prepare("SELECT current_cash FROM daily_reports WHERE id = ?");
+            $stmt->execute([$daily_report_id]);
+            $dr_row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_cash = floatval($dr_row['current_cash'] ?? 0);
+            
+            // ============================================================
+            // STEP 1: RUDISHA float/cash kwenye hali ya awali (reverse)
+            // ============================================================
+            if ($old_type === 'deposit') {
+                // Deposit ilifanya: Float -amount, Cash +amount
+                // Reverse: Float +amount, Cash -amount
+                $reversed_float = $current_float + $amount;
+                $reversed_cash = $current_cash - $amount;
+            } else {
+                // Withdrawal ilifanya: Float +amount, Cash -amount
+                // Reverse: Float -amount, Cash +amount
+                $reversed_float = $current_float - $amount;
+                $reversed_cash = $current_cash + $amount;
+            }
+            
+            if ($reversed_float < 0) {
+                throw new Exception('Cannot reverse — reversed float would be negative.');
+            }
+            if ($reversed_cash < 0) {
+                throw new Exception('Cannot reverse — reversed cash would be negative.');
+            }
+            
+            // ============================================================
+            // STEP 2: TUMIA new type
+            // ============================================================
+            if ($new_type === 'deposit') {
+                $final_float = $reversed_float - $amount;
+                $final_cash = $reversed_cash + $amount;
+            } else {
+                $final_float = $reversed_float + $amount;
+                $final_cash = $reversed_cash - $amount;
+            }
+            
+            if ($final_float < 0) {
+                throw new Exception('Insufficient float for change. Final float would be negative.');
+            }
+            if ($final_cash < 0) {
+                throw new Exception('Insufficient cash for change. Final cash would be negative.');
+            }
+            
+            // ============================================================
+            // STEP 3: UPDATE transactions table
+            // ============================================================
+            $stmt = $db->prepare("
+                UPDATE transactions 
+                SET transaction_type = ?, 
+                    notes = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $new_type,
+                "Changed from " . $old_type . " to " . $new_type . " by user #" . $user_id,
+                $txn_id
+            ]);
+            
+            // ============================================================
+            // STEP 4: UPDATE daily_report_providers
+            // Update: current_float, total_deposits, total_withdrawals
+            // ============================================================
+            $new_total_deposits = floatval($dr_provider['total_deposits']);
+            $new_total_withdrawals = floatval($dr_provider['total_withdrawals']);
+            
+            // Ondoa old
+            if ($old_type === 'deposit') {
+                $new_total_deposits -= $amount;
+            } else {
+                $new_total_withdrawals -= $amount;
+            }
+            
+            // Ongeza new
+            if ($new_type === 'deposit') {
+                $new_total_deposits += $amount;
+            } else {
+                $new_total_withdrawals += $amount;
+            }
+            
+            $stmt = $db->prepare("
+                UPDATE daily_report_providers 
+                SET current_float = ?,
+                    total_deposits = ?,
+                    total_withdrawals = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $final_float,
+                max(0, $new_total_deposits),
+                max(0, $new_total_withdrawals),
+                $dr_provider['id']
+            ]);
+            
+            // ============================================================
+            // STEP 5: UPDATE daily_reports.current_cash
+            // ============================================================
+            $stmt = $db->prepare("
+                UPDATE daily_reports SET current_cash = ?, updated_at = NOW() WHERE id = ?
+            ");
+            $stmt->execute([$final_cash, $daily_report_id]);
+            
+            // ============================================================
+            // STEP 6: SYNC totals
+            // ============================================================
+            syncDailyReportTotals($db, $daily_report_id, $final_cash);
+            
+            // ============================================================
+            // STEP 7: UPDATE daily_report_transactions
+            // ============================================================
+            $stmt = $db->prepare("
+                UPDATE daily_report_transactions 
+                SET transaction_type = ?
+                WHERE daily_report_id = ? 
+                  AND provider_id = ? 
+                  AND amount = ?
+                  AND transaction_type = ?
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt->execute([
+                $new_type, $daily_report_id, $provider_id, $amount, $old_type
+            ]);
+            
+            // ============================================================
+            // STEP 8: LOG
+            // ============================================================
+            if (function_exists('logActivity')) {
+                logActivity(
+                    $user_id, 
+                    'Change Transaction', 
+                    'Transactions', 
+                    $txn_id, 
+                    $old_type, 
+                    $new_type . ' - Amount: TSh ' . number_format($amount)
+                );
+            }
+            
+            $db->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Transaction imebadilishwa kutoka ' . strtoupper($old_type) . ' kwenda ' . strtoupper($new_type) . ' kikamilifu!',
+                'old_type' => $old_type,
+                'new_type' => $new_type,
+                'new_float' => $final_float,
+                'new_cash' => $final_cash
+            ]);
+            exit();
+        }
+        
+        // ============================================================
+        // ✅ DELETE TRANSACTION (inarudisha float/cash)
+        // ============================================================
+        if ($_POST['ajax_action'] === 'delete_transaction') {
+            $txn_id = intval($_POST['transaction_id'] ?? 0);
+            
+            if ($txn_id <= 0) throw new Exception('Invalid transaction ID.');
+            
+            $db->beginTransaction();
+            
+            // Get transaction
+            $stmt = $db->prepare("
+                SELECT t.*, dr.id as daily_report_id, dr.current_cash
+                FROM transactions t
+                LEFT JOIN daily_reports dr ON t.branch_id = dr.branch_id 
+                    AND dr.report_date = DATE(t.transaction_date)
+                WHERE t.id = ?
+            ");
+            $stmt->execute([$txn_id]);
+            $txn = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$txn) throw new Exception('Transaction not found.');
+            if (intval($txn['branch_id']) !== $branch_id) {
+                throw new Exception('Unauthorized.');
+            }
+            
+            $daily_report_id = intval($txn['daily_report_id'] ?? 0);
+            if ($daily_report_id <= 0) {
+                throw new Exception('Daily report not found for this transaction.');
+            }
+            
+            $txn_type = $txn['transaction_type'];
+            $amount = floatval($txn['amount']);
+            
+            // Get provider row
+            $stmt = $db->prepare("
+                SELECT * FROM daily_report_providers 
+                WHERE daily_report_id = ? AND provider_id = ?
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt->execute([$daily_report_id, $provider_id]);
+            $dr_provider = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$dr_provider) {
+                throw new Exception('Provider record not found.');
+            }
+            
+            $current_float = floatval($dr_provider['current_float']);
+            $current_cash = floatval($txn['current_cash'] ?? 0);
+            
+            // ============================================================
+            // STEP 1: REVERSE float/cash
+            // ============================================================
+            if ($txn_type === 'deposit') {
+                // Deposit: Float -amount, Cash +amount
+                // Reverse: Float +amount, Cash -amount
+                $new_float = $current_float + $amount;
+                $new_cash = $current_cash - $amount;
+            } else {
+                // Withdrawal: Float +amount, Cash -amount
+                // Reverse: Float -amount, Cash +amount
+                $new_float = $current_float - $amount;
+                $new_cash = $current_cash + $amount;
+            }
+            
+            if ($new_float < 0) {
+                throw new Exception('Cannot delete — reversed float would be negative.');
+            }
+            if ($new_cash < 0) {
+                throw new Exception('Cannot delete — reversed cash would be negative.');
+            }
+            
+            // ============================================================
+            // STEP 2: UPDATE daily_report_providers
+            // ============================================================
+            $new_total_deposits = floatval($dr_provider['total_deposits']);
+            $new_total_withdrawals = floatval($dr_provider['total_withdrawals']);
+            
+            if ($txn_type === 'deposit') {
+                $new_total_deposits -= $amount;
+            } else {
+                $new_total_withdrawals -= $amount;
+            }
+            
+            $stmt = $db->prepare("
+                UPDATE daily_report_providers 
+                SET current_float = ?,
+                    total_deposits = ?,
+                    total_withdrawals = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $new_float,
+                max(0, $new_total_deposits),
+                max(0, $new_total_withdrawals),
+                $dr_provider['id']
+            ]);
+            
+            // ============================================================
+            // STEP 3: UPDATE daily_reports.current_cash
+            // ============================================================
+            $stmt = $db->prepare("
+                UPDATE daily_reports SET current_cash = ?, updated_at = NOW() WHERE id = ?
+            ");
+            $stmt->execute([$new_cash, $daily_report_id]);
+            
+            // ============================================================
+            // STEP 4: SYNC totals
+            // ============================================================
+            syncDailyReportTotals($db, $daily_report_id, $new_cash);
+            
+            // ============================================================
+            // STEP 5: DELETE transaction
+            // ============================================================
+            $stmt = $db->prepare("DELETE FROM transactions WHERE id = ?");
+            $stmt->execute([$txn_id]);
+            
+            // ============================================================
+            // STEP 6: DELETE daily_report_transactions
+            // ============================================================
+            $stmt = $db->prepare("
+                DELETE FROM daily_report_transactions 
+                WHERE daily_report_id = ? 
+                  AND provider_id = ? 
+                  AND amount = ?
+                  AND transaction_type = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$daily_report_id, $provider_id, $amount, $txn_type]);
+            
+            // ============================================================
+            // STEP 7: LOG
+            // ============================================================
+            if (function_exists('logActivity')) {
+                logActivity(
+                    $user_id, 
+                    'Delete Transaction', 
+                    'Transactions', 
+                    $txn_id, 
+                    $txn_type . ' TSh ' . number_format($amount), 
+                    'Deleted'
+                );
+            }
+            
+            $db->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Transaction imefutwa kikamilifu! Float na Cash zimerudishwa.',
+                'new_float' => $new_float,
+                'new_cash' => $new_cash
+            ]);
+            exit();
+        }
+        
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         exit();
     }
 }
@@ -198,7 +620,6 @@ html.dark-mode {
 
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 
-/* ✅ MAIN WRAPPER - SIDEBAR SAFE */
 .main-wrapper {
     margin-left: 240px;
     width: calc(100% - 240px);
@@ -218,24 +639,14 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     overflow-x: hidden;
 }
 
-/* ✅ RESPONSIVE */
 @media (max-width: 1024px) {
-    .main-wrapper {
-        margin-left: 240px;
-        width: calc(100% - 240px);
-    }
+    .main-wrapper { margin-left: 240px; width: calc(100% - 240px); }
     .main-wrapper .main-content { padding: 16px 18px; }
 }
-
 @media (max-width: 768px) {
-    .main-wrapper {
-        margin-left: 0;
-        width: 100%;
-        padding-top: 50px;
-    }
+    .main-wrapper { margin-left: 0; width: 100%; padding-top: 50px; }
     .main-wrapper .main-content { padding: 16px 14px; }
 }
-
 @media (max-width: 480px) {
     .main-wrapper { padding-top: 44px; }
     .main-wrapper .main-content { padding: 12px 10px; }
@@ -258,7 +669,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     overflow: hidden;
     color: #FFFFFF;
 }
-
 .main-wrapper .provider-header-card::before {
     content: '';
     position: absolute;
@@ -277,105 +687,65 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border-radius: 50%;
     pointer-events: none;
 }
-
 .main-wrapper .provider-header-left {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    min-width: 0;
-    flex: 1;
-    position: relative;
-    z-index: 1;
+    display: flex; align-items: center; gap: 18px;
+    min-width: 0; flex: 1;
+    position: relative; z-index: 1;
 }
-
 .main-wrapper .provider-header-icon {
     width: 68px; height: 68px;
     border-radius: 16px;
     background: rgba(255, 255, 255, 0.2);
     border: 2px solid rgba(255, 255, 255, 0.3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    color: #FFFFFF;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; color: #FFFFFF; flex-shrink: 0;
     backdrop-filter: blur(8px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 }
-
 .main-wrapper .provider-header-info {
-    min-width: 0;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    min-width: 0; flex: 1;
+    display: flex; flex-direction: column; gap: 4px;
 }
-
 .main-wrapper .provider-header-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px;
     color: rgba(255, 255, 255, 0.75);
 }
-
 .main-wrapper .provider-header-name {
-    font-size: 26px;
-    font-weight: 900;
-    color: #FFFFFF;
-    margin: 0;
-    letter-spacing: 0.3px;
-    line-height: 1.1;
-    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    word-break: break-word;
+    font-size: 26px; font-weight: 900; color: #FFFFFF;
+    margin: 0; letter-spacing: 0.3px; line-height: 1.1;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); word-break: break-word;
 }
-
 .main-wrapper .provider-header-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 6px;
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; margin-top: 6px;
 }
-
 .main-wrapper .provider-meta-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600;
     color: rgba(255, 255, 255, 0.9);
     background: rgba(255, 255, 255, 0.15);
-    padding: 4px 12px;
-    border-radius: 12px;
+    padding: 4px 12px; border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(4px);
 }
-
 .main-wrapper .provider-meta-item i { font-size: 11px; opacity: 0.9; }
-
 .main-wrapper .btn-back-header {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px;
     padding: 10px 20px;
     background: rgba(255, 255, 255, 0.18);
     color: #FFFFFF;
     border-radius: 10px;
     border: 1.5px solid rgba(255, 255, 255, 0.25);
     text-decoration: none;
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 13px; font-weight: 700;
     transition: all 0.25s ease;
     backdrop-filter: blur(8px);
-    position: relative;
-    z-index: 1;
+    position: relative; z-index: 1;
     white-space: nowrap;
 }
-
 .main-wrapper .btn-back-header:hover {
-    background: #FFFFFF;
-    color: #1F2937;
+    background: #FFFFFF; color: #1F2937;
     transform: translateX(-4px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 }
@@ -384,31 +754,22 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
    STATS GRID
    ============================================================ */
 .main-wrapper .stats-grid-soft {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin-bottom: 20px;
 }
-
 .main-wrapper .stat-card-soft {
-    position: relative;
-    border-radius: 14px;
+    position: relative; border-radius: 14px;
     padding: 18px 20px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    display: flex; align-items: center; gap: 14px;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 0;
-    overflow: hidden;
+    min-width: 0; overflow: hidden;
     border: 1.5px solid transparent;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-
 .main-wrapper .stat-card-soft:hover {
     transform: translateY(-4px);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
 }
-
 .main-wrapper .stat-card-soft-float {
     background: rgba(37, 99, 235, 0.08);
     border-color: rgba(37, 99, 235, 0.2);
@@ -419,7 +780,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border: 1.5px solid rgba(37, 99, 235, 0.3);
 }
 .main-wrapper .stat-card-soft-float .stat-value-soft { color: #1D4ED8; }
-
 .main-wrapper .stat-card-soft-deposit {
     background: rgba(5, 150, 105, 0.08);
     border-color: rgba(5, 150, 105, 0.2);
@@ -430,7 +790,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border: 1.5px solid rgba(5, 150, 105, 0.3);
 }
 .main-wrapper .stat-card-soft-deposit .stat-value-soft { color: #047857; }
-
 .main-wrapper .stat-card-soft-withdraw {
     background: rgba(220, 38, 38, 0.08);
     border-color: rgba(220, 38, 38, 0.2);
@@ -441,7 +800,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border: 1.5px solid rgba(220, 38, 38, 0.3);
 }
 .main-wrapper .stat-card-soft-withdraw .stat-value-soft { color: #B91C1C; }
-
 .main-wrapper .stat-card-soft-count {
     background: rgba(124, 58, 237, 0.08);
     border-color: rgba(124, 58, 237, 0.2);
@@ -452,7 +810,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     border: 1.5px solid rgba(124, 58, 237, 0.3);
 }
 .main-wrapper .stat-card-soft-count .stat-value-soft { color: #6D28D9; }
-
 html.dark-mode .main-wrapper .stat-card-soft-float { background: rgba(37, 99, 235, 0.15); border-color: rgba(37, 99, 235, 0.3); }
 html.dark-mode .main-wrapper .stat-card-soft-deposit { background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
 html.dark-mode .main-wrapper .stat-card-soft-withdraw { background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
@@ -461,74 +818,43 @@ html.dark-mode .main-wrapper .stat-card-soft-float .stat-value-soft { color: #60
 html.dark-mode .main-wrapper .stat-card-soft-deposit .stat-value-soft { color: #34D399; }
 html.dark-mode .main-wrapper .stat-card-soft-withdraw .stat-value-soft { color: #FCA5A5; }
 html.dark-mode .main-wrapper .stat-card-soft-count .stat-value-soft { color: #C4B5FD; }
-
 .main-wrapper .stat-icon-soft {
     width: 50px; height: 50px;
     border-radius: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0;
     transition: all 0.3s ease;
 }
-
 .main-wrapper .stat-card-soft:hover .stat-icon-soft {
     transform: scale(1.08) rotate(-4deg);
 }
-
 .main-wrapper .stat-info-soft {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    flex: 1;
-    gap: 2px;
+    display: flex; flex-direction: column;
+    min-width: 0; flex: 1; gap: 2px;
 }
-
 .main-wrapper .stat-label-soft {
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+    font-size: 10px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.8px;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
 .main-wrapper .stat-value-soft {
-    font-size: 18px;
-    font-weight: 900;
+    font-size: 18px; font-weight: 900;
     font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.3px;
-    line-height: 1.2;
+    letter-spacing: -0.3px; line-height: 1.2;
     word-break: break-word;
 }
-
 .main-wrapper .stat-sub-soft {
-    font-size: 10px;
-    font-weight: 600;
+    font-size: 10px; font-weight: 600;
     color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: inline-flex; align-items: center; gap: 4px;
     margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-.main-wrapper .stat-sub-soft i {
-    font-size: 9px;
-    color: var(--text-light);
-    flex-shrink: 0;
-}
-
+.main-wrapper .stat-sub-soft i { font-size: 9px; color: var(--text-light); flex-shrink: 0; }
 .main-wrapper .stat-decoration-soft {
-    position: absolute;
-    top: -30px; right: -30px;
-    width: 100px; height: 100px;
-    border-radius: 50%;
+    position: absolute; top: -30px; right: -30px;
+    width: 100px; height: 100px; border-radius: 50%;
     background: rgba(255, 255, 255, 0.15);
     pointer-events: none;
 }
@@ -537,145 +863,91 @@ html.dark-mode .main-wrapper .stat-card-soft-count .stat-value-soft { color: #C4
    SECTION HEADER
    ============================================================ */
 .main-wrapper .section-header {
-    display: flex;
-    align-items: center;
+    display: flex; align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
+    gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
 }
-
 .main-wrapper .section-header h2 {
-    font-size: 17px;
-    font-weight: 800;
+    font-size: 17px; font-weight: 800;
     color: var(--text-primary);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    letter-spacing: 0.2px;
+    margin: 0; display: flex; align-items: center;
+    gap: 10px; letter-spacing: 0.2px;
 }
-
 .main-wrapper .section-header h2 i {
-    color: #2563EB;
-    font-size: 18px;
+    color: #2563EB; font-size: 18px;
 }
-
 .main-wrapper .section-count {
-    font-size: 12px;
-    font-weight: 800;
-    background: #DBEAFE;
-    color: #1D4ED8;
-    padding: 4px 12px;
-    border-radius: 12px;
-    margin-left: 6px;
+    font-size: 12px; font-weight: 800;
+    background: #DBEAFE; color: #1D4ED8;
+    padding: 4px 12px; border-radius: 12px; margin-left: 6px;
 }
-
 html.dark-mode .main-wrapper .section-count {
-    background: #1E3A5F;
-    color: #60A5FA;
+    background: #1E3A5F; color: #60A5FA;
 }
 
 /* ============================================================
    EMPLOYEE SUMMARY
    ============================================================ */
 .main-wrapper .employee-summary-section {
-    background: var(--bg-card);
-    border-radius: 14px;
-    padding: 20px 22px;
-    margin-bottom: 20px;
+    background: var(--bg-card); border-radius: 14px;
+    padding: 20px 22px; margin-bottom: 20px;
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-
 .main-wrapper .employee-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 12px;
 }
-
 .main-wrapper .employee-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: flex; align-items: center; gap: 12px;
     padding: 12px 16px;
     background: var(--bg-input);
     border-radius: 10px;
     border: 1.5px solid var(--border-color);
     transition: all 0.25s ease;
 }
-
 .main-wrapper .employee-card:hover {
     border-color: #2563EB;
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
 }
-
 .main-wrapper .employee-avatar {
     width: 42px; height: 42px;
     border-radius: 50%;
     background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
     color: #FFFFFF;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
-
 .main-wrapper .employee-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 6px;
 }
-
 .main-wrapper .employee-name {
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 13px; font-weight: 700;
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
 .main-wrapper .employee-stats {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
+    display: flex; gap: 6px; flex-wrap: wrap;
 }
-
 .main-wrapper .employee-stat {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 10px;
-    border-radius: 8px;
-    font-size: 11px;
-    font-weight: 700;
-    white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 8px;
+    font-size: 11px; font-weight: 700; white-space: nowrap;
 }
-
 .main-wrapper .employee-stat i { font-size: 9px; }
-
 .main-wrapper .employee-stat.deposit-stat {
-    background: #DCFCE7;
-    color: #15803D;
-    border: 1px solid #BBF7D0;
+    background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0;
 }
 .main-wrapper .employee-stat.withdrawal-stat {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1px solid #FECACA;
+    background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA;
 }
 .main-wrapper .employee-stat.count-stat {
-    background: #DBEAFE;
-    color: #1D4ED8;
-    border: 1px solid #BFDBFE;
+    background: #DBEAFE; color: #1D4ED8; border: 1px solid #BFDBFE;
 }
-
 html.dark-mode .main-wrapper .employee-stat.deposit-stat { background: #14532D; color: #4ADE80; border-color: #16A34A; }
 html.dark-mode .main-wrapper .employee-stat.withdrawal-stat { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
 html.dark-mode .main-wrapper .employee-stat.count-stat { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
@@ -690,473 +962,538 @@ html.dark-mode .main-wrapper .employee-stat.count-stat { background: #1E3A5F; co
     border: 1.5px solid var(--border-color);
     box-shadow: 0 2px 8px var(--shadow-color);
 }
-
 .main-wrapper .transactions-filters {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
+    display: flex; gap: 6px; flex-wrap: wrap;
 }
-
 .main-wrapper .filter-btn {
-    padding: 7px 14px;
-    border-radius: 8px;
+    padding: 7px 14px; border-radius: 8px;
     border: 1.5px solid var(--border-color);
     background: var(--bg-input);
     color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 12px; font-weight: 700;
     cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
     transition: all 0.25s ease;
     font-family: 'Inter', sans-serif;
 }
-
 .main-wrapper .filter-btn:hover {
     background: var(--bg-body);
     border-color: #94A3B8;
 }
-
 .main-wrapper .filter-btn.active {
     background: linear-gradient(135deg, #1E40AF, #2563EB);
-    color: #FFFFFF;
-    border-color: #2563EB;
+    color: #FFFFFF; border-color: #2563EB;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
-
 .main-wrapper .filter-btn-deposit.active {
     background: linear-gradient(135deg, #059669, #10B981);
     border-color: #10B981;
     box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
 }
-
 .main-wrapper .filter-btn-withdrawal.active {
     background: linear-gradient(135deg, #DC2626, #EF4444);
     border-color: #EF4444;
     box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
 }
-
 .main-wrapper .transactions-search-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
+    display: flex; align-items: center;
+    gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
 }
-
 .main-wrapper .search-input-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: flex; align-items: center; gap: 8px;
     background: var(--bg-input);
     border: 1.5px solid var(--border-color);
     border-radius: 10px;
     padding: 8px 14px;
-    flex: 1;
-    max-width: 500px;
+    flex: 1; max-width: 500px;
     transition: all 0.25s ease;
 }
-
 .main-wrapper .search-input-group:focus-within {
     border-color: #2563EB;
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
-
 .main-wrapper .search-input-group > i {
-    color: #2563EB;
-    font-size: 13px;
+    color: #2563EB; font-size: 13px;
 }
-
 .main-wrapper .search-input-group input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    font-size: 13px;
-    color: var(--text-primary);
+    flex: 1; border: none; background: transparent;
+    font-size: 13px; color: var(--text-primary);
     outline: none;
-    font-family: 'Inter', sans-serif;
-    min-width: 0;
+    font-family: 'Inter', sans-serif; min-width: 0;
 }
-
 .main-wrapper .search-input-group input::placeholder {
     color: var(--text-light);
 }
-
 .main-wrapper .search-input-group button {
     width: 22px; height: 22px;
     border-radius: 50%;
-    background: #FEE2E2;
-    color: #DC2626;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    transition: all 0.2s ease;
+    background: #FEE2E2; color: #DC2626;
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; transition: all 0.2s ease;
     flex-shrink: 0;
 }
-
 .main-wrapper .search-input-group button:hover {
-    background: #DC2626;
-    color: #FFFFFF;
+    background: #DC2626; color: #FFFFFF;
 }
-
 .main-wrapper .txn-count {
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 12px; font-weight: 700;
     color: var(--text-muted);
     background: var(--bg-input);
-    padding: 8px 16px;
-    border-radius: 10px;
+    padding: 8px 16px; border-radius: 10px;
     border: 1.5px solid var(--border-color);
     white-space: nowrap;
 }
 
 /* TRANSACTION ITEM */
 .main-wrapper .transactions-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+    display: flex; flex-direction: column; gap: 12px;
 }
-
 .main-wrapper .txn-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 16px 18px;
+    display: flex; align-items: flex-start;
+    gap: 16px; padding: 16px 18px;
     background: var(--bg-input);
     border-radius: 12px;
     border: 1.5px solid var(--border-color);
-    position: relative;
-    overflow: hidden;
+    position: relative; overflow: hidden;
     transition: all 0.25s ease;
 }
-
 .main-wrapper .txn-item::before {
     content: '';
-    position: absolute;
-    left: 0; top: 0;
+    position: absolute; left: 0; top: 0;
     width: 5px; height: 100%;
 }
-
 .main-wrapper .txn-item-deposit::before { background: #10B981; }
 .main-wrapper .txn-item-withdrawal::before { background: #EF4444; }
-
 .main-wrapper .txn-item:hover {
     background: var(--bg-card);
     transform: translateX(4px);
     box-shadow: 0 6px 20px var(--shadow-color);
 }
-
 .main-wrapper .txn-item.hidden-by-filter { display: none !important; }
-
 .main-wrapper .txn-item-icon {
     width: 48px; height: 48px;
     border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
     border: 2px solid;
 }
-
 .main-wrapper .txn-item-deposit .txn-item-icon {
     background: linear-gradient(135deg, #DCFCE7, #BBF7D0);
-    color: #15803D;
-    border-color: #10B981;
+    color: #15803D; border-color: #10B981;
 }
-
 .main-wrapper .txn-item-withdrawal .txn-item-icon {
     background: linear-gradient(135deg, #FEE2E2, #FECACA);
-    color: #991B1B;
-    border-color: #EF4444;
+    color: #991B1B; border-color: #EF4444;
 }
-
 html.dark-mode .main-wrapper .txn-item-deposit .txn-item-icon {
     background: linear-gradient(135deg, #14532D, #166534);
     color: #4ADE80;
 }
-
 html.dark-mode .main-wrapper .txn-item-withdrawal .txn-item-icon {
     background: linear-gradient(135deg, #7F1D1D, #991B1B);
     color: #FCA5A5;
 }
-
 .main-wrapper .txn-item-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 10px;
 }
-
 .main-wrapper .txn-item-top {
-    display: flex;
-    align-items: center;
+    display: flex; align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
+    gap: 12px; flex-wrap: wrap;
 }
-
 .main-wrapper .txn-item-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    min-width: 0;
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; min-width: 0;
 }
-
 .main-wrapper .txn-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 12px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 1px;
-    white-space: nowrap;
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: 8px;
+    font-size: 10px; font-weight: 800;
+    letter-spacing: 1px; white-space: nowrap;
 }
-
 .main-wrapper .txn-badge-deposit {
-    background: #DCFCE7;
-    color: #15803D;
-    border: 1.5px solid #10B981;
+    background: #DCFCE7; color: #15803D; border: 1.5px solid #10B981;
 }
-
 .main-wrapper .txn-badge-withdrawal {
-    background: #FEE2E2;
-    color: #991B1B;
-    border: 1.5px solid #EF4444;
+    background: #FEE2E2; color: #991B1B; border: 1.5px solid #EF4444;
 }
-
 html.dark-mode .main-wrapper .txn-badge-deposit { background: #14532D; color: #4ADE80; border-color: #10B981; }
 html.dark-mode .main-wrapper .txn-badge-withdrawal { background: #7F1D1D; color: #FCA5A5; border-color: #EF4444; }
-
 .main-wrapper .txn-number {
     font-family: 'Courier New', monospace;
-    font-size: 12px;
-    font-weight: 800;
-    color: #1D4ED8;
-    background: #DBEAFE;
-    padding: 4px 12px;
-    border-radius: 8px;
+    font-size: 12px; font-weight: 800;
+    color: #1D4ED8; background: #DBEAFE;
+    padding: 4px 12px; border-radius: 8px;
     white-space: nowrap;
 }
-
 html.dark-mode .main-wrapper .txn-number { background: #1E3A5F; color: #60A5FA; }
-
 .main-wrapper .txn-item-amount {
     font-family: 'Inter', 'Courier New', monospace;
-    font-size: 20px;
-    font-weight: 900;
-    white-space: nowrap;
-    letter-spacing: -0.3px;
+    font-size: 20px; font-weight: 900;
+    white-space: nowrap; letter-spacing: -0.3px;
 }
-
 .main-wrapper .txn-amount-deposit { color: #15803D; }
 .main-wrapper .txn-amount-withdrawal { color: #991B1B; }
 html.dark-mode .main-wrapper .txn-amount-deposit { color: #4ADE80; }
 html.dark-mode .main-wrapper .txn-amount-withdrawal { color: #FCA5A5; }
-
 .main-wrapper .txn-item-bottom {
+    display: flex; flex-direction: column; gap: 8px;
+}
+.main-wrapper .txn-meta {
+    display: flex; align-items: center;
+    gap: 14px; flex-wrap: wrap;
+}
+.main-wrapper .txn-meta-item {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600;
+    color: var(--text-secondary); white-space: nowrap;
+}
+.main-wrapper .txn-meta-item i {
+    font-size: 10px; color: var(--text-muted);
+}
+.main-wrapper .txn-employee {
+    background: #FEF3C7; color: #92400E;
+    padding: 3px 10px; border-radius: 8px;
+    font-weight: 700; border: 1px solid #FDE68A;
+}
+.main-wrapper .txn-employee i {
+    color: #D97706; font-size: 11px;
+}
+html.dark-mode .main-wrapper .txn-employee { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
+html.dark-mode .main-wrapper .txn-employee i { color: #FBBF24; }
+.main-wrapper .txn-description,
+.main-wrapper .txn-notes {
+    display: flex; align-items: flex-start;
+    gap: 6px; font-size: 12px;
+    color: var(--text-secondary); line-height: 1.5;
+    padding: 6px 10px; background: var(--bg-card);
+    border-radius: 8px; border-left: 3px solid #2563EB;
+}
+.main-wrapper .txn-description i,
+.main-wrapper .txn-notes i {
+    font-size: 11px; color: #2563EB;
+    margin-top: 2px; flex-shrink: 0;
+}
+.main-wrapper .txn-notes { border-left-color: #F59E0B; }
+.main-wrapper .txn-notes i { color: #F59E0B; }
+
+/* ✅ TXN ACTIONS (Change / Delete) */
+.main-wrapper .txn-item-actions {
     display: flex;
     flex-direction: column;
     gap: 8px;
-}
-
-.main-wrapper .txn-meta {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-}
-
-.main-wrapper .txn-meta-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-
-.main-wrapper .txn-meta-item i {
-    font-size: 10px;
-    color: var(--text-muted);
-}
-
-.main-wrapper .txn-employee {
-    background: #FEF3C7;
-    color: #92400E;
-    padding: 3px 10px;
-    border-radius: 8px;
-    font-weight: 700;
-    border: 1px solid #FDE68A;
-}
-
-.main-wrapper .txn-employee i {
-    color: #D97706;
-    font-size: 11px;
-}
-
-html.dark-mode .main-wrapper .txn-employee { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
-html.dark-mode .main-wrapper .txn-employee i { color: #FBBF24; }
-
-.main-wrapper .txn-description,
-.main-wrapper .txn-notes {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    padding: 6px 10px;
-    background: var(--bg-card);
-    border-radius: 8px;
-    border-left: 3px solid #2563EB;
-}
-
-.main-wrapper .txn-description i,
-.main-wrapper .txn-notes i {
-    font-size: 11px;
-    color: #2563EB;
-    margin-top: 2px;
     flex-shrink: 0;
+    align-items: flex-end;
+    justify-content: flex-start;
 }
-
-.main-wrapper .txn-notes {
-    border-left-color: #F59E0B;
-}
-
-.main-wrapper .txn-notes i {
-    color: #F59E0B;
-}
-
-.main-wrapper .txn-item-status {
-    flex-shrink: 0;
-}
-
-.main-wrapper .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
+.main-wrapper .btn-txn-action {
+    width: 40px; height: 40px;
     border-radius: 10px;
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 15px;
+    transition: all 0.25s ease;
+    position: relative;
+    overflow: hidden;
 }
-
-.main-wrapper .status-badge.status-approved {
-    background: #D1FAE5;
-    color: #065F46;
-    border: 1.5px solid #10B981;
+.main-wrapper .btn-txn-change {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    color: #D97706;
+    border: 1.5px solid #FCD34D;
 }
-
-.main-wrapper .status-badge.status-pending {
-    background: #FEF3C7;
-    color: #92400E;
-    border: 1.5px solid #F59E0B;
+.main-wrapper .btn-txn-change:hover {
+    background: linear-gradient(135deg, #D97706, #F59E0B);
+    color: #FFFFFF;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 16px rgba(217, 119, 6, 0.4);
 }
-
-.main-wrapper .status-badge.status-rejected,
-.main-wrapper .status-badge.status-cancelled {
-    background: #FEE2E2;
+.main-wrapper .btn-txn-delete {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
     color: #991B1B;
-    border: 1.5px solid #EF4444;
+    border: 1.5px solid #FCA5A5;
 }
-
-html.dark-mode .main-wrapper .status-badge.status-approved { background: #065F46; color: #D1FAE5; }
-html.dark-mode .main-wrapper .status-badge.status-pending { background: #5F3A1E; color: #FBBF24; }
-html.dark-mode .main-wrapper .status-badge.status-rejected,
-html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1D; color: #FEE2E2; }
+.main-wrapper .btn-txn-delete:hover {
+    background: linear-gradient(135deg, #991B1B, #DC2626);
+    color: #FFFFFF;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 16px rgba(153, 27, 27, 0.4);
+}
 
 /* EMPTY / NO RESULTS */
 .main-wrapper .empty-state,
 .main-wrapper .no-results {
-    text-align: center;
-    padding: 60px 20px;
+    text-align: center; padding: 60px 20px;
 }
-
 .main-wrapper .empty-state i,
 .main-wrapper .no-results i {
-    font-size: 64px;
-    color: var(--text-light);
-    opacity: 0.4;
-    display: block;
-    margin-bottom: 16px;
+    font-size: 64px; color: var(--text-light);
+    opacity: 0.4; display: block; margin-bottom: 16px;
 }
-
 .main-wrapper .empty-state h3,
 .main-wrapper .no-results h3 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 8px 0;
+    font-size: 20px; font-weight: 700;
+    color: var(--text-primary); margin: 0 0 8px 0;
 }
-
 .main-wrapper .empty-state p,
 .main-wrapper .no-results p {
-    font-size: 14px;
-    color: var(--text-muted);
+    font-size: 14px; color: var(--text-muted);
     margin: 0 0 20px 0;
 }
-
 .main-wrapper .btn {
-    padding: 10px 22px;
-    border: none;
-    border-radius: 10px;
-    font-weight: 700;
-    font-size: 13px;
-    cursor: pointer;
+    padding: 10px 22px; border: none;
+    border-radius: 10px; font-weight: 700;
+    font-size: 13px; cursor: pointer;
     text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px;
     transition: all 0.3s ease;
-    font-family: 'Inter', sans-serif;
-    white-space: nowrap;
+    font-family: 'Inter', sans-serif; white-space: nowrap;
 }
-
 .main-wrapper .btn-primary {
     background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%);
     color: #FFFFFF;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
-
 .main-wrapper .btn-primary:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
     color: #FFFFFF;
 }
-
 .main-wrapper .btn-secondary {
     background: var(--bg-input);
     color: var(--text-secondary);
     border: 1.5px solid var(--border-color);
 }
-
 .main-wrapper .btn-secondary:hover {
     background: var(--bg-body);
     color: var(--text-primary);
+}
+
+/* ============================================================
+   CONFIRM MODAL
+   ============================================================ */
+.confirm-modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    overflow-y: auto;
+}
+.confirm-modal-overlay.show {
+    display: flex;
+    animation: fadeIn 0.2s ease forwards;
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes slideUpModal {
+    from { opacity: 0; transform: translateY(30px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.confirm-modal {
+    background: var(--bg-card);
+    border-radius: 16px;
+    width: 100%;
+    max-width: 520px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    animation: slideUpModal 0.3s ease forwards;
+    border: 1px solid var(--border-color);
+}
+.confirm-modal-header {
+    padding: 20px 24px;
+    border-radius: 16px 16px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: relative;
+    overflow: hidden;
+    color: white;
+}
+.confirm-modal-header.confirm-header-change {
+    background: linear-gradient(135deg, #D97706 0%, #F59E0B 100%);
+}
+.confirm-modal-header.confirm-header-delete {
+    background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%);
+}
+.confirm-modal-header::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 200px; height: 200px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.confirm-modal-header-icon {
+    width: 52px; height: 52px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    position: relative; z-index: 1;
+}
+.confirm-modal-header-content {
+    flex: 1; min-width: 0;
+    position: relative; z-index: 1;
+}
+.confirm-modal-header-content h3 {
+    font-size: 18px; font-weight: 800;
+    margin: 0 0 2px 0; color: #FFFFFF;
+}
+.confirm-modal-header-content p {
+    font-size: 12px; margin: 0;
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 500;
+}
+.confirm-modal-close {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    position: relative; z-index: 1;
+}
+.confirm-modal-close:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: rotate(90deg);
+}
+.confirm-modal-body {
+    padding: 24px;
+}
+.confirm-modal-message {
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+}
+.confirm-modal-message.success {
+    background: #D1FAE5; color: #065F46;
+    border: 1px solid #A7F3D0;
+}
+.confirm-modal-message.error {
+    background: #FEE2E2; color: #991B1B;
+    border: 1px solid #FECACA;
+}
+.confirm-txn-info {
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    display: flex; flex-direction: column; gap: 12px;
+}
+.confirm-txn-row {
+    display: flex; align-items: center;
+    justify-content: space-between; gap: 12px;
+    flex-wrap: wrap;
+}
+.confirm-txn-label {
+    font-size: 11px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.confirm-txn-value {
+    font-size: 13px; font-weight: 800;
+    color: var(--text-primary);
+    font-family: 'Inter', 'Courier New', monospace;
+}
+.confirm-warning {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px;
+    background: #FEF3C7;
+    border: 1.5px solid #FCD34D;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    font-size: 12px; font-weight: 600;
+    color: #92400E;
+}
+.confirm-warning i {
+    font-size: 16px; color: #D97706; flex-shrink: 0;
+}
+.confirm-warning.warning-danger {
+    background: #FEE2E2;
+    border-color: #FCA5A5;
+    color: #991B1B;
+}
+.confirm-warning.warning-danger i {
+    color: #DC2626;
+}
+.confirm-form-actions {
+    display: flex; gap: 12px;
+    padding-top: 8px; flex-wrap: wrap;
+}
+.confirm-btn {
+    padding: 12px 24px;
+    border: none; border-radius: 10px;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    flex: 1; justify-content: center;
+    min-width: 140px;
+}
+.confirm-btn-cancel {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+}
+.confirm-btn-cancel:hover {
+    background: var(--bg-body);
+    color: var(--text-primary);
+}
+.confirm-btn-change {
+    background: linear-gradient(135deg, #D97706 0%, #F59E0B 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.35);
+}
+.confirm-btn-change:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(217, 119, 6, 0.5);
+}
+.confirm-btn-delete {
+    background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+}
+.confirm-btn-delete:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
+}
+.confirm-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
 }
 
 /* RESPONSIVE */
 @media (max-width: 1200px) {
     .main-wrapper .stats-grid-soft { grid-template-columns: repeat(2, 1fr); }
 }
-
 @media (max-width: 768px) {
     .main-wrapper .provider-header-card {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 20px;
+        flex-direction: column; align-items: flex-start; padding: 20px;
     }
     .main-wrapper .provider-header-name { font-size: 20px; }
     .main-wrapper .provider-header-icon { width: 56px; height: 56px; font-size: 22px; }
@@ -1166,9 +1503,7 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
     .main-wrapper .transactions-filters { width: 100%; }
     .main-wrapper .filter-btn { flex: 1; justify-content: center; }
     .main-wrapper .txn-item {
-        flex-direction: column;
-        gap: 12px;
-        padding: 14px;
+        flex-direction: column; gap: 12px; padding: 14px;
     }
     .main-wrapper .txn-item-top { flex-direction: column; align-items: flex-start; }
     .main-wrapper .txn-item-amount { font-size: 17px; }
@@ -1176,8 +1511,14 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
     .main-wrapper .transactions-search-bar { flex-direction: column; align-items: stretch; }
     .main-wrapper .search-input-group { max-width: 100%; }
     .main-wrapper .txn-count { text-align: center; }
+    .main-wrapper .txn-item-actions {
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        margin-top: 8px;
+    }
 }
-
 @media (max-width: 480px) {
     .main-wrapper .provider-header-name { font-size: 17px; }
     .main-wrapper .provider-meta-item { font-size: 10px; padding: 3px 9px; }
@@ -1187,6 +1528,9 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
     .main-wrapper .txn-number { font-size: 10px; padding: 3px 8px; }
     .main-wrapper .txn-badge { font-size: 9px; padding: 3px 9px; }
     .main-wrapper .txn-item-amount { font-size: 15px; }
+    .confirm-modal { max-width: 95vw; }
+    .confirm-form-actions { flex-direction: column; }
+    .confirm-btn { width: 100%; }
 }
 </style>
 
@@ -1229,12 +1573,10 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
         <!-- STATS CARDS -->
         <div class="stats-grid-soft">
             <div class="stat-card-soft stat-card-soft-float">
-                <div class="stat-icon-soft">
-                    <i class="fas fa-coins"></i>
-                </div>
+                <div class="stat-icon-soft"><i class="fas fa-coins"></i></div>
                 <div class="stat-info-soft">
                     <span class="stat-label-soft">Current Float</span>
-                    <span class="stat-value-soft"><?php echo formatCurrency($current_float); ?></span>
+                    <span class="stat-value-soft" id="currentFloatDisplay"><?php echo formatCurrency($current_float); ?></span>
                     <span class="stat-sub-soft">
                         <i class="fas fa-sun"></i>
                         Morning: <?php echo formatCurrency($morning_float); ?>
@@ -1244,9 +1586,7 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
             </div>
             
             <div class="stat-card-soft stat-card-soft-deposit">
-                <div class="stat-icon-soft">
-                    <i class="fas fa-arrow-down"></i>
-                </div>
+                <div class="stat-icon-soft"><i class="fas fa-arrow-down"></i></div>
                 <div class="stat-info-soft">
                     <span class="stat-label-soft">Total Deposits</span>
                     <span class="stat-value-soft"><?php echo formatCurrency($total_deposits); ?></span>
@@ -1259,9 +1599,7 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
             </div>
             
             <div class="stat-card-soft stat-card-soft-withdraw">
-                <div class="stat-icon-soft">
-                    <i class="fas fa-arrow-up"></i>
-                </div>
+                <div class="stat-icon-soft"><i class="fas fa-arrow-up"></i></div>
                 <div class="stat-info-soft">
                     <span class="stat-label-soft">Total Withdrawals</span>
                     <span class="stat-value-soft"><?php echo formatCurrency($total_withdrawals); ?></span>
@@ -1274,9 +1612,7 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
             </div>
             
             <div class="stat-card-soft stat-card-soft-count">
-                <div class="stat-icon-soft">
-                    <i class="fas fa-receipt"></i>
-                </div>
+                <div class="stat-icon-soft"><i class="fas fa-receipt"></i></div>
                 <div class="stat-info-soft">
                     <span class="stat-label-soft">Total Transactions</span>
                     <span class="stat-value-soft"><?php echo number_format(count($transactions)); ?></span>
@@ -1385,7 +1721,10 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
                         );
                     ?>
                         <div class="txn-item txn-item-<?php echo $is_deposit ? 'deposit' : 'withdrawal'; ?>"
+                             data-txn-id="<?php echo $t['id']; ?>"
                              data-type="<?php echo $t['transaction_type']; ?>"
+                             data-amount="<?php echo $amount; ?>"
+                             data-txn-number="<?php echo htmlspecialchars($t['transaction_number']); ?>"
                              data-search="<?php echo htmlspecialchars($search_text); ?>">
                             
                             <div class="txn-item-icon">
@@ -1444,11 +1783,32 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
                                 </div>
                             </div>
                             
-                            <div class="txn-item-status">
-                                <span class="status-badge status-<?php echo htmlspecialchars($t['status'] ?? 'approved'); ?>">
-                                    <i class="fas fa-check-circle"></i>
-                                    <?php echo ucfirst($t['status'] ?? 'approved'); ?>
-                                </span>
+                            <div class="txn-item-actions">
+                                <!-- ✅ CHANGE BUTTON -->
+                                <button type="button" 
+                                        class="btn-txn-action btn-txn-change" 
+                                        onclick="openChangeModal(
+                                            <?php echo $t['id']; ?>, 
+                                            '<?php echo $t['transaction_type']; ?>', 
+                                            <?php echo $amount; ?>, 
+                                            '<?php echo addslashes($t['transaction_number']); ?>'
+                                        )"
+                                        title="Change Type (<?php echo $is_deposit ? 'Deposit → Withdrawal' : 'Withdrawal → Deposit'; ?>)">
+                                    <i class="fas fa-exchange-alt"></i>
+                                </button>
+                                
+                                <!-- ✅ DELETE BUTTON -->
+                                <button type="button" 
+                                        class="btn-txn-action btn-txn-delete" 
+                                        onclick="openDeleteModal(
+                                            <?php echo $t['id']; ?>, 
+                                            '<?php echo $t['transaction_type']; ?>', 
+                                            <?php echo $amount; ?>, 
+                                            '<?php echo addslashes($t['transaction_number']); ?>'
+                                        )"
+                                        title="Delete Transaction">
+                                    <i class="fas fa-trash"></i>
+                                </button>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1482,6 +1842,136 @@ html.dark-mode .main-wrapper .status-badge.status-cancelled { background: #7F1D1
         include_once '../../includes/admin_footer.php';
     }
     ?>
+</div>
+
+<!-- ============================================================
+     ✅ CHANGE TRANSACTION MODAL
+     ============================================================ -->
+<div class="confirm-modal-overlay" id="changeModalOverlay" onclick="closeChangeModal(event)">
+    <div class="confirm-modal" onclick="event.stopPropagation()">
+        
+        <div class="confirm-modal-header confirm-header-change">
+            <div class="confirm-modal-header-icon">
+                <i class="fas fa-exchange-alt"></i>
+            </div>
+            <div class="confirm-modal-header-content">
+                <h3>Change Transaction Type</h3>
+                <p>Badilisha Deposit kuwa Withdrawal au kinyume chake</p>
+            </div>
+            <button type="button" class="confirm-modal-close" onclick="closeChangeModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <div class="confirm-modal-body">
+            
+            <div id="changeModalMessage" class="confirm-modal-message" style="display:none;"></div>
+            
+            <form id="changeForm" onsubmit="submitChange(event)">
+                <input type="hidden" name="ajax_action" value="change_transaction">
+                <input type="hidden" name="transaction_id" id="changeTxnId">
+                
+                <div class="confirm-txn-info">
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Transaction #</span>
+                        <span class="confirm-txn-value" id="changeTxnNumber">-</span>
+                    </div>
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Amount</span>
+                        <span class="confirm-txn-value" id="changeTxnAmount">TSh 0</span>
+                    </div>
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Current Type</span>
+                        <span class="confirm-txn-value" id="changeCurrentType">-</span>
+                    </div>
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">New Type</span>
+                        <span class="confirm-txn-value" id="changeNewType">-</span>
+                    </div>
+                </div>
+                
+                <div class="confirm-warning">
+                    <i class="fas fa-info-circle"></i>
+                    <span>
+                        Mfumo utarudisha <strong>Float</strong> na <strong>Cash</strong> kwenye hali ya awali, 
+                        kisha kutumia transaction mpya.
+                    </span>
+                </div>
+                
+                <div class="confirm-form-actions">
+                    <button type="button" class="confirm-btn confirm-btn-cancel" onclick="closeChangeModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button type="submit" class="confirm-btn confirm-btn-change" id="changeSubmitBtn">
+                        <i class="fas fa-exchange-alt"></i> Change Transaction
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     ✅ DELETE TRANSACTION MODAL
+     ============================================================ -->
+<div class="confirm-modal-overlay" id="deleteModalOverlay" onclick="closeDeleteModal(event)">
+    <div class="confirm-modal" onclick="event.stopPropagation()">
+        
+        <div class="confirm-modal-header confirm-header-delete">
+            <div class="confirm-modal-header-icon">
+                <i class="fas fa-trash"></i>
+            </div>
+            <div class="confirm-modal-header-content">
+                <h3>Delete Transaction</h3>
+                <p>Futa transaction na kurudisha Float & Cash</p>
+            </div>
+            <button type="button" class="confirm-modal-close" onclick="closeDeleteModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <div class="confirm-modal-body">
+            
+            <div id="deleteModalMessage" class="confirm-modal-message" style="display:none;"></div>
+            
+            <form id="deleteForm" onsubmit="submitDelete(event)">
+                <input type="hidden" name="ajax_action" value="delete_transaction">
+                <input type="hidden" name="transaction_id" id="deleteTxnId">
+                
+                <div class="confirm-txn-info">
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Transaction #</span>
+                        <span class="confirm-txn-value" id="deleteTxnNumber">-</span>
+                    </div>
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Type</span>
+                        <span class="confirm-txn-value" id="deleteTxnType">-</span>
+                    </div>
+                    <div class="confirm-txn-row">
+                        <span class="confirm-txn-label">Amount</span>
+                        <span class="confirm-txn-value" id="deleteTxnAmount">TSh 0</span>
+                    </div>
+                </div>
+                
+                <div class="confirm-warning warning-danger">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span>
+                        Onyo: Kitendo hiki hakiwezi kurudishwa! 
+                        Float na Cash zitarudi kwenye hali ya awali.
+                    </span>
+                </div>
+                
+                <div class="confirm-form-actions">
+                    <button type="button" class="confirm-btn confirm-btn-cancel" onclick="closeDeleteModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button type="submit" class="confirm-btn confirm-btn-delete" id="deleteSubmitBtn">
+                        <i class="fas fa-trash"></i> Delete Transaction
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -1569,18 +2059,163 @@ function clearTxnSearch() {
 }
 
 // ============================================================
+// ✅ CHANGE TRANSACTION MODAL
+// ============================================================
+function openChangeModal(txnId, currentType, amount, txnNumber) {
+    const newType = currentType === 'deposit' ? 'withdrawal' : 'deposit';
+    
+    document.getElementById('changeTxnId').value = txnId;
+    document.getElementById('changeTxnNumber').textContent = txnNumber;
+    document.getElementById('changeTxnAmount').textContent = formatMoney(amount);
+    document.getElementById('changeCurrentType').textContent = currentType.toUpperCase();
+    document.getElementById('changeNewType').textContent = newType.toUpperCase();
+    document.getElementById('changeModalMessage').style.display = 'none';
+    
+    document.getElementById('changeModalOverlay').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeChangeModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('changeModalOverlay').classList.remove('show');
+    document.body.style.overflow = '';
+}
+
+async function submitChange(event) {
+    event.preventDefault();
+    const form = document.getElementById('changeForm');
+    const formData = new FormData(form);
+    const submitBtn = document.getElementById('changeSubmitBtn');
+    
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Changing...';
+    
+    try {
+        const response = await fetch(window.location.href, { 
+            method: 'POST', 
+            body: formData 
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showChangeMessage(data.message, 'success');
+            setTimeout(() => {
+                closeChangeModal();
+                window.location.reload();
+            }, 1500);
+        } else {
+            showChangeMessage(data.message || 'An error occurred.', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-exchange-alt"></i> Change Transaction';
+        }
+    } catch (err) {
+        showChangeMessage('Network error. Please try again.', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-exchange-alt"></i> Change Transaction';
+    }
+}
+
+function showChangeMessage(message, type) {
+    const messageDiv = document.getElementById('changeModalMessage');
+    messageDiv.className = 'confirm-modal-message ' + type;
+    messageDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> <span>${message}</span>`;
+    messageDiv.style.display = 'flex';
+}
+
+// ============================================================
+// ✅ DELETE TRANSACTION MODAL
+// ============================================================
+function openDeleteModal(txnId, txnType, amount, txnNumber) {
+    document.getElementById('deleteTxnId').value = txnId;
+    document.getElementById('deleteTxnNumber').textContent = txnNumber;
+    document.getElementById('deleteTxnType').textContent = txnType.toUpperCase();
+    document.getElementById('deleteTxnAmount').textContent = formatMoney(amount);
+    document.getElementById('deleteModalMessage').style.display = 'none';
+    
+    document.getElementById('deleteModalOverlay').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeDeleteModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('deleteModalOverlay').classList.remove('show');
+    document.body.style.overflow = '';
+}
+
+async function submitDelete(event) {
+    event.preventDefault();
+    const form = document.getElementById('deleteForm');
+    const formData = new FormData(form);
+    const submitBtn = document.getElementById('deleteSubmitBtn');
+    
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+    
+    try {
+        const response = await fetch(window.location.href, { 
+            method: 'POST', 
+            body: formData 
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showDeleteMessage(data.message, 'success');
+            setTimeout(() => {
+                closeDeleteModal();
+                window.location.reload();
+            }, 1500);
+        } else {
+            showDeleteMessage(data.message || 'An error occurred.', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Transaction';
+        }
+    } catch (err) {
+        showDeleteMessage('Network error. Please try again.', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Transaction';
+    }
+}
+
+function showDeleteMessage(message, type) {
+    const messageDiv = document.getElementById('deleteModalMessage');
+    messageDiv.className = 'confirm-modal-message ' + type;
+    messageDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> <span>${message}</span>`;
+    messageDiv.style.display = 'flex';
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function formatMoney(num) {
+    return 'TSh ' + Number(num).toLocaleString('en-US', { 
+        minimumFractionDigits: 0, 
+        maximumFractionDigits: 0 
+    });
+}
+
+// ============================================================
 // KEYBOARD SHORTCUTS
 // ============================================================
 document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const deleteOverlay = document.getElementById('deleteModalOverlay');
+        if (deleteOverlay && deleteOverlay.classList.contains('show')) { 
+            closeDeleteModal(); 
+            return; 
+        }
+        const changeOverlay = document.getElementById('changeModalOverlay');
+        if (changeOverlay && changeOverlay.classList.contains('show')) { 
+            closeChangeModal(); 
+            return; 
+        }
+        const input = document.getElementById('txnSearchInput');
+        if (input && input.value.length > 0) clearTxnSearch();
+    }
+    
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         const input = document.getElementById('txnSearchInput');
         if (input) { input.focus(); input.select(); }
-    }
-    
-    if (e.key === 'Escape') {
-        const input = document.getElementById('txnSearchInput');
-        if (input && input.value.length > 0) clearTxnSearch();
     }
 });
 

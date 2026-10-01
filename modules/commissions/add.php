@@ -2,7 +2,10 @@
 // ================================================================
 // FILE: modules/commissions/add.php
 // WAKALA FINANCIAL SYSTEM - ADD COMMISSION
-// FIXED: Uses branch_id from URL/topbar, no variable collision
+// ✅ FIXED: Uses branch_id from URL/topbar, no variable collision
+// ✅ FIXED: Add to Capital = Yes → Inaongeza Float kwa providers
+// ✅ FIXED: Inaongeza Capital (total_float + current_cash)
+// ✅ FIXED: MAX(id) subquery kuepuka duplicates
 // ================================================================
 
 require_once '../../config/config.php';
@@ -20,6 +23,28 @@ if (!isset($_SESSION['user_id']) || empty($_SESSION['user_id'])) {
 
 $role = $_SESSION['role'] ?? 'employee';
 $user_id = $_SESSION['user_id'];
+
+// ============================================================
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
+// ============================================================
+function calculateTotalFloatFromReport($db, $daily_report_id) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(latest.current_float), 0) as total_float
+        FROM (
+            SELECT drp1.provider_id, drp1.current_float
+            FROM daily_report_providers drp1
+            INNER JOIN (
+                SELECT provider_id, MAX(id) as max_id
+                FROM daily_report_providers
+                WHERE daily_report_id = ?
+                GROUP BY provider_id
+            ) drp2 ON drp1.id = drp2.max_id
+        ) latest
+    ");
+    $stmt->execute([$daily_report_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return floatval($result['total_float'] ?? 0);
+}
 
 // ============================================================
 // GET USER DATA
@@ -121,6 +146,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception('Please enter at least one provider amount.');
         }
         
+        // ============================================================
+        // ✅ START TRANSACTION
+        // ============================================================
+        $db->beginTransaction();
+        
         // Generate commission number
         $commission_number = 'COM-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
         
@@ -153,14 +183,117 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $commission_id = $db->lastInsertId();
         
+        // ============================================================
+        // ✅ AGAR ALLOCATE TO CAPITAL = YES → UPDATE FLOAT & CAPITAL
+        // ============================================================
+        if ($allocate_to_capital == 'yes' && $total_business_income > 0) {
+            
+            // Get latest daily report for this branch
+            $stmt = $db->prepare("
+                SELECT id, current_cash, current_capital, current_float
+                FROM daily_reports 
+                WHERE branch_id = ? 
+                ORDER BY report_date DESC, id DESC 
+                LIMIT 1
+            ");
+            $stmt->execute([$branch_id]);
+            $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($latest_dr) {
+                $dr_id = $latest_dr['id'];
+                $current_cash = floatval($latest_dr['current_cash'] ?? 0);
+                
+                // ============================================================
+                // STEP 1: UPDATE daily_report_providers.current_float
+                // Kwa kila provider iliyo na commission
+                // ============================================================
+                foreach ($provider_data as $provider_id => $amount) {
+                    $provider_id = intval($provider_id);
+                    $amount = floatval($amount);
+                    
+                    if ($amount <= 0 || $provider_id <= 0) continue;
+                    
+                    // Get provider info
+                    $stmt = $db->prepare("
+                        SELECT p.provider_name, bp.provider_code 
+                        FROM providers p
+                        INNER JOIN branch_providers bp ON p.id = bp.provider_id AND bp.branch_id = ?
+                        WHERE p.id = ?
+                    ");
+                    $stmt->execute([$branch_id, $provider_id]);
+                    $provider_info = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if (!$provider_info) continue;
+                    
+                    // Get latest record ya provider
+                    $stmt = $db->prepare("
+                        SELECT id, current_float 
+                        FROM daily_report_providers 
+                        WHERE daily_report_id = ? AND provider_id = ?
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $stmt->execute([$dr_id, $provider_id]);
+                    $drp = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($drp) {
+                        // UPDATE current_float
+                        $new_float = floatval($drp['current_float']) + $amount;
+                        $stmt = $db->prepare("
+                            UPDATE daily_report_providers 
+                            SET current_float = ?, updated_at = NOW() 
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$new_float, $drp['id']]);
+                    } else {
+                        // INSERT new record
+                        $stmt = $db->prepare("
+                            INSERT INTO daily_report_providers 
+                            (daily_report_id, provider_id, provider_code, provider_name,
+                             morning_float, morning_cash, current_float, current_cash,
+                             total_deposits, total_withdrawals, created_at)
+                            VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0, 0, NOW())
+                        ");
+                        $stmt->execute([
+                            $dr_id, $provider_id, 
+                            $provider_info['provider_code'], 
+                            $provider_info['provider_name'], 
+                            $amount
+                        ]);
+                    }
+                }
+                
+                // ============================================================
+                // STEP 2: Recalculate TOTAL FLOAT from LATEST record per provider
+                // ============================================================
+                $new_total_float = calculateTotalFloatFromReport($db, $dr_id);
+                $new_capital = $new_total_float + $current_cash;
+                
+                // ============================================================
+                // STEP 3: UPDATE daily_reports.current_float & current_capital
+                // ============================================================
+                $stmt = $db->prepare("
+                    UPDATE daily_reports 
+                    SET current_float = ?, current_capital = ?, updated_at = NOW() 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_total_float, $new_capital, $dr_id]);
+            }
+        }
+        
+        // Commit
+        $db->commit();
+        
         // Log activity
-        logActivity($user_id, 'Add Commission', 'Commissions', $commission_id, '', 'Added commission: ' . $commission_number);
+        logActivity($user_id, 'Add Commission', 'Commissions', $commission_id, '', 
+            'Added commission: ' . $commission_number . 
+            ($allocate_to_capital == 'yes' ? ' (Allocated to Capital)' : ' (Kept as Profit)'));
         
         $_SESSION['success_message'] = 'Commission added successfully! Number: ' . $commission_number;
         header('Location: index.php' . ($branch_id > 0 ? '?branch_id=' . $branch_id : ''));
         exit();
         
     } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
         $error_message = $e->getMessage();
         $show_error = true;
     }
@@ -238,6 +371,19 @@ include_once '../../includes/admin_topbar.php';
                 <div>
                     <strong>No branch filter selected</strong>
                     <p>Please select a branch from the dropdown in the topbar before adding a commission. Or select a branch below to continue.</p>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- ============================================================
+        INFO BANNER
+        ============================================================ -->
+        <?php if ($selected_branch > 0): ?>
+            <div class="info-banner">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <strong>Kama "Allocate to Capital = Yes":</strong>
+                    <p>Commission itaongezwa kwenye <strong>Provider Float</strong> na <strong>Branch Capital</strong> baada ya ku-save.</p>
                 </div>
             </div>
         <?php endif; ?>
@@ -587,6 +733,51 @@ body {
     background: rgba(255, 255, 255, 0.2);
     color: #FFFFFF;
 }
+
+/* ============================================================
+   INFO BANNER
+   ============================================================ */
+.info-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+    border: 2px solid #10B981;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    color: #065F46;
+    animation: slideDown 0.3s ease forwards;
+}
+html.dark-mode .info-banner {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
+    border-color: #10B981;
+    color: #D1FAE5;
+}
+.info-banner i {
+    font-size: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #059669;
+}
+html.dark-mode .info-banner i { color: #34D399; }
+.info-banner strong {
+    font-weight: 700;
+    font-size: 14px;
+    display: block;
+    margin-bottom: 4px;
+}
+.info-banner p {
+    font-size: 13px;
+    margin: 0;
+    line-height: 1.5;
+}
+.info-banner p strong {
+    display: inline;
+    font-weight: 800;
+    color: #059669;
+}
+html.dark-mode .info-banner p strong { color: #34D399; }
 
 /* ============================================================
    NO BRANCH WARNING
@@ -1269,6 +1460,26 @@ function validateForm() {
     if (!hasProvider) {
         alert('Please enter at least one provider amount.');
         return false;
+    }
+    
+    // ============================================================
+    // ✅ CONFIRM MESSAGE (kama allocate to capital)
+    // ============================================================
+    var allocateSelect = document.getElementById('allocate_to_capital');
+    var allocateValue = allocateSelect ? allocateSelect.value : 'yes';
+    
+    var totalIncomeText = document.getElementById('totalIncomeDisplay').textContent;
+    
+    if (allocateValue === 'yes') {
+        var msg = 'Save Commission and ALLOCATE TO CAPITAL?\n\n' +
+                  'Total Business Income: ' + totalIncomeText + '\n\n' +
+                  'This will:\n' +
+                  '• Increase each provider\'s float\n' +
+                  '• Increase branch capital\n\n' +
+                  'Continue?';
+        if (!confirm(msg)) {
+            return false;
+        }
     }
     
     var submitBtn = document.getElementById('submitBtn');

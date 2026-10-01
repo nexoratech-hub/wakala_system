@@ -3,6 +3,9 @@
 // FILE: modules/providers/index.php
 // WAKALA FINANCIAL SYSTEM - PROVIDERS LIST
 // RED THEME + SEARCH + SCROLL + CARDS GRID
+// ✅ FIXED: Onyesha providers WOTE (hata wasio kwenye branch)
+// ✅ FIXED: Badge ya "Not in branch" kwa providers wasio kwenye branch
+// ✅ FIXED: Filter ya "Show only assigned"
 // ================================================================
 
 require_once '../../config/config.php';
@@ -30,7 +33,7 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 $selected_branch = intval($_GET['branch_id'] ?? 0);
 $search          = trim($_GET['search'] ?? '');
 $type_filter     = trim($_GET['type'] ?? '');
-$status_filter   = trim($_GET['status'] ?? '');
+$assigned_filter = trim($_GET['assigned'] ?? 'all'); // all | assigned | unassigned
 
 // ============================================================
 // LOAD BRANCHES
@@ -39,7 +42,6 @@ $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch
 $stmt->execute();
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Auto-select if only 1 branch
 if ($selected_branch === 0 && count($branches) === 1) {
     $selected_branch = intval($branches[0]['id']);
 }
@@ -64,14 +66,10 @@ if ($selected_branch > 0) {
 
 // ============================================================
 // BUILD QUERY FOR PROVIDERS
+// ✅ FIXED: Inaonyesha providers WOTE, si wale wa branch pekee
 // ============================================================
 $where  = " WHERE p.is_active = 1 ";
 $params = [];
-
-if ($selected_branch > 0) {
-    $where .= " AND EXISTS (SELECT 1 FROM branch_providers bp WHERE bp.branch_id = ? AND bp.provider_id = p.id AND bp.is_active = 1)";
-    $params[] = $selected_branch;
-}
 
 if ($search !== '') {
     $where .= " AND (p.provider_name LIKE ? OR p.provider_code LIKE ?)";
@@ -90,25 +88,67 @@ if ($type_filter !== '' && in_array($type_filter, ['bank', 'mobile_money', 'othe
 // ============================================================
 $providers = [];
 try {
-    $sql = "
-        SELECT p.*,
-               (SELECT COUNT(*) FROM branch_providers bp WHERE bp.provider_id = p.id AND bp.is_active = 1) AS branch_count
-        FROM providers p
-        $where
-        ORDER BY p.display_order ASC, p.provider_name ASC
-    ";
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    // Fallback query without branch_count
-    try {
+    if ($selected_branch > 0) {
+        // ✅ Query with branch-specific data
         $sql = "
-            SELECT p.*, 0 AS branch_count
+            SELECT 
+                p.*,
+                bp.id as branch_provider_id,
+                bp.provider_code as branch_provider_code,
+                bp.is_active as branch_provider_active,
+                (SELECT COUNT(*) FROM branch_providers bp2 WHERE bp2.provider_id = p.id AND bp2.is_active = 1) AS branch_count
+            FROM providers p
+            LEFT JOIN branch_providers bp 
+                ON bp.provider_id = p.id 
+                AND bp.branch_id = ? 
+                AND bp.is_active = 1
+            $where
+            ORDER BY 
+                CASE WHEN bp.id IS NOT NULL THEN 0 ELSE 1 END,
+                p.display_order ASC, 
+                p.provider_name ASC
+        ";
+        
+        $params_with_branch = array_merge([$selected_branch], $params);
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params_with_branch);
+        $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Filter by assignment
+        if ($assigned_filter === 'assigned') {
+            $providers = array_filter($providers, function($p) {
+                return !empty($p['branch_provider_id']);
+            });
+        } elseif ($assigned_filter === 'unassigned') {
+            $providers = array_filter($providers, function($p) {
+                return empty($p['branch_provider_id']);
+            });
+        }
+        $providers = array_values($providers);
+        
+    } else {
+        // ✅ Query for All Branches
+        $sql = "
+            SELECT 
+                p.*,
+                NULL as branch_provider_id,
+                NULL as branch_provider_code,
+                NULL as branch_provider_active,
+                (SELECT COUNT(*) FROM branch_providers bp WHERE bp.provider_id = p.id AND bp.is_active = 1) AS branch_count
             FROM providers p
             $where
-            ORDER BY p.provider_name ASC
+            ORDER BY p.display_order ASC, p.provider_name ASC
         ";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    error_log("Provider query error: " . $e->getMessage());
+    // Fallback
+    try {
+        $sql = "SELECT p.*, 0 AS branch_count, NULL as branch_provider_id FROM providers p $where ORDER BY p.provider_name ASC";
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
         $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -124,12 +164,20 @@ $total_providers = count($providers);
 $total_banks = 0;
 $total_mobile = 0;
 $total_assigned = 0;
+$total_unassigned = 0;
 
 foreach ($providers as $p) {
     $type = $p['provider_type'] ?? 'bank';
     if ($type === 'mobile_money') $total_mobile++;
     elseif ($type === 'bank')     $total_banks++;
-    if (intval($p['branch_count'] ?? 0) > 0) $total_assigned++;
+    
+    if ($selected_branch > 0) {
+        if (!empty($p['branch_provider_id'])) $total_assigned++;
+        else $total_unassigned++;
+    } else {
+        if (intval($p['branch_count'] ?? 0) > 0) $total_assigned++;
+        else $total_unassigned++;
+    }
 }
 
 // ============================================================
@@ -246,7 +294,9 @@ include_once '../../includes/admin_topbar.php';
             <div class="stat-card stat-orange">
                 <div class="stat-icon"><i class="fas fa-link"></i></div>
                 <div class="stat-info">
-                    <span class="stat-label">Assigned to Branch</span>
+                    <span class="stat-label">
+                        <?php echo $selected_branch > 0 ? 'In This Branch' : 'Assigned to Any Branch'; ?>
+                    </span>
                     <span class="stat-value"><?php echo number_format($total_assigned); ?></span>
                 </div>
             </div>
@@ -257,11 +307,9 @@ include_once '../../includes/admin_topbar.php';
         ============================================================ -->
         <div class="table-container">
 
-            <!-- RED HEADER: Search (left) + Scroll < > (center) + Actions (right) -->
             <div class="table-red-header">
                 <div class="table-red-header-content">
 
-                    <!-- LEFT: Compact Search -->
                     <div class="header-search-wrapper">
                         <i class="fas fa-search header-search-icon"></i>
                         <input type="text"
@@ -279,7 +327,6 @@ include_once '../../includes/admin_topbar.php';
                         </button>
                     </div>
 
-                    <!-- CENTER: Scroll < > -->
                     <div class="header-scroll-center">
                         <button type="button" class="header-scroll-btn"
                                 onclick="scrollTable('left')"
@@ -296,7 +343,6 @@ include_once '../../includes/admin_topbar.php';
                         </button>
                     </div>
 
-                    <!-- RIGHT: Filters + Count -->
                     <div class="header-actions">
                         <button type="button" class="btn-filters-toggle" onclick="toggleAdvancedFilters()">
                             <i class="fas fa-filter"></i>
@@ -312,7 +358,7 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- ADVANCED FILTERS (collapsible) -->
+            <!-- ADVANCED FILTERS -->
             <div class="advanced-filters" id="advancedFilters" style="display:none;">
                 <form method="GET" action="" class="filters-form" id="filtersForm">
                     <input type="hidden" name="search" id="hiddenSearch" value="<?php echo htmlspecialchars($search); ?>">
@@ -337,6 +383,16 @@ include_once '../../includes/admin_topbar.php';
                             <option value="bank"         <?php echo $type_filter === 'bank'         ? 'selected' : ''; ?>>Bank</option>
                             <option value="mobile_money" <?php echo $type_filter === 'mobile_money' ? 'selected' : ''; ?>>Mobile Money</option>
                             <option value="other"        <?php echo $type_filter === 'other'        ? 'selected' : ''; ?>>Other</option>
+                        </select>
+                    </div>
+
+                    <!-- ✅ NEW: Assignment Filter -->
+                    <div class="filter-group">
+                        <label><i class="fas fa-link"></i> Assignment</label>
+                        <select name="assigned" class="filter-control">
+                            <option value="all"        <?php echo $assigned_filter === 'all'        ? 'selected' : ''; ?>>All Providers</option>
+                            <option value="assigned"   <?php echo $assigned_filter === 'assigned'   ? 'selected' : ''; ?>>In Branch Only</option>
+                            <option value="unassigned" <?php echo $assigned_filter === 'unassigned' ? 'selected' : ''; ?>>Not in Branch</option>
                         </select>
                     </div>
 
@@ -365,11 +421,21 @@ include_once '../../includes/admin_topbar.php';
                         $type_label = ucfirst(str_replace('_', ' ', $type));
                         $type_icon = $type === 'mobile_money' ? 'fa-mobile-alt' : ($type === 'other' ? 'fa-coins' : 'fa-landmark');
                         $branch_count = intval($p['branch_count'] ?? 0);
-                        $initial = strtoupper(substr($p['provider_name'] ?? 'P', 0, 1));
+                        $in_selected_branch = !empty($p['branch_provider_id']);
+                        $branch_provider_code = $p['branch_provider_code'] ?? null;
+                        
                         $search_data = strtolower(($p['provider_name'] ?? '') . ' ' . $code . ' ' . $type_label);
                     ?>
-                    <div class="provider-card" data-search="<?php echo htmlspecialchars($search_data); ?>">
+                    <div class="provider-card <?php echo ($selected_branch > 0 && !$in_selected_branch) ? 'provider-card-not-in-branch' : ''; ?>" 
+                         data-search="<?php echo htmlspecialchars($search_data); ?>">
+                        
                         <div class="provider-card-accent" style="background: <?php echo htmlspecialchars($color); ?>;"></div>
+
+                        <?php if ($selected_branch > 0 && !$in_selected_branch): ?>
+                            <div class="not-in-branch-badge">
+                                <i class="fas fa-info-circle"></i> Not in this branch
+                            </div>
+                        <?php endif; ?>
 
                         <div class="provider-card-body">
                             <div class="provider-card-top">
@@ -379,7 +445,13 @@ include_once '../../includes/admin_topbar.php';
 
                                 <div class="provider-info">
                                     <div class="provider-name"><?php echo htmlspecialchars($p['provider_name']); ?></div>
-                                    <div class="provider-code-chip"><?php echo htmlspecialchars($code); ?></div>
+                                    <div class="provider-code-chip">
+                                        <?php if ($branch_provider_code): ?>
+                                            <?php echo htmlspecialchars($branch_provider_code); ?>
+                                        <?php else: ?>
+                                            <?php echo htmlspecialchars($code); ?>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
                             </div>
 
@@ -389,16 +461,30 @@ include_once '../../includes/admin_topbar.php';
                                     <?php echo htmlspecialchars($type_label); ?>
                                 </span>
 
-                                <?php if ($branch_count > 0): ?>
-                                <span class="provider-branch-badge">
-                                    <i class="fas fa-store"></i>
-                                    <?php echo $branch_count; ?> branch<?php echo $branch_count !== 1 ? 'es' : ''; ?>
-                                </span>
+                                <?php if ($selected_branch > 0): ?>
+                                    <?php if ($in_selected_branch): ?>
+                                        <span class="provider-branch-badge badge-in-branch">
+                                            <i class="fas fa-check-circle"></i>
+                                            In this branch
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="provider-branch-badge badge-not-in-branch">
+                                            <i class="fas fa-times-circle"></i>
+                                            Not assigned
+                                        </span>
+                                    <?php endif; ?>
                                 <?php else: ?>
-                                <span class="provider-branch-badge badge-unassigned">
-                                    <i class="fas fa-store-slash"></i>
-                                    Not assigned
-                                </span>
+                                    <?php if ($branch_count > 0): ?>
+                                        <span class="provider-branch-badge">
+                                            <i class="fas fa-store"></i>
+                                            <?php echo $branch_count; ?> branch<?php echo $branch_count !== 1 ? 'es' : ''; ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="provider-branch-badge badge-unassigned">
+                                            <i class="fas fa-store-slash"></i>
+                                            Not assigned
+                                        </span>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -423,7 +509,6 @@ include_once '../../includes/admin_topbar.php';
                     <?php endforeach; ?>
                 </div>
 
-                <!-- No search results -->
                 <div class="no-results" id="noResults" style="display:none;">
                     <i class="fas fa-search-minus"></i>
                     <p>No providers match your search</p>
@@ -438,7 +523,7 @@ include_once '../../includes/admin_topbar.php';
                 <i class="fas fa-university"></i>
                 <h3>No Providers Found</h3>
                 <p>
-                    <?php if ($search !== '' || $type_filter !== '' || $selected_branch > 0): ?>
+                    <?php if ($search !== '' || $type_filter !== '' || $selected_branch > 0 || $assigned_filter !== 'all'): ?>
                         Try adjusting your filters or search terms.
                     <?php else: ?>
                         Start by adding your first provider.
@@ -518,9 +603,7 @@ html.dark-mode {
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* ============================================================
-   BRANCH INDICATOR
-   ============================================================ */
+/* BRANCH INDICATOR */
 .branch-indicator {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
     border-radius: 12px; padding: 14px 22px; margin-bottom: 14px;
@@ -551,7 +634,6 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .branch-indicator-name {
     font-weight: 800; font-size: 16px; color: #FFFFFF;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
 }
 .branch-indicator-code {
     font-size: 11px; font-weight: 700; color: #FFFFFF;
@@ -572,9 +654,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     white-space: nowrap; font-weight: 600;
 }
 
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
+/* PAGE HEADER */
 .page-header {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 18px; flex-wrap: wrap; gap: 12px;
@@ -607,9 +687,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 8px 24px rgba(220, 38, 38, 0.5);
 }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
+/* ALERTS */
 .alert {
     padding: 14px 18px; border-radius: 10px;
     margin-bottom: 16px; display: flex; align-items: center; gap: 12px;
@@ -629,9 +707,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ============================================================
-   STATS CARDS
-   ============================================================ */
+/* STATS CARDS */
 .stats-grid {
     display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 14px; margin-bottom: 18px;
@@ -675,9 +751,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     line-height: 1.2;
 }
 
-/* ============================================================
-   TABLE CONTAINER
-   ============================================================ */
+/* TABLE CONTAINER */
 .table-container {
     background: var(--bg-card);
     border-radius: 14px;
@@ -687,7 +761,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     width: 100%;
 }
 
-/* RED HEADER */
 .table-red-header {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
     padding: 14px 20px;
@@ -707,7 +780,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     justify-content: space-between;
 }
 
-/* COMPACT SEARCH */
 .header-search-wrapper {
     position: relative;
     display: flex; align-items: center;
@@ -752,7 +824,6 @@ html.dark-mode .header-search-input { color: #f1f5f9; }
 }
 .header-search-clear:hover { background: #DC2626; color: #FFFFFF; transform: scale(1.1); }
 
-/* SCROLL < > CENTER */
 .header-scroll-center {
     display: flex; align-items: center; justify-content: center;
     gap: 8px; flex: 1; min-width: 0; padding: 0 8px;
@@ -775,7 +846,6 @@ html.dark-mode .header-search-input { color: #f1f5f9; }
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
 }
-.header-scroll-btn i { font-size: 12px; display: block; line-height: 1; }
 .header-scroll-label {
     font-size: 10px; font-weight: 800;
     color: #FCD34D; text-transform: uppercase;
@@ -785,9 +855,7 @@ html.dark-mode .header-search-input { color: #f1f5f9; }
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     padding: 0 4px;
 }
-.header-scroll-label i { font-size: 10px; color: #FCD34D; }
 
-/* HEADER ACTIONS */
 .header-actions {
     display: flex; align-items: center; gap: 10px;
     flex-shrink: 0;
@@ -830,9 +898,7 @@ html.dark-mode .header-search-input { color: #f1f5f9; }
 .count-badge i { color: #FCD34D; font-size: 12px; }
 .count-badge strong { font-size: 14px; font-weight: 900; }
 
-/* ============================================================
-   ADVANCED FILTERS
-   ============================================================ */
+/* ADVANCED FILTERS */
 .advanced-filters {
     padding: 18px 22px;
     background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
@@ -907,9 +973,7 @@ html.dark-mode .filter-control { background: #1e293b; border-color: #991B1B; }
 }
 html.dark-mode .btn-clear-filter { background: #1e293b; }
 
-/* ============================================================
-   PROVIDERS GRID (Cards)
-   ============================================================ */
+/* PROVIDERS GRID */
 .providers-wrapper {
     padding: 22px;
     overflow-x: auto;
@@ -944,6 +1008,41 @@ html.dark-mode .btn-clear-filter { background: #1e293b; }
     border-color: #FCA5A5;
 }
 .provider-card.hidden-by-search { display: none !important; }
+
+/* ✅ NOT IN BRANCH STYLING */
+.provider-card-not-in-branch {
+    opacity: 0.75;
+    border-style: dashed;
+}
+.provider-card-not-in-branch:hover {
+    opacity: 1;
+}
+
+.not-in-branch-badge {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    color: #92400E;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid #FCD34D;
+    z-index: 2;
+    box-shadow: 0 2px 8px rgba(217, 119, 6, 0.2);
+}
+.not-in-branch-badge i { font-size: 9px; }
+html.dark-mode .not-in-branch-badge {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 100%);
+    color: #FCD34D;
+    border-color: #F59E0B;
+}
 
 .provider-card-accent {
     height: 6px;
@@ -1040,7 +1139,6 @@ html.dark-mode .provider-type-badge.type-mobile_money {
 html.dark-mode .provider-type-badge.type-other {
     background: #5F3A1E; color: #FBBF24; border-color: #D97706;
 }
-.provider-type-badge i { font-size: 10px; }
 
 .provider-branch-badge {
     display: inline-flex; align-items: center; gap: 5px;
@@ -1053,16 +1151,29 @@ html.dark-mode .provider-type-badge.type-other {
     border: 1.5px solid #E5E7EB;
     white-space: nowrap;
 }
-.provider-branch-badge i { font-size: 10px; }
 .provider-branch-badge.badge-unassigned {
     background: #FEF3C7; color: #92400E;
     border-color: #FDE68A;
+}
+.provider-branch-badge.badge-in-branch {
+    background: #D1FAE5; color: #065F46;
+    border-color: #A7F3D0;
+}
+.provider-branch-badge.badge-not-in-branch {
+    background: #FEE2E2; color: #991B1B;
+    border-color: #FECACA;
 }
 html.dark-mode .provider-branch-badge {
     background: #334155; color: #94A3B8; border-color: #475569;
 }
 html.dark-mode .provider-branch-badge.badge-unassigned {
     background: #5F3A1E; color: #FBBF24; border-color: #D97706;
+}
+html.dark-mode .provider-branch-badge.badge-in-branch {
+    background: #065F46; color: #34D399; border-color: #10B981;
+}
+html.dark-mode .provider-branch-badge.badge-not-in-branch {
+    background: #7F1D1D; color: #FCA5A5; border-color: #DC2626;
 }
 
 .provider-card-footer {
@@ -1194,9 +1305,7 @@ html.dark-mode .action-delete { background: #7F1D1D; color: #FCA5A5; border-colo
     color: #FFFFFF;
 }
 
-/* ============================================================
-   MODAL
-   ============================================================ */
+/* MODAL */
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -1288,9 +1397,7 @@ html.dark-mode .modal-icon-danger {
     color: #FFFFFF;
 }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+/* RESPONSIVE */
 @media (max-width: 1200px) {
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -1334,7 +1441,7 @@ html.dark-mode .modal-icon-danger {
 
 <script>
 // ============================================================
-// QUICK SEARCH (client-side filtering)
+// QUICK SEARCH
 // ============================================================
 function onQuickSearch(input) {
     var term = input.value.toLowerCase().trim();
@@ -1405,7 +1512,8 @@ function toggleAdvancedFilters() {
 document.addEventListener('DOMContentLoaded', function() {
     var url = new URL(window.location.href);
     var hasFilter = url.searchParams.get('branch_id') > 0
-                 || url.searchParams.get('type');
+                 || url.searchParams.get('type')
+                 || (url.searchParams.get('assigned') && url.searchParams.get('assigned') !== 'all');
 
     if (hasFilter) {
         document.getElementById('advancedFilters').style.display = 'block';

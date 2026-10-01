@@ -8,6 +8,12 @@
 // ✅ Search bar iko NDANI ya table header
 // ✅ Highlight ya search term kwenye results
 // ✅ View provider inafungua NEW PAGE
+// ✅ FIXED: Providers WOTE wa branch wanaonekana (hata bila transactions)
+// ✅ FIXED: MAX(id) subquery kuepuka duplicates
+// ✅ FIXED: current_cash inaonekana kwenye reports array
+// ✅ FIXED: My Transactions query (timezone issue)
+// ✅ FIXED: Branch Cash Row kwenye Branch Reports
+// ✅ FIXED: Auto-sync current_capital
 // ================================================================
 
 require_once '../../config/config.php';
@@ -142,7 +148,7 @@ if (isset($_POST['ajax_action'])) {
                 FROM transactions t
                 LEFT JOIN providers p ON t.provider_id = p.id
                 WHERE t.branch_id = ? AND t.employee_id = ?
-                AND DATE(t.transaction_date) BETWEEN ? AND ?
+                AND t.transaction_date BETWEEN ? AND ?
                 ORDER BY t.created_at DESC LIMIT 200
             ");
             $stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
@@ -433,45 +439,92 @@ if ($selected_branch > 0) {
 }
 
 try {
-    // GET ALL REPORTS FOR MY BRANCH
+    // ============================================================
+    // ✅ FIXED: Query kuu — inaunganisha branch_providers + daily_report_providers
+    // Providers WOTE wa branch wanaonekana, hata bila transactions
+    // ============================================================
     $sql = "SELECT 
                 dr.id as report_id, dr.report_number, dr.report_date, dr.created_at,
                 dr.net_profit, dr.current_capital, dr.current_cash, dr.current_float,
-                e.full_name as employee_name, b.branch_name as branch_name, b.branch_code as branch_code,
-                drp.id as provider_row_id, drp.provider_id, drp.provider_code, drp.provider_name,
-                drp.morning_float, drp.current_float, drp.total_deposits as provider_deposits,
-                drp.total_withdrawals as provider_withdrawals,
-                p.icon_class, p.color_code, p.provider_type
+                dr.branch_id,
+                e.full_name as employee_name, 
+                b.branch_name as branch_name, b.branch_code as branch_code,
+                
+                bp.provider_id,
+                bp.provider_code,
+                p.provider_name,
+                p.icon_class, p.color_code, p.provider_type,
+                p.display_order,
+                
+                drp.id as provider_row_id,
+                COALESCE(drp.morning_float, 0) as morning_float,
+                COALESCE(drp.current_float, 0) as current_float,
+                COALESCE(drp.total_deposits, 0) as provider_deposits,
+                COALESCE(drp.total_withdrawals, 0) as provider_withdrawals
+                
             FROM daily_reports dr
             LEFT JOIN employees e ON dr.employee_id = e.id
             LEFT JOIN branches b ON dr.branch_id = b.id
-            LEFT JOIN daily_report_providers drp ON dr.id = drp.daily_report_id
-            LEFT JOIN providers p ON drp.provider_id = p.id
-            WHERE dr.report_date BETWEEN ? AND ? AND dr.branch_id = ?
-            ORDER BY dr.report_date DESC, dr.id DESC, drp.provider_name ASC";
+            
+            INNER JOIN branch_providers bp 
+                ON bp.branch_id = dr.branch_id 
+                AND bp.is_active = 1
+            INNER JOIN providers p 
+                ON p.id = bp.provider_id 
+                AND p.is_active = 1
+            
+            LEFT JOIN (
+                SELECT drp1.*
+                FROM daily_report_providers drp1
+                INNER JOIN (
+                    SELECT daily_report_id, provider_id, MAX(id) as max_id
+                    FROM daily_report_providers
+                    GROUP BY daily_report_id, provider_id
+                ) drp2 ON drp1.id = drp2.max_id
+            ) drp ON dr.id = drp.daily_report_id 
+                AND drp.provider_id = bp.provider_id
+                
+            WHERE dr.report_date BETWEEN ? AND ? 
+              AND dr.branch_id = ?
+            ORDER BY dr.report_date DESC, dr.id DESC, p.display_order, p.provider_name ASC";
     $stmt = $db->prepare($sql);
     $stmt->execute([$from_date, $to_date, $employee_branch_id]);
     $report_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ============================================================
+    // ✅ JENGA $reports ARRAY
+    // ============================================================
     $reports = [];
     foreach ($report_rows as $row) {
         $rid = $row['report_id'];
         if (!isset($reports[$rid])) {
             $reports[$rid] = [
-                'id' => $row['report_id'], 'report_number' => $row['report_number'],
-                'report_date' => $row['report_date'], 'branch_name' => $row['branch_name'],
-                'branch_code' => $row['branch_code'], 'employee_name' => $row['employee_name'],
-                'created_at' => $row['created_at'], 'net_profit' => $row['net_profit'],
-                'current_capital' => $row['current_capital'], 'current_cash' => $row['current_cash'],
-                'current_float' => $row['current_float'], 'providers' => []
+                'id' => $row['report_id'],
+                'report_number' => $row['report_number'],
+                'report_date' => $row['report_date'],
+                'branch_name' => $row['branch_name'],
+                'branch_code' => $row['branch_code'],
+                'branch_id' => $row['branch_id'],
+                'employee_name' => $row['employee_name'],
+                'created_at' => $row['created_at'],
+                'net_profit' => $row['net_profit'],
+                'current_capital' => $row['current_capital'],
+                'current_cash' => $row['current_cash'],   // ✅ MUHIMU
+                'current_float' => $row['current_float'],
+                'providers' => []
             ];
         }
+        
         if (!empty($row['provider_id'])) {
             $reports[$rid]['providers'][] = [
-                'id' => $row['provider_row_id'], 'provider_id' => $row['provider_id'],
-                'provider_code' => $row['provider_code'], 'provider_name' => $row['provider_name'],
-                'morning_float' => $row['morning_float'], 'current_float' => $row['current_float'],
-                'total_deposits' => $row['provider_deposits'], 'total_withdrawals' => $row['provider_withdrawals'],
+                'id' => $row['provider_row_id'],
+                'provider_id' => $row['provider_id'],
+                'provider_code' => $row['provider_code'],
+                'provider_name' => $row['provider_name'],
+                'morning_float' => $row['morning_float'],
+                'current_float' => $row['current_float'],
+                'total_deposits' => $row['provider_deposits'],
+                'total_withdrawals' => $row['provider_withdrawals'],
                 'icon_class' => $row['icon_class'] ?? 'fas fa-university',
                 'color_code' => $row['color_code'] ?? '#3B82F6',
                 'provider_type' => $row['provider_type'] ?? 'bank'
@@ -480,13 +533,15 @@ try {
     }
     $reports = array_values($reports);
 
-    // MY TRANSACTIONS
+    // ============================================================
+    // ✅ MY TRANSACTIONS - FIXED: Ondoa DATE() ili kuepuka timezone issues
+    // ============================================================
     $stmt = $db->prepare("
         SELECT t.*, p.provider_name, p.icon_class, p.color_code
         FROM transactions t
         LEFT JOIN providers p ON t.provider_id = p.id
         WHERE t.branch_id = ? AND t.employee_id = ?
-        AND DATE(t.transaction_date) BETWEEN ? AND ?
+        AND t.transaction_date BETWEEN ? AND ?
         ORDER BY t.created_at DESC LIMIT 200
     ");
     $stmt->execute([$employee_branch_id, $user_id, $from_date, $to_date]);
@@ -507,7 +562,9 @@ try {
     }
     $my_transactions_count = count($my_transactions);
 
-    // CURRENT FLOAT/CASH - DATE-AWARE
+    // ============================================================
+    // ✅ CURRENT FLOAT/CASH - FIXED: Sync capital kila mara
+    // ============================================================
     $total_float = 0;
     $total_cash = 0;
     $total_capital = 0;
@@ -519,6 +576,19 @@ try {
         $total_float = calculateTotalFloat($db, $latest_dr['id']);
         $total_cash = floatval($latest_dr['current_cash'] ?? 0);
         $total_capital = $total_float + $total_cash;
+        
+        // ✅ FIXED: Auto-sync daily_reports kila mara
+        $db_float = floatval($latest_dr['current_float'] ?? 0);
+        $db_capital = floatval($latest_dr['current_capital'] ?? 0);
+        
+        if (abs($total_float - $db_float) > 0.01 || abs($total_capital - $db_capital) > 0.01) {
+            $stmt = $db->prepare("
+                UPDATE daily_reports 
+                SET current_float = ?, current_capital = ?, updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$total_float, $total_capital, $latest_dr['id']]);
+        }
     }
 
     // PROVIDERS FOR MODAL
@@ -909,10 +979,11 @@ include_once '../../includes/employee_topbar.php';
                                     $provider_color = $p['color_code'] ?? '#3B82F6';
                                     $provider_icon = $p['icon_class'] ?? 'fas fa-university';
                                     $provider_search = strtolower($p['provider_name'] . ' ' . $p['provider_code']);
+                                    $has_record = !empty($p['id']);
                                 ?>
                                     <tr class="provider-row" 
                                         data-provider-id="<?php echo $p['provider_id']; ?>"
-                                        data-provider-row-id="<?php echo $p['id']; ?>"
+                                        data-provider-row-id="<?php echo $p['id'] ?? ''; ?>"
                                         data-report-id="<?php echo $report['id']; ?>"
                                         data-search="<?php echo htmlspecialchars($provider_search); ?>">
                                         <td class="row-number"><?php echo $i++; ?></td>
@@ -931,18 +1002,56 @@ include_once '../../includes/employee_topbar.php';
                                         <td class="text-right"><span class="amount-withdrawal">- <?php echo formatCurrency($p['total_withdrawals']); ?></span></td>
                                         <td>
                                             <div class="provider-actions">
-                                                <!-- ✅ VIEW BUTTON - NEW PAGE -->
-                                                <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
-                                                   class="btn-provider btn-provider-view" 
-                                                   title="View Provider Transactions"
-                                                   target="_blank"
-                                                   rel="noopener noreferrer">
-                                                    <i class="fas fa-eye"></i>
-                                                </a>
+                                                <?php if ($has_record): ?>
+                                                    <a href="view_provider_transactions.php?provider_id=<?php echo $p['provider_id']; ?>&branch_id=<?php echo $employee_branch_id; ?>&report_id=<?php echo $report['id']; ?>&report_date=<?php echo $report['report_date']; ?>" 
+                                                       class="btn-provider btn-provider-view" 
+                                                       title="View Provider Transactions"
+                                                       target="_blank"
+                                                       rel="noopener noreferrer">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                <?php else: ?>
+                                                    <span class="btn-provider-disabled" title="No transaction yet">
+                                                        <i class="fas fa-minus-circle"></i>
+                                                    </span>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
+                                
+                                <!-- 🔥 BRANCH CASH ROW -->
+                                <tr class="branch-cash-row" 
+                                    data-report-id="<?php echo $report['id']; ?>"
+                                    data-branch-id="<?php echo $report['branch_id']; ?>"
+                                    data-search="branch cash <?php echo strtolower($report['branch_name'] ?? ''); ?>">
+                                    <td colspan="3">
+                                        <div class="branch-cash-label">
+                                            <i class="fas fa-money-bill-wave"></i>
+                                            <div>
+                                                <span class="branch-cash-title">BRANCH CASH</span>
+                                                <span class="branch-cash-subtitle">Shared across all providers</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="branch-cash-muted">—</span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="branch-cash-muted">—</span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="branch-cash-muted">—</span>
+                                    </td>
+                                    <td class="text-right">
+                                        <span class="amount-cash-branch">
+                                            <i class="fas fa-coins"></i>
+                                            <?php echo formatCurrency($report['current_cash']); ?>
+                                        </span>
+                                    </td>
+                                    <td></td>
+                                </tr>
+                                
                                 <tr class="totals-row">
                                     <td colspan="3"><strong>TOTAL</strong></td>
                                     <td class="text-right"><strong class="amount-float"><?php echo formatCurrency($sum_float); ?></strong></td>
@@ -1876,6 +1985,93 @@ html.dark-mode .providers-table thead tr { background: linear-gradient(135deg, #
     color: #FFFFFF; transform: translateY(-3px) scale(1.05);
     box-shadow: 0 6px 16px rgba(29, 78, 216, 0.4);
 }
+
+/* ✅ DISABLED VIEW BUTTON (No transaction yet) */
+.btn-provider-disabled {
+    width: 34px; height: 34px; border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg-input);
+    color: var(--text-light);
+    border: 1.5px dashed var(--border-color);
+    font-size: 13px;
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* 🔥 BRANCH CASH ROW */
+.branch-cash-row {
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 50%, #FCD34D 100%) !important;
+    border-top: 3px solid #D97706 !important;
+    border-bottom: 3px solid #D97706 !important;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.2);
+}
+.branch-cash-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 6px;
+    background: linear-gradient(180deg, #D97706, #B45309);
+    border-radius: 0 4px 4px 0;
+}
+.branch-cash-row:hover {
+    background: linear-gradient(135deg, #FDE68A 0%, #FCD34D 50%, #FBBF24 100%) !important;
+}
+.branch-cash-row td {
+    padding: 16px 16px !important;
+    vertical-align: middle;
+}
+.branch-cash-label {
+    display: flex; align-items: center; gap: 14px;
+}
+.branch-cash-label > i {
+    width: 42px; height: 42px; border-radius: 12px;
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+    color: #FFFFFF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(217, 119, 6, 0.4);
+    border: 2px solid rgba(255, 255, 255, 0.4);
+}
+.branch-cash-label > div {
+    display: flex; flex-direction: column; gap: 2px;
+}
+.branch-cash-title {
+    font-size: 14px; font-weight: 900;
+    color: #78350F; letter-spacing: 1px;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+.branch-cash-subtitle {
+    font-size: 10px; font-weight: 600;
+    color: #92400E; opacity: 0.8;
+}
+.branch-cash-muted {
+    color: #92400E; opacity: 0.4;
+    font-weight: 700; font-size: 16px;
+}
+.amount-cash-branch {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px;
+    background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
+    color: #FFFFFF; border-radius: 10px;
+    font-weight: 900; font-size: 15px;
+    font-family: 'Inter', 'Courier New', monospace;
+    border: 2px solid #92400E;
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(217, 119, 6, 0.4);
+}
+.amount-cash-branch i { color: #FCD34D; font-size: 14px; }
+html.dark-mode .branch-cash-row {
+    background: linear-gradient(135deg, #5F3A1E 0%, #78350F 50%, #92400E 100%) !important;
+    border-top-color: #FBBF24 !important;
+    border-bottom-color: #FBBF24 !important;
+}
+html.dark-mode .branch-cash-row::before { background: linear-gradient(180deg, #FBBF24, #F59E0B); }
+html.dark-mode .branch-cash-title { color: #FEF3C7; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); }
+html.dark-mode .branch-cash-subtitle { color: #FCD34D; }
+html.dark-mode .branch-cash-muted { color: #FCD34D; }
+
 .totals-row { background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%) !important; border-top: 3px solid #bb0404; }
 html.dark-mode .totals-row { background: linear-gradient(135deg, #334155 0%, #1e293b 100%) !important; }
 .totals-row td { padding: 16px; font-weight: 900; color: var(--text-primary); border-bottom: none; font-size: 13px; }
@@ -2161,8 +2357,7 @@ function parseMoney(str) {
 }
 
 // ============================================================
-// ✅ TABLE SEARCH - NDANI YA TABLE HEADER
-// Inafanya highlight ya provider anayelingana
+// TABLE SEARCH - NDANI YA TABLE HEADER
 // ============================================================
 function onTableSearch(input, reportId) {
     const searchTerm = input.value.toLowerCase().trim();
@@ -2203,7 +2398,6 @@ function onTableSearch(input, reportId) {
         }
     });
     
-    // Renumber visible rows
     let visibleIdx = 1;
     rows.forEach(row => {
         if (!row.classList.contains('hidden-by-search')) {
@@ -2229,7 +2423,7 @@ function clearTableSearch(reportId) {
 }
 
 // ============================================================
-// ✅ GLOBAL BRANCH REPORTS SEARCH (juu ya reports zote)
+// GLOBAL BRANCH REPORTS SEARCH
 // ============================================================
 function onBranchReportsSearch(input) {
     const searchTerm = input.value.toLowerCase().trim();
@@ -2604,37 +2798,8 @@ function updateUIAfterTransaction(txn) {
     }
     
     setTimeout(() => {
-        reloadMyTransactions();
-    }, 500);
-}
-
-async function reloadMyTransactions() {
-    try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const fromDate = urlParams.get('from_date') || '<?php echo $from_date; ?>';
-        const toDate = urlParams.get('to_date') || '<?php echo $to_date; ?>';
-        
-        const formData = new FormData();
-        formData.append('ajax_action', 'get_my_transactions');
-        formData.append('from_date', fromDate);
-        formData.append('to_date', toDate);
-        
-        const response = await fetch(window.location.href, { method: 'POST', body: formData });
-        const data = await response.json();
-        
-        if (data.success && data.html) {
-            const tbody = document.getElementById('myTxnTableBody');
-            if (tbody) {
-                tbody.innerHTML = data.html;
-                const searchInput = document.getElementById('myTxnSearchInput');
-                if (searchInput && searchInput.value) {
-                    onMyTxnSearch(searchInput);
-                }
-            }
-        }
-    } catch (err) {
-        console.error('Error reloading transactions:', err);
-    }
+        window.location.reload();
+    }, 1200);
 }
 
 function showModalMessage(message, type) {

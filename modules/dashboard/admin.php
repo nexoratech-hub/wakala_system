@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: modules/dashboard/admin.php
-// WAKALA FINANCIAL SYSTEM - ADMIN DASHBOARD - FINAL FIXED
-// ✅ FIXED: Capital = Float + Cash (Daima recalculated kutoka providers)
-// ✅ FIXED: Float = SUM ya LATEST record per provider (no double-counting)
-// ✅ FIXED: Cash = daily_reports.current_cash
-// ✅ FIXED: Auto-fix daily_reports values kila dashboard inapopakia
-// ✅ FIXED: Profile picture inaonekana
+// WAKALA FINANCIAL SYSTEM - ADMIN DASHBOARD
+// ✅ All Time + This Month values kwa kila card
+// ✅ Today's values kwa expenses
+// ✅ Financial Overview section mpya
+// ✅ Available Profit inaonekana
+// ✅ Capital = Float + Cash (Daima recalculated kutoka providers)
 // ================================================================
 
 require_once '../../config/config.php';
@@ -97,7 +97,6 @@ if ($selected_branch > 0) {
 
 // ============================================================
 // HELPER FUNCTION: Calculate Total Float from LATEST per provider
-// ✅ Inaepuka double-counting ya duplicate records
 // ============================================================
 function calculateBranchTotalFloat($db, $daily_report_id) {
     $stmt = $db->prepare("
@@ -121,8 +120,6 @@ function calculateBranchTotalFloat($db, $daily_report_id) {
 
 // ============================================================
 // CAPITAL DATA
-// ✅ FIX: Daima recalculate kutoka daily_report_providers
-// ✅ HATUTUMII daily_reports.current_float wala current_capital (stale)
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
@@ -131,9 +128,6 @@ $latest_dr_id = 0;
 $latest_dr_date = null;
 
 if ($selected_branch > 0) {
-    // ------------------------------------------------------------
-    // STEP 1: Tafuta LATEST daily report ya branch
-    // ------------------------------------------------------------
     $stmt = $db->prepare("
         SELECT id, report_number, report_date, current_cash, current_float, current_capital
         FROM daily_reports
@@ -149,13 +143,9 @@ if ($selected_branch > 0) {
         $latest_dr_date = $latest_dr['report_date'];
         $total_cash     = floatval($latest_dr['current_cash'] ?? 0);
 
-        // ✅ Hesabu float kutoka LATEST record per provider
         $total_float = calculateBranchTotalFloat($db, $latest_dr_id);
-
-        // ✅ Daima recalculate capital = Float + Cash
         $total_capital = $total_float + $total_cash;
 
-        // ✅ Auto-fix daily_reports kama values hazipo sawa
         $db_float = floatval($latest_dr['current_float'] ?? 0);
         $db_capital = floatval($latest_dr['current_capital'] ?? 0);
         
@@ -169,9 +159,6 @@ if ($selected_branch > 0) {
         }
     }
 } else {
-    // ------------------------------------------------------------
-    // ALL BRANCHES: hesabu kutoka LATEST daily report ya KILA branch
-    // ------------------------------------------------------------
     $stmt = $db->prepare("
         SELECT dr.branch_id, dr.id, dr.current_cash, dr.current_float, dr.current_capital
         FROM daily_reports dr
@@ -194,18 +181,13 @@ if ($selected_branch > 0) {
     foreach ($all_latest_drs as $dr_row) {
         $dr_id = intval($dr_row['id']);
         $dr_cash = floatval($dr_row['current_cash'] ?? 0);
-
-        // ✅ Hesabu float kutoka LATEST record per provider
         $dr_float = calculateBranchTotalFloat($db, $dr_id);
-        
-        // ✅ Recalculate capital
         $dr_cap = $dr_float + $dr_cash;
 
         $total_float   += $dr_float;
         $total_cash    += $dr_cash;
         $total_capital += $dr_cap;
         
-        // ✅ Auto-fix daily_reports
         $db_float = floatval($dr_row['current_float'] ?? 0);
         $db_capital = floatval($dr_row['current_capital'] ?? 0);
         
@@ -221,64 +203,214 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// SUMMARY DATA
+// ✅ SUMMARY DATA - ALL TIME + THIS MONTH
 // ============================================================
 $today = date('Y-m-d');
 $month = date('m');
 $year = date('Y');
+$month_start = date('Y-m-01');
+$month_end = date('Y-m-t');
 
-$sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions 
-        WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?";
-$params = [$month, $year];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql); $stmt->execute($params);
-$commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+// ============================================================
+// ✅ COMMISSION - All Time + This Month
+// ============================================================
+$commission_month = 0;
+$commission_total = 0;
 
-$sql = "SELECT COALESCE(SUM(other_income), 0) as total FROM commissions WHERE 1=1";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql); $stmt->execute($params);
-$other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-
-$expenses_month = 0;
 try {
+    // This Month
+    $sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions 
+            WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?
+            AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)";
+    $params = [$month, $year];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $commission_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // All Time
+    $sql = "SELECT COALESCE(SUM(total_commission), 0) as total FROM commissions 
+            WHERE (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $commission_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ OTHER INCOME - All Time + This Month
+// ============================================================
+$other_income_month = 0;
+$other_income_total = 0;
+
+try {
+    // This Month
+    $sql = "SELECT COALESCE(SUM(other_income), 0) as total FROM commissions 
+            WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?
+            AND (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)";
+    $params = [$month, $year];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $other_income_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // All Time
+    $sql = "SELECT COALESCE(SUM(other_income), 0) as total FROM commissions 
+            WHERE (commission_number NOT LIKE 'CAP-%' OR commission_number IS NULL)";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $other_income_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ EXPENSES - All Time + This Month + Today
+// ============================================================
+$expenses_month = 0;
+$expenses_total = 0;
+$expenses_today = 0;
+$expenses_count = 0;
+
+try {
+    // Today
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses 
-            WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ?";
+            WHERE expense_date = ? AND is_business_expense = 1";
+    $params = [$today];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $expenses_today = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // This Month
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses 
+            WHERE MONTH(expense_date) = ? AND YEAR(expense_date) = ?
+            AND is_business_expense = 1";
     $params = [$month, $year];
     if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
     $stmt = $db->prepare($sql); $stmt->execute($params);
     $expenses_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) { $expenses_month = 0; }
 
-$transactions_month = 0;
+    // All Time
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses 
+            WHERE is_business_expense = 1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $expenses_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Count
+    $sql = "SELECT COUNT(*) as total FROM expenses WHERE is_business_expense = 1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $expenses_count = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ SALARIES - All Time + This Month
+// ============================================================
+$salaries_month = 0;
+$salaries_total = 0;
+$salaries_count = 0;
+
 try {
+    // This Month
+    $sql = "SELECT COALESCE(SUM(net_pay), 0) as total FROM employee_salaries 
+            WHERE MONTH(payment_date) = ? AND YEAR(payment_date) = ?
+            AND status = 'paid'";
+    $params = [$month, $year];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $salaries_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // All Time
+    $sql = "SELECT COALESCE(SUM(net_pay), 0) as total FROM employee_salaries 
+            WHERE status = 'paid'";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $salaries_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Count
+    $sql = "SELECT COUNT(*) as total FROM employee_salaries WHERE status = 'paid'";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $salaries_count = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ AVAILABLE PROFIT
+// ============================================================
+// Profit = Commission + Other Income - Expenses - Salaries
+$total_earnings = ($commission_total + $other_income_total) - ($expenses_total + $salaries_total);
+$available_profit = max(0, $total_earnings);
+
+// ============================================================
+// ✅ TRANSACTIONS
+// ============================================================
+$transactions_month = 0;
+$transactions_total = 0;
+
+try {
+    // This Month
     $sql = "SELECT COUNT(*) as total FROM transactions 
             WHERE MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?";
     $params = [$month, $year];
     if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
     $stmt = $db->prepare($sql); $stmt->execute($params);
     $transactions_month = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) { $transactions_month = 0; }
 
+    // All Time
+    $sql = "SELECT COUNT(*) as total FROM transactions WHERE 1=1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $transactions_total = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ CASH OUT
+// ============================================================
 $cash_out_month = 0;
+$cash_out_total = 0;
+
 try {
+    // This Month
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM store_cash_out 
             WHERE MONTH(cashout_date) = ? AND YEAR(cashout_date) = ?";
     $params = [$month, $year];
     if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
     $stmt = $db->prepare($sql); $stmt->execute($params);
     $cash_out_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) { $cash_out_month = 0; }
 
+    // All Time
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM store_cash_out WHERE 1=1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $cash_out_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
+
+// ============================================================
+// ✅ TRANSFERS
+// ============================================================
 $transfer_month = 0;
+$transfer_total = 0;
+
 try {
+    // This Month
     $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM transfers 
             WHERE MONTH(transfer_date) = ? AND YEAR(transfer_date) = ?";
     $params = [$month, $year];
     if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
     $stmt = $db->prepare($sql); $stmt->execute($params);
     $transfer_month = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-} catch (PDOException $e) { $transfer_month = 0; }
+
+    // All Time
+    $sql = "SELECT COALESCE(SUM(amount), 0) as total FROM transfers WHERE 1=1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql); $stmt->execute($params);
+    $transfer_total = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (PDOException $e) { }
 
 // ============================================================
 // RECENT COMMISSIONS
@@ -296,7 +428,7 @@ $sql = "
         e.full_name as employee_name
     FROM commissions c
     LEFT JOIN employees e ON c.employee_id = e.id
-    WHERE 1=1
+    WHERE (c.commission_number NOT LIKE 'CAP-%' OR c.commission_number IS NULL)
 ";
 $params = [];
 if ($selected_branch > 0) { $sql .= " AND c.branch_id = ?"; $params[] = $selected_branch; }
@@ -304,6 +436,32 @@ $sql .= " ORDER BY c.commission_date DESC, c.id DESC LIMIT 5";
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $recent_commissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ============================================================
+// RECENT EXPENSES
+// ============================================================
+$sql = "
+    SELECT 
+        e.id,
+        e.expense_number,
+        e.expense_date,
+        e.expense_name,
+        e.category,
+        e.amount,
+        e.description,
+        emp.full_name as employee_name,
+        b.branch_name as branch_name
+    FROM expenses e
+    LEFT JOIN employees emp ON e.employee_id = emp.id
+    LEFT JOIN branches b ON e.branch_id = b.id
+    WHERE e.is_business_expense = 1
+";
+$params = [];
+if ($selected_branch > 0) { $sql .= " AND e.branch_id = ?"; $params[] = $selected_branch; }
+$sql .= " ORDER BY e.expense_date DESC, e.id DESC LIMIT 5";
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$recent_expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
@@ -431,28 +589,37 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- INCOME CARDS -->
+        <!-- ============================================================
+             ✅ BRANCH INCOME - All Time + This Month
+             ============================================================ -->
         <div class="section-title-bar">
             <h3><i class="fas fa-chart-line"></i> Branch Income</h3>
         </div>
         
         <div class="cards-grid-3">
+            <!-- COMMISSION -->
             <a href="../commissions/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-commission">
                 <div class="nav-card-icon">
                     <i class="fas fa-hand-holding-usd"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">TOTAL COMMISSION</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($commission_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo formatCurrency($commission_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($commission_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- OTHER INCOME -->
             <a href="../commissions/index.php?branch_id=<?php echo $selected_branch; ?>&type=other" class="nav-card nav-card-other">
                 <div class="nav-card-icon">
                     <i class="fas fa-coins"></i>
@@ -460,30 +627,119 @@ include_once '../../includes/admin_topbar.php';
                 <div class="nav-card-content">
                     <span class="nav-card-label">OTHER INCOME</span>
                     <span class="nav-card-value"><?php echo formatCurrency($other_income_total); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-plus"></i> All time
-                    </span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($other_income_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- EXPENSES -->
             <a href="../expenses/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-expenses">
                 <div class="nav-card-icon">
                     <i class="fas fa-receipt"></i>
                 </div>
                 <div class="nav-card-content">
-                    <span class="nav-card-label">EXPENSES</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($expenses_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-label">TOTAL EXPENSES</span>
+                    <span class="nav-card-value"><?php echo formatCurrency($expenses_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-list"></i> <?php echo $expenses_count; ?> records
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($expenses_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
+        </div>
+
+        <!-- ============================================================
+             ✅ FINANCIAL OVERVIEW
+             ============================================================ -->
+        <div class="section-title-bar">
+            <h3><i class="fas fa-calculator"></i> Financial Overview</h3>
+        </div>
+
+        <div class="financial-overview-wrapper">
+            <div class="fin-overview-grid">
+                <!-- COMMISSION -->
+                <div class="fin-card fin-card-green">
+                    <div class="fin-icon"><i class="fas fa-hand-holding-usd"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Commission</span>
+                        <span class="fin-value"><?php echo formatCurrency($commission_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($commission_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- OTHER INCOME -->
+                <div class="fin-card fin-card-purple">
+                    <div class="fin-icon"><i class="fas fa-coins"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Other Income</span>
+                        <span class="fin-value"><?php echo formatCurrency($other_income_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($other_income_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- EXPENSES -->
+                <div class="fin-card fin-card-red">
+                    <div class="fin-icon"><i class="fas fa-receipt"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Expenses</span>
+                        <span class="fin-value">- <?php echo formatCurrency($expenses_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-day"></i> 
+                            Today: <?php echo formatCurrency($expenses_today); ?>
+                            • Month: <?php echo formatCurrency($expenses_month); ?>
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- SALARIES -->
+                <div class="fin-card fin-card-orange">
+                    <div class="fin-icon"><i class="fas fa-users"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Salaries</span>
+                        <span class="fin-value">- <?php echo formatCurrency($salaries_total); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-calendar-alt"></i> 
+                            This month: <?php echo formatCurrency($salaries_month); ?>
+                            • <?php echo $salaries_count; ?> paid
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- AVAILABLE PROFIT -->
+                <div class="fin-card fin-card-highlight">
+                    <div class="fin-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="fin-content">
+                        <span class="fin-label">Available Profit</span>
+                        <span class="fin-value"><?php echo formatCurrency($available_profit); ?></span>
+                        <span class="fin-sub">
+                            <i class="fas fa-check-circle"></i> 
+                            Commission + Income - Expenses - Salaries
+                        </span>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- ACTIVITY CARDS -->
@@ -492,48 +748,66 @@ include_once '../../includes/admin_topbar.php';
         </div>
         
         <div class="cards-grid-3">
+            <!-- TRANSACTIONS -->
             <a href="../daily_report/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-transactions">
                 <div class="nav-card-icon">
                     <i class="fas fa-exchange-alt"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">TRANSACTIONS</span>
-                    <span class="nav-card-value"><?php echo number_format($transactions_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo number_format($transactions_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo number_format($transactions_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- CASH OUT -->
             <a href="../cash_out/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-cashout">
                 <div class="nav-card-icon">
                     <i class="fas fa-money-bill-transfer"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">CASH OUT</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($cash_out_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo formatCurrency($cash_out_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($cash_out_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
             </a>
             
+            <!-- TRANSFER -->
             <a href="../transfers/index.php?branch_id=<?php echo $selected_branch; ?>" class="nav-card nav-card-transfer">
                 <div class="nav-card-icon">
                     <i class="fas fa-arrow-right-arrow-left"></i>
                 </div>
                 <div class="nav-card-content">
                     <span class="nav-card-label">TRANSFER</span>
-                    <span class="nav-card-value"><?php echo formatCurrency($transfer_month); ?></span>
-                    <span class="nav-card-sub">
-                        <i class="fas fa-calendar-alt"></i> This month
-                    </span>
+                    <span class="nav-card-value"><?php echo formatCurrency($transfer_total); ?></span>
+                    <div class="nav-card-subs">
+                        <span class="nav-card-sub-item">
+                            <i class="fas fa-calendar-check"></i> All Time
+                        </span>
+                        <span class="nav-card-sub-item nav-card-sub-highlight">
+                            <i class="fas fa-calendar-alt"></i> This Month: <?php echo formatCurrency($transfer_month); ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="nav-card-arrow">
                     <i class="fas fa-arrow-right"></i>
@@ -541,7 +815,9 @@ include_once '../../includes/admin_topbar.php';
             </a>
         </div>
 
-        <!-- RECENT COMMISSIONS -->
+        <!-- ============================================================
+             ✅ RECENT COMMISSIONS
+             ============================================================ -->
         <div class="section-container">
             <div class="section-header-view">
                 <h3>
@@ -595,6 +871,63 @@ include_once '../../includes/admin_topbar.php';
                 <div class="empty-recent">
                     <i class="fas fa-inbox"></i>
                     <p>No recent commissions yet.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- ============================================================
+             ✅ RECENT EXPENSES
+             ============================================================ -->
+        <div class="section-container">
+            <div class="section-header-view section-header-expenses">
+                <h3>
+                    <i class="fas fa-receipt"></i>
+                    Recent Expenses
+                    <span class="section-count-view"><?php echo count($recent_expenses); ?></span>
+                </h3>
+                <a href="../expenses/index.php?branch_id=<?php echo $selected_branch; ?>" class="btn-view-all">
+                    <i class="fas fa-eye"></i> View All
+                </a>
+            </div>
+
+            <?php if (count($recent_expenses) > 0): ?>
+                <div class="recent-list">
+                    <?php foreach ($recent_expenses as $exp): ?>
+                        <div class="recent-item">
+                            <div class="ri-icon ri-icon-expense">
+                                <i class="fas fa-receipt"></i>
+                            </div>
+                            <div class="ri-content">
+                                <div class="ri-top">
+                                    <span class="ri-badge ri-badge-expense">
+                                        <?php echo htmlspecialchars($exp['category']); ?>
+                                    </span>
+                                    <span class="ri-ref"><?php echo htmlspecialchars($exp['expense_number']); ?></span>
+                                    <span class="ri-employee">
+                                        <i class="fas fa-user"></i>
+                                        <?php echo htmlspecialchars($exp['employee_name'] ?? 'N/A'); ?>
+                                    </span>
+                                </div>
+                                <div class="ri-meta">
+                                    <span class="ri-date">
+                                        <i class="far fa-calendar"></i>
+                                        <?php echo date('d M Y', strtotime($exp['expense_date'])); ?>
+                                    </span>
+                                    <span class="ri-name">
+                                        <?php echo htmlspecialchars($exp['expense_name']); ?>
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="ri-amount ri-amount-expense">
+                                - <?php echo formatCurrency($exp['amount']); ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="empty-recent">
+                    <i class="fas fa-inbox"></i>
+                    <p>No recent expenses yet.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -732,7 +1065,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
 /* ============================================================
-   WELCOME CARD WITH PROFILE
+   WELCOME CARD
    ============================================================ */
 .welcome-card-red {
     display: flex;
@@ -1028,7 +1361,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     box-shadow: 0 2px 8px var(--shadow-color);
     border: 1.5px solid var(--border-color);
     transition: all 0.3s ease;
-    min-height: 110px;
+    min-height: 130px;
     position: relative;
     overflow: hidden;
     min-width: 0;
@@ -1065,7 +1398,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
 }
 .nav-card-label {
     font-size: 10px;
@@ -1086,15 +1419,32 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     line-height: 1.15;
     word-break: break-word;
 }
-.nav-card-sub {
+
+/* ✅ NAV-CARD-SUBS - mbili kwa pamoja */
+.nav-card-subs {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+}
+.nav-card-sub-item {
     font-size: 10px;
     font-weight: 600;
     color: var(--text-light);
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    margin-top: 2px;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
+.nav-card-sub-item i { font-size: 9px; }
+.nav-card-sub-highlight {
+    color: #F59E0B !important;
+    font-weight: 800;
+}
+html.dark-mode .nav-card-sub-highlight { color: #FCD34D !important; }
+
 .nav-card-arrow {
     width: 32px;
     height: 32px;
@@ -1107,6 +1457,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
     color: var(--text-muted);
     transition: all 0.3s ease;
     flex-shrink: 0;
+    align-self: flex-start;
 }
 .nav-card:hover .nav-card-arrow {
     transform: translateX(4px);
@@ -1192,6 +1543,184 @@ html.dark-mode .nav-card-transfer .nav-card-icon { background: linear-gradient(1
 html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
 
 /* ============================================================
+   ✅ FINANCIAL OVERVIEW
+   ============================================================ */
+.financial-overview-wrapper {
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    padding: 20px 22px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.fin-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+}
+
+.fin-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1.5px solid;
+    min-width: 0;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+.fin-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px var(--shadow-hover);
+}
+.fin-card::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+}
+
+.fin-card-green {
+    background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
+    border-color: #6EE7B7;
+}
+.fin-card-green .fin-icon {
+    background: linear-gradient(135deg, #059669, #047857);
+    color: #FFFFFF;
+}
+.fin-card-green .fin-value { color: #059669; }
+
+.fin-card-purple {
+    background: linear-gradient(135deg, #F5F3FF, #EDE9FE);
+    border-color: #C4B5FD;
+}
+.fin-card-purple .fin-icon {
+    background: linear-gradient(135deg, #7C3AED, #6D28D9);
+    color: #FFFFFF;
+}
+.fin-card-purple .fin-value { color: #7C3AED; }
+
+.fin-card-red {
+    background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
+    border-color: #FCA5A5;
+}
+.fin-card-red .fin-icon {
+    background: linear-gradient(135deg, #DC2626, #B91C1C);
+    color: #FFFFFF;
+}
+.fin-card-red .fin-value { color: #DC2626; }
+
+.fin-card-orange {
+    background: linear-gradient(135deg, #FFFBEB, #FEF3C7);
+    border-color: #FCD34D;
+}
+.fin-card-orange .fin-icon {
+    background: linear-gradient(135deg, #F59E0B, #D97706);
+    color: #FFFFFF;
+}
+.fin-card-orange .fin-value { color: #D97706; }
+
+.fin-card-highlight {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    border-color: #F59E0B;
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.25);
+}
+.fin-card-highlight .fin-icon {
+    background: linear-gradient(135deg, #F59E0B, #D97706);
+    color: #FFFFFF;
+}
+.fin-card-highlight .fin-value { color: #B45309; }
+
+html.dark-mode .fin-card-green {
+    background: linear-gradient(135deg, #064E3B, #065F46);
+    border-color: #10B981;
+}
+html.dark-mode .fin-card-green .fin-value { color: #34D399; }
+html.dark-mode .fin-card-purple {
+    background: linear-gradient(135deg, #4C1D95, #5B21B6);
+    border-color: #A78BFA;
+}
+html.dark-mode .fin-card-purple .fin-value { color: #C4B5FD; }
+html.dark-mode .fin-card-red {
+    background: linear-gradient(135deg, #7F1D1D, #991B1B);
+    border-color: #DC2626;
+}
+html.dark-mode .fin-card-red .fin-value { color: #FCA5A5; }
+html.dark-mode .fin-card-orange {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    border-color: #F59E0B;
+}
+html.dark-mode .fin-card-orange .fin-value { color: #FBBF24; }
+html.dark-mode .fin-card-highlight {
+    background: linear-gradient(135deg, #5F3A1E, #78350F);
+    border-color: #F59E0B;
+}
+html.dark-mode .fin-card-highlight .fin-value { color: #FCD34D; }
+
+.fin-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    position: relative;
+    z-index: 1;
+}
+
+.fin-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+    position: relative;
+    z-index: 1;
+}
+
+.fin-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fin-value {
+    font-size: 18px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.3px;
+    line-height: 1.15;
+    word-break: break-word;
+}
+
+.fin-sub {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-light);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fin-sub i { font-size: 9px; }
+
+/* ============================================================
    SECTION CONTAINER
    ============================================================ */
 .section-container {
@@ -1213,6 +1742,9 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     flex-wrap: wrap;
     position: relative;
     overflow: hidden;
+}
+.section-header-view.section-header-expenses {
+    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%);
 }
 .section-header-view::before {
     content: '';
@@ -1307,8 +1839,15 @@ html.dark-mode .nav-card-transfer .nav-card-value { color: #5EEAD4; }
     color: #7C3AED;
     border-color: #A78BFA;
 }
+.ri-icon-expense {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    color: #DC2626;
+    border-color: #FCA5A5;
+}
 html.dark-mode .ri-icon-commission { background: linear-gradient(135deg, #065F46, #047857); color: #34D399; }
 html.dark-mode .ri-icon-other { background: linear-gradient(135deg, #4C1D95, #5B21B6); color: #C4B5FD; }
+html.dark-mode .ri-icon-expense { background: linear-gradient(135deg, #7F1D1D, #991B1B); color: #FCA5A5; }
+
 .recent-item:hover {
     background: var(--bg-card);
     transform: translateX(4px);
@@ -1337,8 +1876,10 @@ html.dark-mode .ri-icon-other { background: linear-gradient(135deg, #4C1D95, #5B
 }
 .ri-badge-commission { background: #DCFCE7; color: #15803D; border: 1.5px solid #10B981; }
 .ri-badge-other { background: #EDE9FE; color: #5B21B6; border: 1.5px solid #A78BFA; }
+.ri-badge-expense { background: #FEE2E2; color: #991B1B; border: 1.5px solid #FCA5A5; }
 html.dark-mode .ri-badge-commission { background: #14532D; color: #4ADE80; }
 html.dark-mode .ri-badge-other { background: #4C1D95; color: #C4B5FD; }
+html.dark-mode .ri-badge-expense { background: #7F1D1D; color: #FCA5A5; }
 
 .ri-ref {
     font-family: 'Courier New', monospace;
@@ -1380,6 +1921,11 @@ html.dark-mode .ri-employee { background: #7F1D1D; color: #FCA5A5; }
     gap: 5px;
 }
 .ri-date i { font-size: 10px; color: #DC2626; }
+.ri-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
 
 .ri-amount {
     font-family: 'Inter', 'Courier New', monospace;
@@ -1390,8 +1936,10 @@ html.dark-mode .ri-employee { background: #7F1D1D; color: #FCA5A5; }
 }
 .ri-amount-commission { color: #059669; }
 .ri-amount-other { color: #7C3AED; }
+.ri-amount-expense { color: #DC2626; }
 html.dark-mode .ri-amount-commission { color: #34D399; }
 html.dark-mode .ri-amount-other { color: #C4B5FD; }
+html.dark-mode .ri-amount-expense { color: #FCA5A5; }
 
 /* EMPTY RECENT */
 .empty-recent {
@@ -1506,9 +2054,13 @@ html.dark-mode .qa-other .qa-icon { background: linear-gradient(135deg, #4C1D95,
 html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E, #78350F); color: #FBBF24; }
 
 /* RESPONSIVE */
+@media (max-width: 1400px) {
+    .fin-overview-grid { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1200px) {
     .cards-grid-3 { grid-template-columns: repeat(2, 1fr); }
     .qa-grid { grid-template-columns: repeat(2, 1fr); }
+    .fin-overview-grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1024px) {
     .capital-grid-3 { grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -1516,6 +2068,7 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
     .welcome-name { font-size: 20px; }
     .welcome-avatar { width: 68px; height: 68px; }
     .welcome-avatar-initials { font-size: 24px; }
+    .fin-overview-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
     .welcome-card-red { flex-direction: column; align-items: flex-start; padding: 18px 20px; }
@@ -1530,6 +2083,7 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
     
     .cards-grid-3 { grid-template-columns: 1fr; gap: 10px; }
     .qa-grid { grid-template-columns: 1fr; gap: 10px; }
+    .fin-overview-grid { grid-template-columns: 1fr; gap: 10px; }
     
     .recent-item { flex-direction: column; align-items: flex-start; gap: 10px; }
     .ri-amount { font-size: 15px; align-self: flex-end; }
@@ -1543,7 +2097,7 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
     .csh-icon { width: 40px; height: 40px; font-size: 18px; }
     .cp-value { font-size: 16px; }
     .cp-icon { width: 36px; height: 36px; font-size: 15px; }
-    .nav-card { padding: 14px 16px; gap: 12px; min-height: 90px; }
+    .nav-card { padding: 14px 16px; gap: 12px; min-height: 110px; }
     .nav-card-icon { width: 44px; height: 44px; font-size: 18px; }
     .nav-card-value { font-size: 16px; }
     .nav-card-arrow { width: 28px; height: 28px; font-size: 10px; }
@@ -1552,6 +2106,8 @@ html.dark-mode .qa-report .qa-icon { background: linear-gradient(135deg, #5F3A1E
     .qa-title { font-size: 12px; }
     .section-header-view { padding: 14px 18px; }
     .recent-list { padding: 14px 18px; }
+    .fin-value { font-size: 16px; }
+    .fin-icon { width: 42px; height: 42px; font-size: 18px; }
 }
 </style>
 
@@ -1570,6 +2126,9 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('%cFloat: <?php echo formatCurrency($total_float); ?>', 'font-size:13px; color:#2563EB;');
     console.log('%cCash: <?php echo formatCurrency($total_cash); ?>', 'font-size:13px; color:#059669;');
     console.log('%cCapital: <?php echo formatCurrency($total_capital); ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%cCommission (All Time): <?php echo formatCurrency($commission_total); ?>', 'font-size:13px; color:#059669;');
+    console.log('%cExpenses (All Time): <?php echo formatCurrency($expenses_total); ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%cAvailable Profit: <?php echo formatCurrency($available_profit); ?>', 'font-size:13px; color:#F59E0B; font-weight:bold;');
 });
 </script>
 </body>

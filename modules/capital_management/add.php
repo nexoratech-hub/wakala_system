@@ -2,12 +2,15 @@
 // ================================================================
 // FILE: modules/capital_management/add.php
 // WAKALA FINANCIAL SYSTEM - ADD CAPITAL TRANSACTION
-// ✅ GREEN THEME + BEAUTIFUL CARDS (matching na view.php)
+// ✅ GREEN THEME + BEAUTIFUL CARDS
 // ✅ Cash on TOP, Providers on BOTTOM
 // ✅ 3 providers per row
-// ✅ FIXED: Cash Out INAKATAA kama hakuna daily_report
-// ✅ FIXED: Validation ya current cash/float
-// ✅ FIXED: calculateTotalFloat from LATEST record per provider
+// ✅ NO DUPLICATE — Salaries counted ONCE only
+// ✅ ALL TIME profit (kutoka 2000-01-01 hadi leo)
+// ✅ NO AUTO-FILL — wewe mwenyewe unachagua cash au provider
+// ✅ LIVE SHARED POOL — cash + providers zote zinahesabiwa
+// ✅ Cash + Providers zote zinahesabiwa kwenye Already Allocated
+// ✅ MODAL VALIDATION: Beautiful error modal (no alert())
 // ✅ ALL TEXT IN ENGLISH
 // ================================================================
 
@@ -36,11 +39,9 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 }
 
 // ============================================================
-// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
-// Inaepuka double-counting
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
 // ============================================================
 function calculateTotalFloatForBranch($db, $branch_id) {
-    // Get latest daily report
     $stmt = $db->prepare("
         SELECT id FROM daily_reports 
         WHERE branch_id = ? 
@@ -71,12 +72,11 @@ function calculateTotalFloatForBranch($db, $branch_id) {
 }
 
 // ============================================================
-// ✅ HELPER: Pata current capital kwa branch
+// HELPER: Pata current capital kwa branch
 // ============================================================
 function getCurrentCapitalForBranch($db, $branch_id) {
     $result = ['cash' => 0, 'float' => 0, 'capital' => 0, 'source' => 'none', 'has_daily_report' => false];
     
-    // STEP 1: Jaribu daily_reports kwanza
     $stmt = $db->prepare("
         SELECT id, current_cash, current_capital
         FROM daily_reports 
@@ -89,11 +89,7 @@ function getCurrentCapitalForBranch($db, $branch_id) {
     
     if ($dr) {
         $cash = floatval($dr['current_cash'] ?? 0);
-        
-        // ✅ Hesabu float kutoka LATEST record per provider
         $float = calculateTotalFloatForBranch($db, $branch_id);
-        
-        // ✅ Capital = Float + Cash
         $capital = $float + $cash;
         
         if ($cash > 0 || $float > 0 || $capital > 0) {
@@ -106,7 +102,6 @@ function getCurrentCapitalForBranch($db, $branch_id) {
         }
     }
     
-    // STEP 2: Fallback - soma kutoka capital_management
     $stmt = $db->prepare("
         SELECT 
             cm.reference_module,
@@ -144,19 +139,16 @@ function getCurrentCapitalForBranch($db, $branch_id) {
     $result['float'] = max(0, $total_float);
     $result['capital'] = $result['cash'] + $result['float'];
     $result['source'] = 'capital_management';
-    $result['has_daily_report'] = false;
     
     return $result;
 }
 
 /**
- * ✅ Get current float ya kila provider kwa branch
- * Inatumia LATEST record per provider
+ * Get current float ya kila provider kwa branch
  */
 function getProviderFloats($db, $branch_id) {
     $floats = [];
     
-    // Get latest daily report
     $stmt = $db->prepare("
         SELECT id FROM daily_reports 
         WHERE branch_id = ? 
@@ -167,7 +159,6 @@ function getProviderFloats($db, $branch_id) {
     $dr = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($dr) {
-        // ✅ Chukua LATEST record per provider
         $stmt = $db->prepare("
             SELECT drp1.provider_id, drp1.current_float
             FROM daily_report_providers drp1
@@ -184,11 +175,8 @@ function getProviderFloats($db, $branch_id) {
         }
     }
     
-    if (!empty($floats)) {
-        return $floats;
-    }
+    if (!empty($floats)) return $floats;
     
-    // STEP 2: Fallback - soma kutoka capital_management
     $stmt = $db->prepare("
         SELECT 
             bp.provider_id,
@@ -217,7 +205,7 @@ function getProviderFloats($db, $branch_id) {
 }
 
 /**
- * ✅ Check kama branch ina daily_report
+ * Check kama branch ina daily_report
  */
 function hasDailyReport($db, $branch_id) {
     $stmt = $db->prepare("
@@ -231,6 +219,166 @@ function hasDailyReport($db, $branch_id) {
 }
 
 // ============================================================
+// FIXED: Get available profit kwa branch
+//
+// ✅ NO DUPLICATE — Salaries counted ONCE only
+// ✅ ALL TIME profit (default: 2000-01-01 to today)
+// ✅ Already Allocated = CASH + PROVIDERS zote
+// ============================================================
+function getAvailableProfit($db, $branch_id, $from_date = null, $to_date = null) {
+    if (!$from_date) $from_date = '2000-01-01';
+    if (!$to_date)   $to_date   = date('Y-m-d');
+    
+    // 1. COMMISSION
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(total_commission), 0) as total_commission,
+            COALESCE(SUM(other_income), 0) as other_income
+        FROM commissions 
+        WHERE branch_id = ? 
+          AND commission_date BETWEEN ? AND ?
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $commission = floatval($row['total_commission'] ?? 0);
+    $other_income_comm = floatval($row['other_income'] ?? 0);
+    
+    // 2. OTHER INCOME (fallback)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(other_income), 0) as other_income
+        FROM daily_reports 
+        WHERE branch_id = ? 
+          AND report_date BETWEEN ? AND ?
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $other_income_dr = floatval($row['other_income'] ?? 0);
+    $other_income = max($other_income_comm, $other_income_dr);
+    
+    // 3. EXPENSES (Jumla ya ALL — ina salaries)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_expenses
+        FROM expenses 
+        WHERE branch_id = ? 
+          AND expense_date BETWEEN ? AND ?
+          AND is_business_expense = 1
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_expenses = floatval($row['total_expenses'] ?? 0);
+    
+    // 3b. Check salary-related expenses
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count_salary_expenses
+        FROM expenses 
+        WHERE branch_id = ? 
+          AND expense_date BETWEEN ? AND ?
+          AND is_salary_related = 1
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $salary_expenses_count = intval($row['count_salary_expenses'] ?? 0);
+    
+    // 4. SALARIES — TUMA TU KAMA EXPENSES HAINA SALARY RECORDS
+    $salaries = 0;
+    $using_salary_from_table = false;
+    
+    if ($salary_expenses_count == 0) {
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(net_pay), 0) as total_salaries
+            FROM employee_salaries 
+            WHERE branch_id = ? 
+              AND payment_date BETWEEN ? AND ?
+              AND status = 'paid'
+        ");
+        $stmt->execute([$branch_id, $from_date, $to_date]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $salaries = floatval($row['total_salaries'] ?? 0);
+        $using_salary_from_table = true;
+    }
+    
+    // 5. CASH OUT
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_cash_out
+        FROM capital_management 
+        WHERE branch_id = ? 
+          AND transaction_date BETWEEN ? AND ?
+          AND transaction_type IN ('cash_out', 'adjustment')
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $cash_out = floatval($row['total_cash_out'] ?? 0);
+    
+    // 6. TOTAL PROFIT
+    $total_profit = $commission + $other_income - $total_expenses - $salaries - $cash_out;
+    
+    // 7. ALREADY ALLOCATED — ✅ CASH + PROVIDERS ZOTE
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(CASE WHEN reference_module = 'cash' THEN amount ELSE 0 END), 0) as cash_allocated,
+            COALESCE(SUM(CASE WHEN reference_module = 'provider' THEN amount ELSE 0 END), 0) as provider_allocated,
+            COALESCE(SUM(amount), 0) as total_allocated
+        FROM capital_management 
+        WHERE branch_id = ? 
+          AND transaction_date BETWEEN ? AND ?
+          AND transaction_type = 'profit_allocation'
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $cash_allocated = floatval($row['cash_allocated'] ?? 0);
+    $provider_allocated = floatval($row['provider_allocated'] ?? 0);
+    $already_allocated = floatval($row['total_allocated'] ?? 0);
+    
+    // 8. AVAILABLE PROFIT
+    $available_profit = max(0, $total_profit - $already_allocated);
+    
+    // 9. COMMISSION BREAKDOWN per provider
+    $stmt = $db->prepare("
+        SELECT provider_data, total_commission
+        FROM commissions 
+        WHERE branch_id = ?
+          AND commission_date BETWEEN ? AND ?
+    ");
+    $stmt->execute([$branch_id, $from_date, $to_date]);
+    $commissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    $provider_commissions = [];
+    foreach ($commissions as $c) {
+        $data = json_decode($c['provider_data'] ?? '{}', true);
+        if (is_array($data)) {
+            foreach ($data as $pid => $amt) {
+                $pid = intval($pid);
+                $amt = floatval($amt);
+                if ($pid > 0 && $amt > 0) {
+                    if (!isset($provider_commissions[$pid])) {
+                        $provider_commissions[$pid] = 0;
+                    }
+                    $provider_commissions[$pid] += $amt;
+                }
+            }
+        }
+    }
+    
+    return [
+        'profit' => $available_profit,
+        'total_profit' => $total_profit,
+        'already_allocated' => $already_allocated,
+        'cash_allocated' => $cash_allocated,
+        'provider_allocated' => $provider_allocated,
+        'commission' => $commission,
+        'other_income' => $other_income,
+        'expenses' => $total_expenses,
+        'salaries' => $salaries,
+        'salary_expenses_count' => $salary_expenses_count,
+        'using_salary_from_table' => $using_salary_from_table,
+        'cash_out' => $cash_out,
+        'provider_commissions' => $provider_commissions,
+        'from_date' => $from_date,
+        'to_date' => $to_date
+    ];
+}
+
+// ============================================================
 // GET BRANCH FROM URL
 // ============================================================
 $selected_branch = 0;
@@ -240,9 +388,6 @@ if (isset($_GET['branch_id']) && $_GET['branch_id'] !== '' && intval($_GET['bran
     $selected_branch = intval($_GET['branch']);
 }
 
-// ============================================================
-// GET BRANCHES
-// ============================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE is_active = 1 ORDER BY branch_name");
 $stmt->execute();
 $all_branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -306,58 +451,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $is_out = in_array($transaction_type, ['cash_out', 'adjustment']);
         
-        // ============================================================
-        // ✅ VALIDATION KWA CASH OUT / ADJUSTMENT
-        // ============================================================
+        // ✅ VALIDATION: Profit Allocation — Total (cash + providers) ≤ Available
+        if ($transaction_type === 'profit_allocation') {
+            $profit_data_check = getAvailableProfit($db, $branch_id);
+            $total_input = $cash_amount + $total_provider;
+            
+            if ($total_input > $profit_data_check['profit']) {
+                throw new Exception(
+                    'Profit Allocation exceeds available profit. ' .
+                    'Available: ' . formatCurrency($profit_data_check['profit']) . 
+                    ', Requested: ' . formatCurrency($total_input)
+                );
+            }
+        }
+        
         if ($is_out) {
             $current = getCurrentCapitalForBranch($db, $branch_id);
             $has_dr = hasDailyReport($db, $branch_id);
             
             if ($has_cash && $cash_amount > 0) {
                 if (!$has_dr && $current['cash'] <= 0) {
-                    throw new Exception(
-                        'Cannot perform Cash Out without a Daily Report. ' .
-                        'Please create Opening Capital first.'
-                    );
+                    throw new Exception('Cannot perform Cash Out without a Daily Report. Please create Opening Capital first.');
                 }
-                
                 if ($cash_amount > $current['cash']) {
-                    throw new Exception(
-                        'Insufficient cash. ' .
-                        'Available: ' . formatCurrency($current['cash']) . ', ' .
-                        'Requested: ' . formatCurrency($cash_amount) . '.'
-                    );
+                    throw new Exception('Insufficient cash. Available: ' . formatCurrency($current['cash']) . ', Requested: ' . formatCurrency($cash_amount) . '.');
                 }
             }
             
             if ($has_providers) {
                 $provider_floats = getProviderFloats($db, $branch_id);
-                
                 foreach ($provider_amounts as $pid => $amt_raw) {
                     $pid = intval($pid);
                     $amt = floatval(str_replace(',', '', $amt_raw));
-                    
                     if ($amt <= 0) continue;
                     
                     $available = $provider_floats[$pid] ?? 0;
-                    
                     $stmt = $db->prepare("SELECT provider_name FROM providers WHERE id = ?");
                     $stmt->execute([$pid]);
                     $pname = $stmt->fetchColumn() ?: 'Unknown';
                     
                     if (!$has_dr && $available <= 0) {
-                        throw new Exception(
-                            'Cannot perform Cash Out for ' . $pname . ' without a Daily Report. ' .
-                            'Please create Opening Capital first.'
-                        );
+                        throw new Exception('Cannot perform Cash Out for ' . $pname . ' without a Daily Report.');
                     }
-                    
                     if ($amt > $available) {
-                        throw new Exception(
-                            'Insufficient float for ' . $pname . '. ' .
-                            'Available: ' . formatCurrency($available) . ', ' .
-                            'Requested: ' . formatCurrency($amt) . '.'
-                        );
+                        throw new Exception('Insufficient float for ' . $pname . '. Available: ' . formatCurrency($available) . ', Requested: ' . formatCurrency($amt) . '.');
                     }
                 }
             }
@@ -368,17 +505,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             
             if ($total_out > $current['capital']) {
-                throw new Exception(
-                    'Total exceeds available Capital. ' .
-                    'Available: ' . formatCurrency($current['capital']) . ', ' .
-                    'Requested: ' . formatCurrency($total_out) . '.'
-                );
+                throw new Exception('Total exceeds available Capital. Available: ' . formatCurrency($current['capital']) . ', Requested: ' . formatCurrency($total_out) . '.');
             }
         }
         
         $db->beginTransaction();
         
-        // Get latest daily report
         $stmt = $db->prepare("
             SELECT id, current_cash, current_capital 
             FROM daily_reports 
@@ -390,7 +522,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $latest_dr = $stmt->fetch(PDO::FETCH_ASSOC);
         $dr_id = $latest_dr ? $latest_dr['id'] : null;
         
-        // Kama hakuna daily_report NA ni INCOMING → tengeneza
         if (!$dr_id && !$is_out) {
             $report_number = 'DR-' . date('Ymd') . '-' . mt_rand(1000, 9999);
             $stmt = $db->prepare("
@@ -399,9 +530,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                  current_cash, current_float, current_capital, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, 0, 0, NOW())
             ");
-            $stmt->execute([
-                $report_number, $user_id, $branch_name, $branch_id, $transaction_date
-            ]);
+            $stmt->execute([$report_number, $user_id, $branch_name, $branch_id, $transaction_date]);
             $dr_id = $db->lastInsertId();
             $latest_dr = ['id' => $dr_id, 'current_cash' => 0, 'current_capital' => 0];
         }
@@ -409,9 +538,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $total_added = 0;
         $transactions_created = [];
         
-        // ====================================================
-        // 1. PROCESS CASH
-        // ====================================================
+        // PROCESS CASH
         if ($has_cash) {
             $capital_number = 'CAP-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
@@ -429,21 +556,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             if ($dr_id) {
                 $old_cash = floatval($latest_dr['current_cash']);
-                
-                if ($is_out) {
-                    $new_cash = max(0, $old_cash - $cash_amount);
-                } else {
-                    $new_cash = $old_cash + $cash_amount;
-                }
-                
-                // ✅ Recalculate capital = total float + new cash
+                $new_cash = $is_out ? max(0, $old_cash - $cash_amount) : $old_cash + $cash_amount;
                 $total_float = calculateTotalFloatForBranch($db, $branch_id);
                 $new_capital = $total_float + $new_cash;
                 
                 $stmt = $db->prepare("
                     UPDATE daily_reports 
-                    SET current_cash = ?, current_float = ?, current_capital = ?, 
-                        updated_at = NOW() 
+                    SET current_cash = ?, current_float = ?, current_capital = ?, updated_at = NOW() 
                     WHERE id = ?
                 ");
                 $stmt->execute([$new_cash, $total_float, $new_capital, $dr_id]);
@@ -455,9 +574,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $total_added += $cash_amount;
         }
         
-        // ====================================================
-        // 2. PROCESS PROVIDERS
-        // ====================================================
+        // PROCESS PROVIDERS
         if ($has_providers) {
             foreach ($provider_amounts as $provider_id => $amount_raw) {
                 $provider_id = intval($provider_id);
@@ -480,7 +597,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $transactions_created[] = $capital_number;
                 
                 if ($dr_id) {
-                    // ✅ Chukua LATEST record ya provider
                     $stmt = $db->prepare("
                         SELECT id, current_float 
                         FROM daily_report_providers 
@@ -501,7 +617,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ");
                         $stmt->execute([$new_float, $drp['id']]);
                     } else {
-                        // Insert new record
                         $stmt = $db->prepare("
                             SELECT p.provider_name, bp.provider_code 
                             FROM providers p
@@ -528,7 +643,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         }
                     }
                     
-                    // ✅ Recalculate daily_reports: current_float & current_capital
                     $current_cash = floatval($latest_dr['current_cash']);
                     $new_total_float = calculateTotalFloatForBranch($db, $branch_id);
                     $new_capital = $new_total_float + $current_cash;
@@ -561,7 +675,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         $_SESSION['success_message'] = 'Capital transaction of ' . formatCurrency($total_added) . 
                                        ' added successfully! (' . count($transactions_created) . ' records)';
-        header('Location: index.php?branch=' . $branch_id);
+        header('Location: add.php?branch=' . $branch_id);
         exit();
         
     } catch (Exception $e) {
@@ -584,6 +698,21 @@ if ($selected_branch > 0) {
     $current_float = $data['float'];
     $current_capital = $data['capital'];
     $has_daily_report = $data['has_daily_report'];
+}
+
+// GET AVAILABLE PROFIT (ALL TIME)
+$profit_data = [
+    'profit' => 0, 'total_profit' => 0, 'already_allocated' => 0,
+    'cash_allocated' => 0, 'provider_allocated' => 0,
+    'commission' => 0, 'other_income' => 0, 'expenses' => 0, 
+    'salaries' => 0, 'cash_out' => 0,
+    'salary_expenses_count' => 0, 'using_salary_from_table' => false,
+    'provider_commissions' => [],
+    'from_date' => '2000-01-01', 'to_date' => date('Y-m-d')
+];
+
+if ($selected_branch > 0) {
+    $profit_data = getAvailableProfit($db, $selected_branch);
 }
 
 // ============================================================
@@ -613,6 +742,7 @@ if ($selected_branch > 0) {
     foreach ($all_providers as &$p) {
         $pid = intval($p['id']);
         $p['current_float'] = $provider_floats[$pid] ?? 0;
+        $p['provider_commission'] = $profit_data['provider_commissions'][$pid] ?? 0;
     }
     unset($p);
 }
@@ -676,14 +806,6 @@ include_once '../../includes/admin_topbar.php';
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
-        
-        <?php if (!empty($error_message)): ?>
-            <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo htmlspecialchars($error_message); ?></span>
-                <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
-            </div>
-        <?php endif; ?>
 
         <!-- NO BRANCH WARNING -->
         <?php if ($selected_branch == 0): ?>
@@ -696,7 +818,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ✅ NO DAILY REPORT WARNING - ENGLISH -->
+        <!-- NO DAILY REPORT WARNING -->
         <?php if ($selected_branch > 0 && !$has_daily_report && $current_capital <= 0): ?>
             <div class="no-daily-report-warning">
                 <i class="fas fa-info-circle"></i>
@@ -707,6 +829,78 @@ include_once '../../includes/admin_topbar.php';
                         or <strong>Profit Allocation</strong>. 
                         However, <strong>Cash Out will not be allowed</strong> until you have sufficient capital.
                     </p>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- PROFIT AVAILABILITY BANNER -->
+        <?php if ($selected_branch > 0 && $profit_data['total_profit'] > 0): ?>
+            <div class="profit-available-banner">
+                <div class="pab-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <div class="pab-content">
+                    <span class="pab-label">
+                        Available Profit (All Time — Shared Pool)
+                        <?php if ($profit_data['already_allocated'] > 0): ?>
+                            <span style="color: #FCD34D; font-weight: 700; margin-left: 8px;">
+                                (<?php echo formatCurrency($profit_data['already_allocated']); ?> already used)
+                            </span>
+                        <?php endif; ?>
+                    </span>
+                    <span class="pab-value" id="pabTotalValue"><?php echo formatCurrency($profit_data['profit']); ?></span>
+                    
+                    <div class="pab-breakdown">
+                        <span class="pab-item">
+                            <i class="fas fa-hand-holding-usd"></i>
+                            Commission: <strong><?php echo formatCurrency($profit_data['commission']); ?></strong>
+                        </span>
+                        <?php if ($profit_data['other_income'] > 0): ?>
+                            <span class="pab-item">
+                                <i class="fas fa-plus-circle"></i>
+                                Other Income: <strong><?php echo formatCurrency($profit_data['other_income']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($profit_data['expenses'] > 0): ?>
+                            <span class="pab-item pab-item-neg">
+                                <i class="fas fa-receipt"></i>
+                                Expenses: <strong>-<?php echo formatCurrency($profit_data['expenses']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($profit_data['salaries'] > 0): ?>
+                            <span class="pab-item pab-item-neg">
+                                <i class="fas fa-users"></i>
+                                Salaries: <strong>-<?php echo formatCurrency($profit_data['salaries']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($profit_data['cash_out'] > 0): ?>
+                            <span class="pab-item pab-item-neg">
+                                <i class="fas fa-money-bill-wave"></i>
+                                Cash Out: <strong>-<?php echo formatCurrency($profit_data['cash_out']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($profit_data['cash_allocated'] > 0): ?>
+                            <span class="pab-item pab-item-neg">
+                                <i class="fas fa-wallet"></i>
+                                Cash Allocated: <strong>-<?php echo formatCurrency($profit_data['cash_allocated']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($profit_data['provider_allocated'] > 0): ?>
+                            <span class="pab-item pab-item-neg">
+                                <i class="fas fa-university"></i>
+                                Provider Allocated: <strong>-<?php echo formatCurrency($profit_data['provider_allocated']); ?></strong>
+                            </span>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <!-- Remaining profit -->
+                    <div class="pab-remaining">
+                        <span class="pab-remaining-label">
+                            <i class="fas fa-calculator"></i>
+                            Remaining after input:
+                        </span>
+                        <span class="pab-remaining-value" id="pabRemaining"><?php echo formatCurrency($profit_data['profit']); ?></span>
+                    </div>
                 </div>
             </div>
         <?php endif; ?>
@@ -744,6 +938,7 @@ include_once '../../includes/admin_topbar.php';
         <div class="form-container">
             <form method="POST" action="" class="main-form" id="capitalForm" onsubmit="return validateForm()">
                 <input type="hidden" name="action" value="add_transaction">
+                <input type="hidden" name="profit_pool" id="profitPoolHidden" value="<?php echo floatval($profit_data['profit']); ?>">
                 
                 <!-- BRANCH SELECTION -->
                 <div class="form-section">
@@ -797,17 +992,25 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     
                     <div class="type-options-grid">
-                        <?php foreach ($type_labels as $key => $label): 
+                        <?php 
+                        $default_type = ($profit_data['profit'] > 0) ? 'profit_allocation' : 'additional';
+                        
+                        foreach ($type_labels as $key => $label): 
                             $is_disabled = in_array($key, ['cash_out', 'adjustment']) && $current_capital <= 0;
+                            
+                            if ($key === 'profit_allocation' && $profit_data['profit'] <= 0) {
+                                $is_disabled = true;
+                            }
+                            
                             $gradient = $label['gradient'] ?? 'linear-gradient(135deg, #059669, #047857)';
                         ?>
                             <label class="type-option-card type-option-<?php echo $label['color']; ?> <?php echo $is_disabled ? 'type-option-disabled' : ''; ?>">
                                 <input type="radio" 
                                        name="transaction_type" 
                                        value="<?php echo $key; ?>" 
-                                       <?php echo $key == 'additional' ? 'checked' : ''; ?>
+                                       <?php echo $key == $default_type ? 'checked' : ''; ?>
                                        <?php echo $is_disabled ? 'disabled' : ''; ?>
-                                       onchange="updatePreview()">
+                                       onchange="onTypeChange('<?php echo $key; ?>')">
                                 <div class="toc-content">
                                     <div class="toc-icon" style="background: <?php echo $gradient; ?>;">
                                         <i class="fas <?php echo $label['icon']; ?>"></i>
@@ -815,9 +1018,14 @@ include_once '../../includes/admin_topbar.php';
                                     <div class="toc-text">
                                         <span class="toc-title"><?php echo $label['label']; ?></span>
                                         <span class="toc-desc">
-                                            <?php if ($is_disabled): ?>
+                                            <?php if ($key === 'profit_allocation' && $profit_data['profit'] > 0): ?>
+                                                <span style="color: #7C3AED; font-weight: 700;">
+                                                    <i class="fas fa-coins"></i> <?php echo formatCurrency($profit_data['profit']); ?>
+                                                </span>
+                                            <?php elseif ($is_disabled): ?>
                                                 <span style="color: #DC2626; font-weight: 700;">
-                                                    <i class="fas fa-lock"></i> No capital
+                                                    <i class="fas fa-lock"></i> 
+                                                    <?php echo $key === 'profit_allocation' ? 'No profit' : 'No capital'; ?>
                                                 </span>
                                             <?php else: ?>
                                                 <?php echo $label['desc']; ?>
@@ -876,13 +1084,17 @@ include_once '../../includes/admin_topbar.php';
                 <div class="form-section">
                     <div class="section-header">
                         <h3><i class="fas fa-university"></i> Provider Floats</h3>
-                        <span class="section-badge">Optional • <?php echo count($all_providers); ?> providers</span>
+                        <span class="section-badge">
+                            Optional • <?php echo count($all_providers); ?> providers
+                        </span>
                     </div>
                     
                     <?php if (count($all_providers) > 0): ?>
                         <div class="providers-amount-grid">
                             <?php foreach ($all_providers as $p): ?>
-                                <div class="provider-amount-card provider-amount-green">
+                                <div class="provider-amount-card provider-amount-green"
+                                     data-provider-id="<?php echo $p['id']; ?>">
+                                    
                                     <div class="pac-header">
                                         <div class="pac-icon" style="background: <?php echo htmlspecialchars($p['color_code']); ?>;">
                                             <i class="<?php echo htmlspecialchars($p['icon_class']); ?>"></i>
@@ -898,6 +1110,30 @@ include_once '../../includes/admin_topbar.php';
                                             <?php echo formatCurrency($p['current_float']); ?>
                                         </span>
                                     </div>
+                                    
+                                    <?php if ($p['provider_commission'] > 0): ?>
+                                        <div class="pac-commission">
+                                            <i class="fas fa-hand-holding-usd"></i>
+                                            <span class="pac-commission-label">Commission:</span>
+                                            <span class="pac-commission-value"><?php echo formatCurrency($p['provider_commission']); ?></span>
+                                        </div>
+                                    <?php endif; ?>
+                                    
+                                    <!-- ✅ "Available to add" inaonyeshwa tu kwa profit_allocation -->
+                                    <?php if ($profit_data['profit'] > 0): ?>
+                                        <div class="pac-available" 
+                                             data-provider-id="<?php echo $p['id']; ?>"
+                                             style="<?php echo ($default_type === 'profit_allocation') ? '' : 'display:none;'; ?>">
+                                            <span class="pac-available-label">
+                                                <i class="fas fa-chart-line"></i>
+                                                Available to add:
+                                            </span>
+                                            <span class="pac-available-value" data-provider-id="<?php echo $p['id']; ?>">
+                                                <?php echo formatCurrency($profit_data['profit']); ?>
+                                            </span>
+                                        </div>
+                                    <?php endif; ?>
+                                    
                                     <div class="pac-input-wrapper">
                                         <span class="pac-currency">TSh</span>
                                         <input type="text" 
@@ -907,6 +1143,7 @@ include_once '../../includes/admin_topbar.php';
                                                inputmode="numeric"
                                                data-provider-id="<?php echo $p['id']; ?>"
                                                data-available="<?php echo $p['current_float']; ?>"
+                                               data-commission="<?php echo $p['provider_commission']; ?>"
                                                oninput="formatMoneyInput(this); updatePreview();">
                                     </div>
                                 </div>
@@ -994,11 +1231,6 @@ include_once '../../includes/admin_topbar.php';
                             </span>
                         </div>
                     </div>
-                    
-                    <div class="preview-warning" id="previewWarning" style="display:none;">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span id="previewWarningText"></span>
-                    </div>
                 </div>
                 
                 <!-- ACTIONS -->
@@ -1030,6 +1262,67 @@ include_once '../../includes/admin_topbar.php';
     <?php include_once '../../includes/admin_footer.php'; ?>
 </div>
 
+<!-- VALIDATION MODAL -->
+<div class="modal-overlay" id="validationModal" onclick="closeModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header" id="modalHeader">
+            <div class="modal-icon" id="modalIcon">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="modal-header-content">
+                <h3 class="modal-title" id="modalTitle">Validation Error</h3>
+                <p class="modal-subtitle" id="modalSubtitle">Please check the following</p>
+            </div>
+            <button type="button" class="modal-close" onclick="closeModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="modal-message" id="modalMessage">
+                Error details will appear here
+            </div>
+            <div class="modal-details" id="modalDetails" style="display:none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="modal-btn modal-btn-primary" onclick="closeModal()">
+                <i class="fas fa-check"></i>
+                <span>OK, I understand</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-overlay" id="confirmModal" onclick="closeConfirmModal(event)">
+    <div class="modal-box modal-box-confirm" onclick="event.stopPropagation()">
+        <div class="modal-header modal-header-confirm">
+            <div class="modal-icon modal-icon-confirm">
+                <i class="fas fa-question-circle"></i>
+            </div>
+            <div class="modal-header-content">
+                <h3 class="modal-title">Confirm Transaction</h3>
+                <p class="modal-subtitle">Please review before proceeding</p>
+            </div>
+            <button type="button" class="modal-close" onclick="closeConfirmModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="confirm-details" id="confirmDetails"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="modal-btn modal-btn-secondary" onclick="closeConfirmModal()">
+                <i class="fas fa-times"></i>
+                <span>Cancel</span>
+            </button>
+            <button type="button" class="modal-btn modal-btn-primary" onclick="confirmSubmit()">
+                <i class="fas fa-check"></i>
+                <span>Yes, Continue</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <style>
 /* ============================================================
    VARIABLES - GREEN THEME
@@ -1044,15 +1337,15 @@ include_once '../../includes/admin_topbar.php';
     --ca-input-bg: #F9FAFB;
     --ca-hover: #F3F4F6;
     --ca-shadow: rgba(0,0,0,0.06);
-    --ca-shadow-md: rgba(0,0,0,0.1);
     
     --green-primary: #059669;
     --green-dark: #047857;
-    --green-darker: #065F46;
     --green-light: #D1FAE5;
-    --green-lighter: #A7F3D0;
     --green-accent: #10B981;
-    --green-bright: #34D399;
+    
+    --purple-primary: #7C3AED;
+    --purple-dark: #6D28D9;
+    --purple-light: #EDE9FE;
 }
 html.dark-mode {
     --ca-bg: #0F172A;
@@ -1064,10 +1357,8 @@ html.dark-mode {
     --ca-input-bg: #334155;
     --ca-hover: #334155;
     --ca-shadow: rgba(0,0,0,0.3);
-    --ca-shadow-md: rgba(0,0,0,0.5);
     
     --green-light: #065F46;
-    --green-lighter: #047857;
 }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
@@ -1080,7 +1371,6 @@ body { background: var(--ca-bg) !important; color: var(--ca-text); }
     max-width: 100% !important;
 }
 
-/* BRANCH CARD */
 .branch-status-card {
     display: flex; align-items: center; gap: 18px;
     padding: 16px 22px; border-radius: 12px;
@@ -1141,7 +1431,6 @@ body { background: var(--ca-bg) !important; color: var(--ca-text); }
 }
 .btn-back-card:hover { background: rgba(255, 255, 255, 0.25); color: #FFFFFF; }
 
-/* PAGE HEADER */
 .page-header {
     display: flex; justify-content: space-between;
     align-items: center; margin-bottom: 20px;
@@ -1155,7 +1444,6 @@ body { background: var(--ca-bg) !important; color: var(--ca-text); }
 .header-left h2 i { color: #059669; }
 .header-left .text-muted { font-size: 13px; color: var(--ca-text-secondary); margin: 4px 0 0 0; }
 
-/* ALERTS */
 .alert {
     padding: 14px 18px; border-radius: 10px;
     margin-bottom: 16px; display: flex;
@@ -1163,9 +1451,6 @@ body { background: var(--ca-bg) !important; color: var(--ca-text); }
     font-weight: 500; font-size: 13px;
 }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
-.alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
-html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
-html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 .alert i { font-size: 20px; flex-shrink: 0; }
 .alert span { flex: 1; }
 .alert-close {
@@ -1173,7 +1458,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     color: inherit; cursor: pointer; padding: 0 4px; opacity: 0.6;
 }
 
-/* NO BRANCH WARNING */
 .no-branch-warning {
     display: flex; align-items: flex-start; gap: 14px;
     padding: 16px 20px; background: #FEF3C7;
@@ -1183,9 +1467,7 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
 .no-branch-warning i { font-size: 24px; flex-shrink: 0; margin-top: 2px; color: #D97706; }
 .no-branch-warning strong { font-weight: 800; font-size: 14px; display: block; margin-bottom: 4px; }
 .no-branch-warning p { font-size: 13px; margin: 0; line-height: 1.5; }
-html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; color: #FBBF24; }
 
-/* NO DAILY REPORT WARNING */
 .no-daily-report-warning {
     display: flex; align-items: flex-start; gap: 14px;
     padding: 16px 20px;
@@ -1193,15 +1475,100 @@ html.dark-mode .no-branch-warning { background: #5F3A1E; border-color: #92400E; 
     border: 2px solid #60A5FA; border-radius: 12px;
     margin-bottom: 16px; color: #1E40AF;
 }
-html.dark-mode .no-daily-report-warning {
-    background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%);
-    border-color: #3B82F6; color: #93C5FD;
-}
 .no-daily-report-warning i { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
 .no-daily-report-warning strong { font-weight: 800; font-size: 14px; display: block; margin-bottom: 4px; }
 .no-daily-report-warning p { font-size: 13px; margin: 0; line-height: 1.5; }
 
-/* SUMMARY MINI CARDS */
+.profit-available-banner {
+    display: flex; align-items: flex-start; gap: 18px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 50%, #5B21B6 100%);
+    border-radius: 14px;
+    margin-bottom: 20px;
+    color: #FFFFFF;
+    box-shadow: 0 8px 28px rgba(124, 58, 237, 0.35);
+    position: relative; overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+}
+.profit-available-banner::before {
+    content: '';
+    position: absolute; top: -50%; right: -10%;
+    width: 300px; height: 300px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.pab-icon {
+    width: 64px; height: 64px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; color: #FCD34D;
+    flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    position: relative; z-index: 1;
+    backdrop-filter: blur(10px);
+}
+.pab-content {
+    display: flex; flex-direction: column; gap: 10px;
+    flex: 1; min-width: 0; position: relative; z-index: 1;
+}
+.pab-label {
+    font-size: 11px; font-weight: 800;
+    color: rgba(255, 255, 255, 0.85);
+    text-transform: uppercase; letter-spacing: 1.5px;
+}
+.pab-value {
+    font-size: 34px; font-weight: 900;
+    color: #FFFFFF;
+    font-family: 'Inter', 'Courier New', monospace;
+    letter-spacing: -0.5px;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+    line-height: 1.1;
+}
+.pab-breakdown {
+    display: flex; flex-wrap: wrap;
+    gap: 10px; margin-top: 4px;
+}
+.pab-item {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    font-size: 11px; font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.pab-item i { font-size: 10px; opacity: 0.85; }
+.pab-item strong {
+    color: #FCD34D;
+    font-family: 'Courier New', monospace;
+}
+.pab-item-neg strong { color: #FCA5A5; }
+
+.pab-remaining {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px;
+    background: rgba(252, 211, 77, 0.25);
+    border-radius: 10px;
+    border: 2px solid rgba(252, 211, 77, 0.4);
+    margin-top: 8px;
+    align-self: flex-start;
+}
+.pab-remaining-label {
+    font-size: 11px; font-weight: 700;
+    color: #FCD34D;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex; align-items: center; gap: 5px;
+}
+.pab-remaining-value {
+    font-size: 18px; font-weight: 900;
+    color: #FFFFFF;
+    font-family: 'Courier New', monospace;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
 .summary-cards-row {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 16px; margin-bottom: 20px;
@@ -1257,7 +1624,6 @@ html.dark-mode .smc-label { color: #6EE7B7; }
 }
 html.dark-mode .smc-value { color: #D1FAE5; }
 
-/* FORM CONTAINER */
 .form-container {
     background: var(--ca-card-bg);
     border-radius: 14px;
@@ -1290,16 +1656,12 @@ html.dark-mode .smc-value { color: #D1FAE5; }
     text-transform: uppercase; letter-spacing: 0.5px;
 }
 
-/* SELECTED BRANCH LOCKED */
 .selected-branch-locked {
     display: flex; align-items: center; gap: 16px;
     padding: 16px 20px;
     background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
     border: 2px solid #10B981;
     border-radius: 12px; flex-wrap: wrap;
-}
-html.dark-mode .selected-branch-locked {
-    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
 }
 .sbl-icon {
     width: 52px; height: 52px;
@@ -1310,7 +1672,6 @@ html.dark-mode .selected-branch-locked {
 }
 .sbl-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .sbl-name { font-size: 16px; font-weight: 800; color: #065F46; }
-html.dark-mode .sbl-name { color: #D1FAE5; }
 .sbl-code {
     font-size: 11px; font-weight: 700; color: #059669;
     background: rgba(16, 185, 129, 0.15);
@@ -1329,7 +1690,6 @@ html.dark-mode .sbl-name { color: #D1FAE5; }
 }
 .sbl-change:hover { background: #059669; color: #FFFFFF; transform: translateX(3px); }
 
-/* BRANCH SELECTION GRID */
 .branch-selection-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1354,9 +1714,6 @@ html.dark-mode .sbl-name { color: #D1FAE5; }
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
     box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
 }
-html.dark-mode .branch-option input[type="radio"]:checked + .bo-content {
-    background: linear-gradient(135deg, #065F46, #047857);
-}
 .bo-icon {
     width: 48px; height: 48px; border-radius: 12px;
     background: linear-gradient(135deg, #059669, #047857);
@@ -1373,11 +1730,9 @@ html.dark-mode .branch-option input[type="radio"]:checked + .bo-content {
     border-radius: 6px; font-family: 'Courier New', monospace;
     align-self: flex-start;
 }
-html.dark-mode .bo-code { background: #065F46; color: #34D399; }
 .bo-check { opacity: 0; color: #059669; font-size: 20px; flex-shrink: 0; }
 .branch-option input[type="radio"]:checked + .bo-content .bo-check { opacity: 1; }
 
-/* TYPE OPTIONS GRID */
 .type-options-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1396,8 +1751,6 @@ html.dark-mode .bo-code { background: #065F46; color: #34D399; }
     border: 2px solid var(--ca-border);
     border-radius: 14px;
     transition: all 0.3s ease;
-    position: relative;
-    overflow: hidden;
 }
 .type-option-card:hover .toc-content { 
     border-color: #6EE7B7; 
@@ -1409,9 +1762,6 @@ html.dark-mode .bo-code { background: #065F46; color: #34D399; }
     background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
     box-shadow: 0 6px 20px rgba(5, 150, 105, 0.25);
 }
-html.dark-mode .type-option-card input[type="radio"]:checked + .toc-content {
-    background: linear-gradient(135deg, #065F46, #047857);
-}
 .toc-icon {
     width: 48px; height: 48px; border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
@@ -1421,43 +1771,20 @@ html.dark-mode .type-option-card input[type="radio"]:checked + .toc-content {
     border: 2px solid rgba(255, 255, 255, 0.4);
 }
 .toc-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.toc-title { font-size: 14px; font-weight: 800; color: var(--ca-text); letter-spacing: -0.2px; }
+.toc-title { font-size: 14px; font-weight: 800; color: var(--ca-text); }
 .toc-desc { font-size: 11px; color: var(--ca-text-secondary); font-weight: 500; }
 .toc-check { 
-    opacity: 0; 
-    color: #059669; 
-    font-size: 22px; 
-    transition: all 0.3s ease;
-    transform: scale(0.5);
+    opacity: 0; color: #059669; font-size: 22px; 
+    transition: all 0.3s ease; transform: scale(0.5);
 }
 .type-option-card input[type="radio"]:checked + .toc-content .toc-check { 
-    opacity: 1; 
-    transform: scale(1);
+    opacity: 1; transform: scale(1);
 }
+.type-option-disabled { opacity: 0.55; cursor: not-allowed; }
+.type-option-disabled .toc-content { background: #F3F4F6; border-color: #D1D5DB; }
+.type-option-disabled:hover .toc-content { border-color: #D1D5DB; transform: none; box-shadow: none; }
+.type-option-disabled .toc-icon { filter: grayscale(0.5); }
 
-/* DISABLED TYPE OPTION */
-.type-option-disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-}
-.type-option-disabled .toc-content {
-    background: #F3F4F6;
-    border-color: #D1D5DB;
-}
-html.dark-mode .type-option-disabled .toc-content {
-    background: #1F2937;
-    border-color: #374151;
-}
-.type-option-disabled:hover .toc-content {
-    border-color: #D1D5DB;
-    transform: none;
-    box-shadow: none;
-}
-.type-option-disabled .toc-icon {
-    filter: grayscale(0.5);
-}
-
-/* CASH SECTION */
 .cash-section { 
     background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); 
 }
@@ -1482,16 +1809,9 @@ html.dark-mode .cash-section {
     background: rgba(255, 255, 255, 0.08);
     border-radius: 50%; pointer-events: none;
 }
-.cash-input-card::after {
-    content: ''; position: absolute; bottom: -60%; left: -10%;
-    width: 250px; height: 250px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 50%; pointer-events: none;
-}
 .cash-input-card.danger {
     background: linear-gradient(135deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%);
     box-shadow: 0 8px 32px rgba(220, 38, 38, 0.35);
-    border-color: rgba(255, 255, 255, 0.2);
 }
 .cic-icon {
     width: 72px; height: 72px;
@@ -1554,7 +1874,6 @@ html.dark-mode .cash-section {
 }
 .cic-hint i { color: #FCD34D; }
 
-/* PROVIDERS AMOUNT GRID */
 .providers-amount-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1589,6 +1908,7 @@ html.dark-mode .provider-amount-card {
     transform: translateY(-4px);
     box-shadow: 0 12px 28px rgba(5, 150, 105, 0.25);
 }
+
 .pac-header {
     padding: 12px 14px;
     background: rgba(255, 255, 255, 0.6);
@@ -1596,10 +1916,6 @@ html.dark-mode .provider-amount-card {
     border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
     display: flex; align-items: center; gap: 10px;
     position: relative; z-index: 1;
-}
-html.dark-mode .pac-header {
-    background: rgba(15, 23, 42, 0.3);
-    border-bottom-color: rgba(16, 185, 129, 0.3);
 }
 .pac-icon {
     width: 40px; height: 40px;
@@ -1615,7 +1931,6 @@ html.dark-mode .pac-header {
     color: #065F46;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-html.dark-mode .pac-name { color: #D1FAE5; }
 .pac-code {
     font-size: 10px; font-weight: 700;
     color: #047857;
@@ -1626,11 +1941,6 @@ html.dark-mode .pac-name { color: #D1FAE5; }
     font-family: 'Courier New', monospace;
     border: 1px solid rgba(5, 150, 105, 0.3);
 }
-html.dark-mode .pac-code {
-    background: rgba(15, 23, 42, 0.4);
-    color: #6EE7B7;
-    border-color: rgba(16, 185, 129, 0.4);
-}
 .pac-current {
     padding: 10px 14px;
     background: rgba(255, 255, 255, 0.4);
@@ -1639,31 +1949,86 @@ html.dark-mode .pac-code {
     border-bottom: 1.5px solid rgba(5, 150, 105, 0.15);
     position: relative; z-index: 1;
 }
-html.dark-mode .pac-current {
-    background: rgba(15, 23, 42, 0.2);
-    border-bottom-color: rgba(16, 185, 129, 0.2);
-}
 .pac-current-label { 
     color: #047857; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.5px;
     font-size: 10px;
 }
-html.dark-mode .pac-current-label { color: #6EE7B7; }
 .pac-current-value {
     font-family: 'Courier New', monospace;
     font-weight: 900;
     color: #059669;
     font-size: 13px;
 }
-html.dark-mode .pac-current-value { color: #34D399; }
+
+.pac-commission {
+    padding: 8px 14px;
+    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px;
+    border-bottom: 1.5px solid rgba(217, 119, 6, 0.2);
+    position: relative; z-index: 1;
+}
+.pac-commission i { color: #D97706; font-size: 12px; }
+.pac-commission-label {
+    color: #92400E;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 9px;
+}
+.pac-commission-value {
+    margin-left: auto;
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    color: #B45309;
+    font-size: 12px;
+}
+
+.pac-available {
+    padding: 8px 14px;
+    background: linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 6px;
+    font-size: 11px;
+    border-bottom: 1.5px solid rgba(124, 58, 237, 0.2);
+    position: relative; z-index: 1;
+    animation: slideDown 0.3s ease;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.pac-available-label {
+    color: #6D28D9;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 9px;
+    display: flex; align-items: center; gap: 4px;
+}
+.pac-available-label i { color: #7C3AED; font-size: 10px; }
+.pac-available-value {
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    color: #6D28D9;
+    font-size: 13px;
+    transition: all 0.3s ease;
+}
+.pac-available-zero {
+    color: #DC2626 !important;
+    animation: pulseRed 1.5s ease-in-out infinite;
+}
+@keyframes pulseRed {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
 .pac-input-wrapper {
     display: flex; align-items: center;
     padding: 10px 14px;
     background: rgba(255, 255, 255, 0.85);
     position: relative; z-index: 1;
-}
-html.dark-mode .pac-input-wrapper {
-    background: rgba(15, 23, 42, 0.4);
 }
 .pac-currency {
     font-size: 13px; font-weight: 900;
@@ -1672,10 +2037,6 @@ html.dark-mode .pac-input-wrapper {
     border-right: 2px solid #D1FAE5;
     margin-right: 10px;
     font-family: 'Courier New', monospace;
-}
-html.dark-mode .pac-currency { 
-    border-color: #065F46; 
-    color: #34D399; 
 }
 .pac-input {
     flex: 1;
@@ -1689,7 +2050,6 @@ html.dark-mode .pac-currency {
     outline: none;
     min-width: 0;
 }
-html.dark-mode .pac-input { color: #A7F3D0; }
 .pac-input::placeholder { color: rgba(5, 150, 105, 0.4); font-weight: 700; }
 
 .empty-providers {
@@ -1701,7 +2061,6 @@ html.dark-mode .pac-input { color: #A7F3D0; }
 }
 .empty-providers i { font-size: 36px; opacity: 0.4; display: block; margin-bottom: 10px; }
 
-/* FORM ROWS */
 .form-row {
     display: grid; grid-template-columns: 1fr 1fr;
     gap: 16px; margin-bottom: 16px;
@@ -1737,7 +2096,6 @@ html.dark-mode .pac-input { color: #A7F3D0; }
     color: var(--ca-text);
     font-weight: 500;
 }
-.form-control::placeholder { color: var(--ca-text-light); }
 .form-control:focus {
     border-color: #059669;
     box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
@@ -1750,7 +2108,6 @@ html.dark-mode .pac-input { color: #A7F3D0; }
     line-height: 1.6;
 }
 
-/* PREVIEW SECTION */
 .preview-section { 
     background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); 
 }
@@ -1771,10 +2128,6 @@ html.dark-mode .preview-section {
     box-shadow: 0 4px 12px rgba(5, 150, 105, 0.1);
     transition: all 0.3s ease;
 }
-html.dark-mode .preview-item {
-    background: rgba(15, 23, 42, 0.5);
-    border-color: rgba(110, 231, 183, 0.3);
-}
 .preview-item:hover {
     transform: translateY(-3px);
     box-shadow: 0 8px 20px rgba(5, 150, 105, 0.2);
@@ -1784,15 +2137,11 @@ html.dark-mode .preview-item {
     border-color: #059669;
     box-shadow: 0 8px 24px rgba(5, 150, 105, 0.4);
 }
-.preview-item.preview-highlight:hover {
-    box-shadow: 0 12px 32px rgba(5, 150, 105, 0.5);
-}
 .pi-label {
     font-size: 10px; font-weight: 800;
     color: #065F46;
     text-transform: uppercase; letter-spacing: 1.2px;
 }
-html.dark-mode .pi-label { color: #A7F3D0; }
 .preview-highlight .pi-label { color: rgba(255, 255, 255, 0.9); }
 .pi-value {
     font-size: 18px; font-weight: 900;
@@ -1800,31 +2149,12 @@ html.dark-mode .pi-label { color: #A7F3D0; }
     word-break: break-word; line-height: 1.2;
     color: #065F46;
 }
-html.dark-mode .pi-value { color: #D1FAE5; }
 .pi-amount { color: #059669; }
 .preview-highlight .pi-value { 
     color: #FFFFFF; 
     font-size: 22px;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
-
-.preview-warning {
-    margin-top: 16px;
-    padding: 14px 18px;
-    background: #FEE2E2;
-    border: 2px solid #FCA5A5;
-    border-radius: 12px;
-    color: #991B1B;
-    display: flex; align-items: center; gap: 12px;
-    font-size: 13px; font-weight: 600;
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
-}
-html.dark-mode .preview-warning {
-    background: #7F1D1D;
-    border-color: #991B1B;
-    color: #FEE2E2;
-}
-.preview-warning i { font-size: 20px; flex-shrink: 0; }
 
 .direction-badge {
     display: inline-flex; align-items: center; gap: 6px;
@@ -1842,7 +2172,6 @@ html.dark-mode .preview-warning {
     border-color: #DC2626;
 }
 
-/* FORM ACTIONS */
 .form-actions {
     display: flex; gap: 12px;
     padding: 20px 26px;
@@ -1880,10 +2209,6 @@ html.dark-mode .preview-warning {
     background: #FEE2E2; color: #991B1B;
     border-color: #FECACA;
 }
-html.dark-mode .btn-cancel:hover {
-    background: #7F1D1D; color: #FEE2E2;
-    border-color: #991B1B;
-}
 
 .select-branch-message {
     text-align: center; padding: 40px 20px;
@@ -1900,7 +2225,214 @@ html.dark-mode .btn-cancel:hover {
 }
 .select-branch-message p { font-size: 16px; font-weight: 600; margin: 0; }
 
-/* RESPONSIVE */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(8px);
+    z-index: 99999;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    overflow-y: auto;
+}
+.modal-overlay.show {
+    display: flex;
+    animation: modalFadeIn 0.25s ease forwards;
+}
+@keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-box {
+    background: #FFFFFF;
+    border-radius: 20px;
+    width: 100%;
+    max-width: 520px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+    animation: modalSlideUp 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    overflow: hidden;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+@keyframes modalSlideUp {
+    from { opacity: 0; transform: translateY(40px) scale(0.92); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+html.dark-mode .modal-box { background: #1E293B; }
+
+.modal-header {
+    padding: 24px 26px 20px 26px;
+    display: flex; align-items: flex-start; gap: 16px;
+    background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+    border-bottom: 2px solid #FCA5A5;
+}
+html.dark-mode .modal-header {
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+    border-bottom-color: #DC2626;
+}
+.modal-header-confirm {
+    background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+    border-bottom-color: #93C5FD;
+}
+.modal-icon {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    color: #DC2626;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    flex-shrink: 0;
+    border: 3px solid #FCA5A5;
+    box-shadow: 0 4px 16px rgba(220, 38, 38, 0.25);
+    animation: iconPulse 1.5s ease-in-out infinite;
+}
+@keyframes iconPulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 4px 16px rgba(220, 38, 38, 0.25); }
+    50% { transform: scale(1.08); box-shadow: 0 8px 24px rgba(220, 38, 38, 0.4); }
+}
+.modal-icon-confirm {
+    background: #FFFFFF;
+    color: #1D4ED8;
+    border-color: #93C5FD;
+    animation: none;
+}
+.modal-header-content { flex: 1; min-width: 0; padding-top: 4px; }
+.modal-title {
+    font-size: 20px; font-weight: 800;
+    color: #991B1B; margin: 0 0 4px 0;
+}
+html.dark-mode .modal-title { color: #FEE2E2; }
+.modal-header-confirm .modal-title { color: #1E40AF; }
+.modal-subtitle {
+    font-size: 12px; font-weight: 600;
+    color: #7F1D1D; margin: 0; opacity: 0.8;
+}
+html.dark-mode .modal-subtitle { color: #FCA5A5; }
+.modal-header-confirm .modal-subtitle { color: #1D4ED8; }
+.modal-close {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1.5px solid rgba(220, 38, 38, 0.3);
+    color: #991B1B;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: all 0.25s ease;
+    flex-shrink: 0;
+}
+.modal-close:hover {
+    background: #991B1B; color: #FFFFFF;
+    transform: rotate(90deg) scale(1.05);
+}
+.modal-body {
+    padding: 24px 26px;
+    overflow-y: auto;
+    flex: 1;
+}
+.modal-message {
+    font-size: 15px; font-weight: 600;
+    color: #1F2937;
+    line-height: 1.6;
+    padding: 16px 18px;
+    background: #FEF2F2;
+    border-radius: 12px;
+    border-left: 4px solid #DC2626;
+    margin-bottom: 16px;
+}
+html.dark-mode .modal-message { background: #1F2937; color: #F1F5F9; }
+
+.modal-details {
+    display: flex; flex-direction: column; gap: 10px;
+}
+.modal-detail-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    background: #F9FAFB;
+    border-radius: 10px;
+    border: 1.5px solid #E5E7EB;
+    font-size: 13px;
+}
+html.dark-mode .modal-detail-item { background: #334155; border-color: #475569; }
+.modal-detail-label {
+    font-weight: 700; color: #6B7280;
+    display: flex; align-items: center; gap: 6px;
+}
+.modal-detail-label i { color: #DC2626; font-size: 12px; }
+.modal-detail-value {
+    font-weight: 900;
+    font-family: 'Courier New', monospace;
+    color: #1F2937; font-size: 14px;
+}
+html.dark-mode .modal-detail-value { color: #F1F5F9; }
+.modal-detail-value.value-danger { color: #DC2626; }
+.modal-detail-value.value-success { color: #059669; }
+
+.confirm-details { display: flex; flex-direction: column; gap: 12px; }
+.confirm-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    background: #F9FAFB;
+    border-radius: 12px;
+    border: 1.5px solid #E5E7EB;
+}
+html.dark-mode .confirm-row { background: #334155; border-color: #475569; }
+.confirm-row-label {
+    font-size: 12px; font-weight: 700;
+    color: #6B7280;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    display: flex; align-items: center; gap: 8px;
+}
+.confirm-row-label i { color: #1D4ED8; font-size: 14px; }
+.confirm-row-value {
+    font-size: 15px; font-weight: 900;
+    color: #1F2937;
+    font-family: 'Courier New', monospace;
+}
+html.dark-mode .confirm-row-value { color: #F1F5F9; }
+.confirm-row-value.value-amount { color: #059669; font-size: 18px; }
+
+.modal-footer {
+    padding: 18px 26px 22px 26px;
+    display: flex; gap: 12px;
+    justify-content: flex-end;
+    border-top: 1.5px solid #E5E7EB;
+    background: #F9FAFB;
+    flex-wrap: wrap;
+}
+html.dark-mode .modal-footer { background: #0F172A; border-top-color: #334155; }
+
+.modal-btn {
+    padding: 12px 24px;
+    border-radius: 10px;
+    border: none;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+.modal-btn-primary {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+}
+.modal-btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
+}
+.modal-btn-secondary {
+    background: #FFFFFF;
+    color: #6B7280;
+    border: 1.5px solid #D1D5DB;
+}
+html.dark-mode .modal-btn-secondary {
+    background: #334155; color: #CBD5E1;
+    border-color: #475569;
+}
+
 @media (max-width: 1024px) {
     .providers-amount-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -1921,6 +2453,11 @@ html.dark-mode .btn-cancel:hover {
     .form-section { padding: 18px 20px; }
     .cash-input-card { flex-direction: column; align-items: flex-start; padding: 20px; }
     .cic-icon { width: 60px; height: 60px; font-size: 26px; }
+    .profit-available-banner { flex-direction: column; align-items: flex-start; }
+    .pab-icon { width: 52px; height: 52px; font-size: 22px; }
+    .pab-value { font-size: 24px; }
+    .modal-footer { flex-direction: column; }
+    .modal-btn { width: 100%; justify-content: center; }
 }
 @media (max-width: 480px) {
     .main-content { padding: 10px !important; }
@@ -1928,13 +2465,19 @@ html.dark-mode .btn-cancel:hover {
     .cic-input { font-size: 20px; }
     .pac-input { font-size: 16px; }
     .smc-value { font-size: 18px; }
+    .pab-value { font-size: 20px; }
+    .modal-title { font-size: 17px; }
+    .modal-icon { width: 48px; height: 48px; font-size: 22px; }
 }
 </style>
 
 <script>
 // ============================================================
-// FORMAT MONEY INPUT
+// ✅ GLOBAL VARIABLES
 // ============================================================
+var ORIGINAL_PROFIT_POOL = <?php echo floatval($profit_data['profit']); ?>;
+var DEFAULT_TYPE = '<?php echo $default_type; ?>';
+
 function formatMoneyInput(input) {
     var value = input.value.replace(/[^0-9]/g, '');
     if (value === '') { input.value = ''; updatePreview(); return; }
@@ -1954,15 +2497,18 @@ function formatMoneyInput(input) {
 }
 
 // ============================================================
-// UPDATE PREVIEW
+// ✅ UPDATE PREVIEW + LIVE SHARED POOL
+// ✅ CASH + PROVIDERS zote zinahesabiwa kwenye pool
 // ============================================================
 function updatePreview() {
+    // ✅ Read cash amount
     var cashInput = document.getElementById('cashAmountInput');
     var cashAmount = 0;
     if (cashInput && cashInput.value) {
         cashAmount = parseFloat(cashInput.value.replace(/,/g, '')) || 0;
     }
     
+    // ✅ Read all provider amounts
     var totalProviders = 0;
     document.querySelectorAll('.provider-amount-input').forEach(function(input) {
         if (input.value) {
@@ -1970,11 +2516,15 @@ function updatePreview() {
         }
     });
     
+    // ✅ Total = Cash + Providers
     var totalAmount = cashAmount + totalProviders;
     
     var type = document.querySelector('input[name="transaction_type"]:checked');
+    var typeValue = type ? type.value : '';
     var isOut = type && ['cash_out', 'adjustment'].includes(type.value);
+    var isProfitAllocation = (typeValue === 'profit_allocation');
     
+    // Direction
     var directionEl = document.getElementById('previewDirection');
     if (directionEl) {
         if (isOut) {
@@ -1984,42 +2534,17 @@ function updatePreview() {
         }
     }
     
+    // Amount
     var amountEl = document.getElementById('previewAmount');
     if (amountEl) amountEl.textContent = 'TSh ' + totalAmount.toLocaleString('en-US');
     
+    // New Capital
     var currentCapital = <?php echo floatval($current_capital); ?>;
-    var currentCash = <?php echo floatval($current_cash); ?>;
-    
     var newCapital = isOut ? Math.max(0, currentCapital - totalAmount) : currentCapital + totalAmount;
     var newCapitalEl = document.getElementById('previewNewCapital');
     if (newCapitalEl) newCapitalEl.textContent = 'TSh ' + newCapital.toLocaleString('en-US');
     
-    var warningEl = document.getElementById('previewWarning');
-    var warningText = document.getElementById('previewWarningText');
-    
-    if (isOut && warningEl && warningText) {
-        var warnings = [];
-        
-        if (cashAmount > currentCash) {
-            warnings.push('Cash: Requested TSh ' + cashAmount.toLocaleString() + 
-                          ', available TSh ' + currentCash.toLocaleString());
-        }
-        
-        if (totalAmount > currentCapital) {
-            warnings.push('Total: Requested TSh ' + totalAmount.toLocaleString() + 
-                          ', available Capital TSh ' + currentCapital.toLocaleString());
-        }
-        
-        if (warnings.length > 0) {
-            warningEl.style.display = 'flex';
-            warningText.innerHTML = '<strong>⚠️ Cannot proceed:</strong> ' + warnings.join(' • ');
-        } else {
-            warningEl.style.display = 'none';
-        }
-    } else if (warningEl) {
-        warningEl.style.display = 'none';
-    }
-    
+    // Cash card warning
     var cashCard = document.getElementById('cashCard');
     if (cashCard) {
         if (isOut && cashAmount > 0) {
@@ -2028,30 +2553,156 @@ function updatePreview() {
             cashCard.classList.remove('danger');
         }
     }
+    
+    // ============================================================
+    // ✅ LIVE SHARED POOL UPDATE — cash + providers zote zinahesabiwa
+    // ============================================================
+    if (isProfitAllocation && ORIGINAL_PROFIT_POOL > 0) {
+        // ✅ Total used = cash + providers
+        var remaining = Math.max(0, ORIGINAL_PROFIT_POOL - totalAmount);
+        
+        // Update banner remaining
+        var pabRemaining = document.getElementById('pabRemaining');
+        if (pabRemaining) {
+            pabRemaining.textContent = 'TSh ' + remaining.toLocaleString('en-US');
+            if (remaining <= 0) {
+                pabRemaining.style.color = '#FCA5A5';
+            } else {
+                pabRemaining.style.color = '#FFFFFF';
+            }
+        }
+        
+        // ✅ Update ALL providers "Available to Add" kwa value moja
+        document.querySelectorAll('.pac-available-value').forEach(function(el) {
+            el.textContent = 'TSh ' + remaining.toLocaleString('en-US');
+            if (remaining <= 0) {
+                el.classList.add('pac-available-zero');
+            } else {
+                el.classList.remove('pac-available-zero');
+            }
+        });
+    }
 }
 
 // ============================================================
-// BRANCH CHANGE
+// ✅ ON TYPE CHANGE — Hakuna auto-fill yoyote
 // ============================================================
+function onTypeChange(type) {
+    // ✅ Onyesha/ficha "Available to Add" kulingana na type
+    var availableBlocks = document.querySelectorAll('.pac-available');
+    if (type === 'profit_allocation' && ORIGINAL_PROFIT_POOL > 0) {
+        availableBlocks.forEach(function(el) {
+            el.style.display = 'flex';
+        });
+    } else {
+        availableBlocks.forEach(function(el) {
+            el.style.display = 'none';
+        });
+    }
+    
+    // ✅ Reset remaining display
+    var pabRemaining = document.getElementById('pabRemaining');
+    if (pabRemaining) pabRemaining.style.color = '#FFFFFF';
+    document.querySelectorAll('.pac-available-value').forEach(function(el) {
+        el.classList.remove('pac-available-zero');
+    });
+    
+    updatePreview();
+}
+
 function onBranchChange(branchId) {
     window.location.href = 'add.php?branch=' + branchId;
 }
 
 // ============================================================
-// VALIDATE FORM
+// ✅ MODAL HELPERS
+// ============================================================
+function showValidationModal(title, subtitle, message, details) {
+    var modal = document.getElementById('validationModal');
+    var titleEl = document.getElementById('modalTitle');
+    var subtitleEl = document.getElementById('modalSubtitle');
+    var messageEl = document.getElementById('modalMessage');
+    var detailsEl = document.getElementById('modalDetails');
+    
+    titleEl.textContent = title || 'Validation Error';
+    subtitleEl.textContent = subtitle || 'Please check the following';
+    messageEl.textContent = message || 'Error details will appear here';
+    
+    if (details && details.length > 0) {
+        detailsEl.style.display = 'flex';
+        detailsEl.innerHTML = '';
+        details.forEach(function(item) {
+            var div = document.createElement('div');
+            div.className = 'modal-detail-item';
+            div.innerHTML = 
+                '<span class="modal-detail-label"><i class="fas fa-' + (item.icon || 'circle') + '"></i> ' + item.label + '</span>' +
+                '<span class="modal-detail-value ' + (item.class || '') + '">' + item.value + '</span>';
+            detailsEl.appendChild(div);
+        });
+    } else {
+        detailsEl.style.display = 'none';
+    }
+    
+    modal.classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('validationModal').classList.remove('show');
+    document.body.style.overflow = '';
+}
+
+function showConfirmModal(details, onConfirm) {
+    var modal = document.getElementById('confirmModal');
+    var detailsEl = document.getElementById('confirmDetails');
+    
+    detailsEl.innerHTML = '';
+    details.forEach(function(item) {
+        var div = document.createElement('div');
+        div.className = 'confirm-row';
+        div.innerHTML = 
+            '<span class="confirm-row-label"><i class="fas fa-' + (item.icon || 'circle') + '"></i> ' + item.label + '</span>' +
+            '<span class="confirm-row-value ' + (item.class || '') + '">' + item.value + '</span>';
+        detailsEl.appendChild(div);
+    });
+    
+    window._confirmCallback = onConfirm;
+    modal.classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeConfirmModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('confirmModal').classList.remove('show');
+    document.body.style.overflow = '';
+    window._confirmCallback = null;
+}
+
+function confirmSubmit() {
+    if (typeof window._confirmCallback === 'function') {
+        window._confirmCallback();
+    }
+    closeConfirmModal();
+}
+
+// ============================================================
+// ✅ VALIDATE FORM
 // ============================================================
 function validateForm() {
     var branch = document.querySelector('input[name="branch_id"]:checked');
     var branchHidden = document.querySelector('input[name="branch_id"][type="hidden"]');
     
     if (!branch && !branchHidden) {
-        alert('Please select a branch.');
+        showValidationModal('Branch Required', 'Please select a branch to continue',
+            'Capital transactions must be applied to a specific branch. Please select one from the list.', []);
         return false;
     }
     
     var type = document.querySelector('input[name="transaction_type"]:checked');
     if (!type) {
-        alert('Please select a transaction type.');
+        showValidationModal('Transaction Type Required', 'Please select a type',
+            'You must choose a transaction type to proceed.', []);
         return false;
     }
     
@@ -2064,7 +2715,8 @@ function validateForm() {
     });
     
     if (cashAmount <= 0 && totalProviders <= 0) {
-        alert('Please enter at least one amount (Cash or Provider).');
+        showValidationModal('Amount Required', 'Please enter an amount',
+            'You must enter at least one amount — either in Cash, Provider, or both.', []);
         return false;
     }
     
@@ -2073,43 +2725,79 @@ function validateForm() {
     var currentCapital = <?php echo floatval($current_capital); ?>;
     var currentCash = <?php echo floatval($current_cash); ?>;
     
-    if (isOut) {
-        if (cashAmount > 0 && currentCash <= 0) {
-            alert('❌ Cannot perform Cash Out.\n\n' +
-                  'No Daily Report or Cash available for this branch.\n' +
-                  'Please create Opening Capital first.');
-            return false;
-        }
-        
-        if (cashAmount > currentCash) {
-            alert('❌ Insufficient cash.\n\n' +
-                  'Available: TSh ' + currentCash.toLocaleString() + '\n' +
-                  'Requested: TSh ' + cashAmount.toLocaleString());
-            return false;
-        }
-        
-        if (totalAmount > currentCapital) {
-            alert('❌ Total exceeds available Capital.\n\n' +
-                  'Available: TSh ' + currentCapital.toLocaleString() + '\n' +
-                  'Requested: TSh ' + totalAmount.toLocaleString());
+    // ✅ PROFIT ALLOCATION VALIDATION
+    if (type.value === 'profit_allocation') {
+        if (totalAmount > ORIGINAL_PROFIT_POOL) {
+            showValidationModal(
+                'Profit Allocation Exceeds Available',
+                'Requested amount is higher than available profit',
+                'You are trying to allocate more than the available profit pool. Please reduce the amount.',
+                [
+                    { icon: 'chart-line', label: 'Available Profit', value: 'TSh ' + ORIGINAL_PROFIT_POOL.toLocaleString('en-US'), class: 'value-success' },
+                    { icon: 'calculator', label: 'You Requested', value: 'TSh ' + totalAmount.toLocaleString('en-US'), class: 'value-danger' },
+                    { icon: 'exclamation-circle', label: 'Excess', value: 'TSh ' + (totalAmount - ORIGINAL_PROFIT_POOL).toLocaleString('en-US'), class: 'value-danger' }
+                ]
+            );
             return false;
         }
     }
     
-    var confirmMsg = 'Confirm Transaction:\n\n' +
-                     'Type: ' + type.parentElement.querySelector('.toc-title').textContent + '\n' +
-                     'Cash: TSh ' + cashAmount.toLocaleString() + '\n' +
-                     'Providers: TSh ' + totalProviders.toLocaleString() + '\n' +
-                     'Total: TSh ' + totalAmount.toLocaleString() + '\n' +
-                     'Direction: ' + (isOut ? 'OUTGOING' : 'INCOMING') + '\n\n' +
-                     'Continue?';
+    // ✅ CASH OUT VALIDATION
+    if (isOut) {
+        if (cashAmount > 0 && currentCash <= 0) {
+            showValidationModal('Cannot Perform Cash Out', 'No cash available for this branch',
+                'There is no cash available. Please create Opening Capital first or reduce the cash amount.',
+                [
+                    { icon: 'wallet', label: 'Current Cash', value: 'TSh ' + currentCash.toLocaleString('en-US'), class: 'value-danger' },
+                    { icon: 'calculator', label: 'Requested Cash', value: 'TSh ' + cashAmount.toLocaleString('en-US'), class: 'value-danger' }
+                ]
+            );
+            return false;
+        }
+        
+        if (cashAmount > currentCash) {
+            showValidationModal('Insufficient Cash', 'Cash amount exceeds available balance',
+                'The cash amount you entered is more than what is available in this branch.',
+                [
+                    { icon: 'wallet', label: 'Available Cash', value: 'TSh ' + currentCash.toLocaleString('en-US'), class: 'value-success' },
+                    { icon: 'calculator', label: 'Requested Cash', value: 'TSh ' + cashAmount.toLocaleString('en-US'), class: 'value-danger' },
+                    { icon: 'exclamation-circle', label: 'Short By', value: 'TSh ' + (cashAmount - currentCash).toLocaleString('en-US'), class: 'value-danger' }
+                ]
+            );
+            return false;
+        }
+        
+        if (totalAmount > currentCapital) {
+            showValidationModal('Exceeds Available Capital', 'Total amount is higher than capital',
+                'The total amount you entered is more than the available capital for this branch.',
+                [
+                    { icon: 'vault', label: 'Available Capital', value: 'TSh ' + currentCapital.toLocaleString('en-US'), class: 'value-success' },
+                    { icon: 'calculator', label: 'Total Requested', value: 'TSh ' + totalAmount.toLocaleString('en-US'), class: 'value-danger' },
+                    { icon: 'exclamation-circle', label: 'Short By', value: 'TSh ' + (totalAmount - currentCapital).toLocaleString('en-US'), class: 'value-danger' }
+                ]
+            );
+            return false;
+        }
+    }
     
-    if (!confirm(confirmMsg)) return false;
+    var typeLabel = type.parentElement.querySelector('.toc-title').textContent.trim();
     
-    var submitBtn = document.getElementById('submitBtn');
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-    submitBtn.disabled = true;
-    return true;
+    var confirmDetails = [
+        { icon: 'tag', label: 'Transaction Type', value: typeLabel },
+        { icon: 'wallet', label: 'Cash Amount', value: 'TSh ' + cashAmount.toLocaleString('en-US') },
+        { icon: 'university', label: 'Providers Total', value: 'TSh ' + totalProviders.toLocaleString('en-US') },
+        { icon: 'calculator', label: 'Total Amount', value: 'TSh ' + totalAmount.toLocaleString('en-US'), class: 'value-amount' },
+        { icon: 'arrow-' + (isOut ? 'up' : 'down'), label: 'Direction', value: isOut ? 'OUTGOING' : 'INCOMING' }
+    ];
+    
+    showConfirmModal(confirmDetails, function() {
+        var submitBtn = document.getElementById('submitBtn');
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+        submitBtn.disabled = true;
+        document.getElementById('capitalForm').submit();
+    });
+    
+    return false;
 }
 
 function confirmReset() {
@@ -2117,9 +2805,10 @@ function confirmReset() {
 }
 
 // ============================================================
-// INITIALIZE
+// ✅ INITIALIZE
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
+    // ✅ Trigger initial update (hakuna auto-fill yoyote)
     updatePreview();
     
     function syncDarkMode() {
@@ -2141,6 +2830,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 400);
         }, 5000);
     }
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeModal();
+            closeConfirmModal();
+        }
+    });
 });
 </script>
 

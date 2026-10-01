@@ -2,11 +2,13 @@
 // ================================================================
 // FILE: modules/commissions/index.php
 // WAKALA FINANCIAL SYSTEM - COMMISSIONS LIST
-// ✅ FIXED: total_float inahesabiwa kutoka LATEST record per provider
-// ✅ FIXED: total_cash inachukuliwa kutoka latest daily_report
-// ✅ FIXED: current_capital = total_float + total_cash
+// ✅ FIXED: HY093 - PDO parameter mismatch (array_merge badala ya +)
+// ✅ TIME FILTER: Today, 1D, 1W, 1M, 3M, 6M, 1Y, Custom, All
+// ✅ FIXED: NO double-counting ya salaries
+// ✅ FIXED: Available Profit inahesabiwa
+// ✅ FIXED: All cards zina-follow filter
 // ✅ BLUE branch card
-// ✅ Single continuous table (all providers 1-30)
+// ✅ Single continuous table (all providers)
 // ✅ Red line separator between branches
 // ================================================================
 
@@ -35,7 +37,7 @@ $stmt->execute();
 $all_branches = $stmt->fetchAll();
 
 // ============================================================
-// ✅ HELPER: Get latest daily report for a branch
+// HELPER: Get latest daily report for a branch
 // ============================================================
 function getLatestDailyReport($db, $branch_id) {
     $stmt = $db->prepare("
@@ -49,8 +51,7 @@ function getLatestDailyReport($db, $branch_id) {
 }
 
 // ============================================================
-// ✅ HELPER: Calculate TOTAL FLOAT from LATEST record per provider
-// Inaepuka double-counting ya duplicate records
+// HELPER: Calculate TOTAL FLOAT from LATEST record per provider
 // ============================================================
 function calculateTotalFloat($db, $daily_report_id) {
     $stmt = $db->prepare("
@@ -97,7 +98,7 @@ if (isset($_GET['delete_provider_commissions']) && isset($_GET['branch_id']) && 
             'Deleted ' . $deleted_count . ' commission(s) for provider ID: ' . $delete_provider_id
         );
         
-        $_SESSION['success_message'] = $deleted_count . ' commission record(s) deleted successfully. Provider remains active with 0 commission.';
+        $_SESSION['success_message'] = $deleted_count . ' commission record(s) deleted successfully.';
         header('Location: index.php?branch_id=' . $delete_branch_id);
         exit();
         
@@ -137,54 +138,176 @@ if ($selected_branch > 0) {
     }
 }
 
+// ============================================================
+// ✅ TIME FILTER LOGIC
+// ============================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$custom_from = isset($_GET['from_date']) ? $_GET['from_date'] : '';
+$custom_to = isset($_GET['to_date']) ? $_GET['to_date'] : '';
+
 $today = date('Y-m-d');
-$month = date('m');
-$year = date('Y');
 
-// TODAY
-$sql = "SELECT SUM(total_commission) as total FROM commissions WHERE DATE(commission_date) = ?";
-$params = [$today];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$today_commission = $result['total'] ?? 0;
-
-// THIS MONTH
-$sql = "SELECT SUM(total_commission) as total FROM commissions WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?";
-$params = [$month, $year];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$this_month_commission = $result['total'] ?? 0;
+switch ($filter) {
+    case 'today':
+        $from_date = $today;
+        $to_date = $today;
+        break;
+    case '1d':
+        $from_date = date('Y-m-d', strtotime('-1 day'));
+        $to_date = $today;
+        break;
+    case '1w':
+        $from_date = date('Y-m-d', strtotime('-7 days'));
+        $to_date = $today;
+        break;
+    case '1m':
+        $from_date = date('Y-m-d', strtotime('-1 month'));
+        $to_date = $today;
+        break;
+    case '3m':
+        $from_date = date('Y-m-d', strtotime('-3 months'));
+        $to_date = $today;
+        break;
+    case '6m':
+        $from_date = date('Y-m-d', strtotime('-6 months'));
+        $to_date = $today;
+        break;
+    case '1y':
+        $from_date = date('Y-m-d', strtotime('-1 year'));
+        $to_date = $today;
+        break;
+    case 'custom':
+        $from_date = !empty($custom_from) ? $custom_from : date('Y-m-01');
+        $to_date = !empty($custom_to) ? $custom_to : $today;
+        break;
+    case 'all':
+    default:
+        $from_date = '2000-01-01';
+        $to_date = $today;
+}
 
 // ============================================================
-// ✅ CAPITAL DATA - FIXED!
+// ✅ SUMMARY - Follow TIME FILTER
+// ============================================================
+$total_commission = 0;
+$total_other_income = 0;
+$total_expenses = 0;
+$today_commission = 0;
+$this_month_commission = 0;
+
+try {
+    // Commission - follow filter
+    $sql = "SELECT SUM(total_commission) as total FROM commissions 
+            WHERE commission_date BETWEEN ? AND ?";
+    $params = [$from_date, $to_date];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $total_commission = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Other Income - follow filter
+    $sql = "SELECT SUM(other_income) as total FROM commissions 
+            WHERE commission_date BETWEEN ? AND ?";
+    $params = [$from_date, $to_date];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $total_other_income = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // Today Commission (always today - kama reference)
+    $sql = "SELECT SUM(total_commission) as total FROM commissions WHERE DATE(commission_date) = ?";
+    $params = [$today];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $today_commission = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // This Month Commission
+    $month = date('m');
+    $year = date('Y');
+    $sql = "SELECT SUM(total_commission) as total FROM commissions 
+            WHERE MONTH(commission_date) = ? AND YEAR(commission_date) = ?";
+    $params = [$month, $year];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $this_month_commission = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+} catch (Exception $e) { }
+
+// ============================================================
+// ✅ EXPENSES - NO DOUBLE COUNTING + Follow filter
+// ============================================================
+try {
+    // Check kama kuna salary-related expenses
+    $sql = "SELECT COUNT(*) as cnt FROM expenses WHERE is_salary_related = 1";
+    $params = [];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $salary_expenses_count = intval($stmt->fetch(PDO::FETCH_ASSOC)['cnt'] ?? 0);
+
+    // Expenses from expenses table - follow filter
+    $sql = "SELECT SUM(amount) as total FROM expenses 
+            WHERE expense_date BETWEEN ? AND ? AND is_business_expense = 1";
+    $params = [$from_date, $to_date];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $total_expenses = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    // ✅ Kama expenses HAINA salary records → ongeza salaries
+    if ($salary_expenses_count == 0) {
+        $sql = "SELECT SUM(net_pay) as total FROM employee_salaries 
+                WHERE payment_date BETWEEN ? AND ? AND status = 'paid'";
+        $params = [$from_date, $to_date];
+        if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+        try {
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            $total_expenses += floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+        } catch (Exception $e) { }
+    }
+
+} catch (Exception $e) { }
+
+// ============================================================
+// ✅ ALREADY ALLOCATED - Follow filter
+// ============================================================
+$already_allocated = 0;
+try {
+    $sql = "SELECT SUM(amount) as total FROM capital_management 
+            WHERE transaction_type = 'profit_allocation'
+            AND transaction_date BETWEEN ? AND ?";
+    $params = [$from_date, $to_date];
+    if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $already_allocated = floatval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (Exception $e) { }
+
+// ============================================================
+// ✅ TOTAL PROFIT & AVAILABLE PROFIT
+// ============================================================
+$total_profit = $total_commission + $total_other_income - $total_expenses;
+$available_profit = max(0, $total_profit - $already_allocated);
+
+// ============================================================
+// ✅ CAPITAL DATA - NOT affected by filter (LATEST always)
 // ============================================================
 $total_float = 0;
 $total_cash = 0;
 $total_capital = 0;
 
 if ($selected_branch > 0) {
-    // ✅ Chukua latest daily report ya branch hii
     $latest_dr = getLatestDailyReport($db, $selected_branch);
-    
     if ($latest_dr) {
-        // ✅ Hesabu total float kutoka LATEST record per provider
         $total_float = calculateTotalFloat($db, $latest_dr['id']);
-        
-        // ✅ Cash kutoka latest daily report
         $total_cash = floatval($latest_dr['current_cash'] ?? 0);
-        
-        // ✅ Capital = Float + Cash
         $total_capital = $total_float + $total_cash;
     }
 } else {
-    // ✅ Kama "All Branches" - jumla ya branches zote
-    // Chukua latest daily report kwa kila branch
     $branch_ids = array_column($all_branches, 'id');
-    
     foreach ($branch_ids as $bid) {
         $latest_dr = getLatestDailyReport($db, $bid);
         if ($latest_dr) {
@@ -192,55 +315,11 @@ if ($selected_branch > 0) {
             $total_cash += floatval($latest_dr['current_cash'] ?? 0);
         }
     }
-    
     $total_capital = $total_float + $total_cash;
 }
 
 // ============================================================
-// SUMMARY CARDS
-// ============================================================
-$sql = "SELECT SUM(total_commission) as total FROM commissions WHERE 1=1";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$card_commissions = $result['total'] ?? 0;
-
-$sql = "SELECT SUM(other_income) as total FROM commissions WHERE 1=1";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$result = $stmt->fetch();
-$card_other_income = $result['total'] ?? 0;
-
-$card_expenses = 0;
-
-$sql = "SELECT SUM(amount) as total FROM expenses WHERE is_business_expense = 1";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-try {
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $result = $stmt->fetch();
-    $card_expenses += floatval($result['total'] ?? 0);
-} catch (Exception $e) { }
-
-$sql = "SELECT SUM(net_pay) as total FROM employee_salaries WHERE status = 'paid'";
-$params = [];
-if ($selected_branch > 0) { $sql .= " AND branch_id = ?"; $params[] = $selected_branch; }
-try {
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $result = $stmt->fetch();
-    $card_expenses += floatval($result['total'] ?? 0);
-} catch (Exception $e) { }
-
-$card_profit = $card_commissions + $card_other_income - $card_expenses;
-
-// ============================================================
-// ✅ GET ALL PROVIDERS AS ONE FLAT LIST (grouped by branch order)
+// ✅ GET ALL PROVIDERS - FIXED HY093
 // ============================================================
 $all_providers_flat = [];
 
@@ -266,21 +345,25 @@ $sql = "SELECT
             (SELECT SUM(CAST(JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) AS DECIMAL(15,2)))
              FROM commissions c 
              WHERE c.branch_id = b.id 
+             AND c.commission_date BETWEEN ? AND ?
              AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL) as total_provider_commission,
             (SELECT emp.full_name 
              FROM commissions c 
              LEFT JOIN employees emp ON c.employee_id = emp.id
              WHERE c.branch_id = b.id 
+             AND c.commission_date BETWEEN ? AND ?
              AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL
              ORDER BY c.id DESC LIMIT 1) as last_added_by,
             (SELECT c.commission_date 
              FROM commissions c 
              WHERE c.branch_id = b.id 
+             AND c.commission_date BETWEEN ? AND ?
              AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL
              ORDER BY c.id DESC LIMIT 1) as last_commission_date,
             (SELECT COUNT(*) 
              FROM commissions c 
              WHERE c.branch_id = b.id 
+             AND c.commission_date BETWEEN ? AND ?
              AND JSON_EXTRACT(c.provider_data, CONCAT('$.\"', p.id, '\"')) IS NOT NULL) as commission_count
         FROM branches b
         INNER JOIN branch_providers bp ON b.id = bp.branch_id AND bp.is_active = 1
@@ -289,10 +372,20 @@ $sql = "SELECT
         ORDER BY b.branch_name ASC, p.display_order ASC, p.provider_name ASC";
 
 $stmt = $db->prepare($sql);
-$stmt->execute($branch_params_providers);
+
+// ✅ FIX: Tumia array_merge BADALA YA + operator
+$stmt->execute(array_merge(
+    [
+        $from_date, $to_date,
+        $from_date, $to_date,
+        $from_date, $to_date,
+        $from_date, $to_date
+    ],
+    $branch_params_providers
+));
+
 $provider_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Track branch transitions for red line
 $previous_branch_id = null;
 $total_providers_count = count($provider_rows);
 $total_branches_count = 0;
@@ -326,20 +419,18 @@ foreach ($provider_rows as $row) {
         'last_commission_date' => $row['last_commission_date'] ?? null,
         'commission_count' => intval($row['commission_count'] ?? 0),
         'is_first_of_branch' => $is_first_of_branch,
-        'is_first_overall' => ($previous_branch_id === $row['branch_id'] && count($all_providers_flat) === 0)
     ];
 }
 
 $total_branches_count = count($branch_ids_seen);
 
 // ============================================================
-// GET COMMISSIONS LIST (for count)
+// COMMISSIONS LIST (for count)
 // ============================================================
-$sql = "SELECT COUNT(*) as total
-        FROM commissions c
-        WHERE 1=1 " . $branch_filter;
+$sql = "SELECT COUNT(*) as total FROM commissions c 
+        WHERE c.commission_date BETWEEN ? AND ? " . $branch_filter;
 $stmt = $db->prepare($sql);
-$stmt->execute($branch_params);
+$stmt->execute(array_merge([$from_date, $to_date], $branch_params));
 $commission_count = intval($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 $success_message = '';
@@ -347,7 +438,7 @@ $error_message = '';
 if (isset($_SESSION['success_message'])) { $success_message = $_SESSION['success_message']; unset($_SESSION['success_message']); }
 if (isset($_SESSION['error_message'])) { $error_message = $_SESSION['error_message']; unset($_SESSION['error_message']); }
 
-$branch_qs = ($selected_branch > 0) ? '?branch_id=' . $selected_branch : '';
+$branch_qs = ($selected_branch > 0) ? '&branch_id=' . $selected_branch : '';
 
 include_once '../../includes/admin_header.php';
 include_once '../../includes/admin_sidebar.php';
@@ -381,13 +472,13 @@ include_once '../../includes/admin_topbar.php';
             </div>
             <div class="page-header-right">
                 <div class="header-actions">
-                    <a href="add_capital.php<?php echo $branch_qs; ?>" class="btn btn-add-capital">
+                    <a href="add_capital.php?<?php echo $branch_qs; ?>" class="btn btn-add-capital">
                         <i class="fas fa-plus"></i> Add Capital
                     </a>
-                    <a href="add.php<?php echo $branch_qs; ?>" class="btn btn-add-commission">
+                    <a href="add.php?<?php echo $branch_qs; ?>" class="btn btn-add-commission">
                         <i class="fas fa-plus-circle"></i> Add Commission
                     </a>
-                    <a href="add_other_income.php<?php echo $branch_qs; ?>" class="btn btn-add-other">
+                    <a href="add_other_income.php?<?php echo $branch_qs; ?>" class="btn btn-add-other">
                         <i class="fas fa-coins"></i> Add Other Income
                     </a>
                     <div class="dropdown">
@@ -404,6 +495,67 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- TIME FILTER BAR -->
+        <div class="time-filter-bar">
+            <div class="time-filter-left">
+                <i class="fas fa-calendar-alt"></i>
+                <span class="time-filter-label">Period:</span>
+            </div>
+            <div class="time-filter-buttons">
+                <a href="?filter=all<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">All</a>
+                <a href="?filter=today<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">Today</a>
+                <a href="?filter=1d<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '1d' ? 'active' : ''; ?>">1D</a>
+                <a href="?filter=1w<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '1w' ? 'active' : ''; ?>">1W</a>
+                <a href="?filter=1m<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '1m' ? 'active' : ''; ?>">1M</a>
+                <a href="?filter=3m<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '3m' ? 'active' : ''; ?>">3M</a>
+                <a href="?filter=6m<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '6m' ? 'active' : ''; ?>">6M</a>
+                <a href="?filter=1y<?php echo $branch_qs; ?>" 
+                   class="time-btn <?php echo $filter === '1y' ? 'active' : ''; ?>">1Y</a>
+                <a href="?filter=custom<?php echo $branch_qs; ?>&from_date=<?php echo date('Y-m-01'); ?>&to_date=<?php echo date('Y-m-d'); ?>" 
+                   class="time-btn time-btn-custom <?php echo $filter === 'custom' ? 'active' : ''; ?>">
+                    <i class="fas fa-sliders-h"></i> Custom
+                </a>
+            </div>
+        </div>
+
+        <!-- FILTER BAR - Custom Date Range -->
+        <div class="filter-bar-main">
+            <form method="GET" action="" class="filter-form-main">
+                <input type="hidden" name="filter" value="custom">
+                <?php if ($selected_branch > 0): ?>
+                    <input type="hidden" name="branch_id" value="<?php echo $selected_branch; ?>">
+                <?php endif; ?>
+                
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> From</label>
+                    <input type="date" name="from_date" class="filter-input" 
+                           value="<?php echo htmlspecialchars($from_date); ?>">
+                </div>
+                
+                <div class="filter-item">
+                    <label><i class="fas fa-calendar-day"></i> To</label>
+                    <input type="date" name="to_date" class="filter-input" 
+                           value="<?php echo htmlspecialchars($to_date); ?>">
+                </div>
+                
+                <div class="filter-actions">
+                    <button type="submit" class="btn-filter-main">
+                        <i class="fas fa-search"></i> Filter
+                    </button>
+                    <a href="?filter=all<?php echo $branch_qs; ?>" class="btn-reset-main">
+                        <i class="fas fa-undo"></i> Reset
+                    </a>
+                </div>
+            </form>
         </div>
 
         <!-- ALERTS -->
@@ -423,7 +575,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- CAPITAL SECTION (3 Parts) -->
+        <!-- CAPITAL SECTION -->
         <div class="capital-section-wrapper">
             <div class="capital-section-header">
                 <div class="csh-left">
@@ -432,7 +584,7 @@ include_once '../../includes/admin_topbar.php';
                     </div>
                     <div class="csh-info">
                         <span class="csh-title">Capital Overview</span>
-                        <span class="csh-subtitle"><?php echo htmlspecialchars($commission_branch_name); ?></span>
+                        <span class="csh-subtitle"><?php echo htmlspecialchars($commission_branch_name); ?> • (Not affected by filter)</span>
                     </div>
                 </div>
                 <div class="csh-badge">
@@ -488,41 +640,56 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- 4 SUMMARY CARDS -->
+        <!-- 4 SUMMARY CARDS - Follow Filter -->
         <div class="summaries-grid-2x2">
+            <!-- COMMISSIONS -->
             <div class="summary-card card-commissions">
                 <div class="summary-icon"><i class="fas fa-hand-holding-usd"></i></div>
                 <div class="summary-content">
                     <div class="summary-label">COMMISSIONS</div>
-                    <div class="summary-value"><?php echo formatCurrency($card_commissions); ?></div>
-                    <div class="summary-sub">All Time</div>
+                    <div class="summary-value"><?php echo formatCurrency($total_commission); ?></div>
+                    <div class="summary-sub">
+                        <?php echo $filter === 'all' ? 'All Time' : 'Period: ' . date('d M Y', strtotime($from_date)) . ' - ' . date('d M Y', strtotime($to_date)); ?>
+                    </div>
                 </div>
             </div>
 
+            <!-- OTHER INCOME -->
             <div class="summary-card card-other-income">
                 <div class="summary-icon"><i class="fas fa-coins"></i></div>
                 <div class="summary-content">
                     <div class="summary-label">OTHER INCOME</div>
-                    <div class="summary-value"><?php echo formatCurrency($card_other_income); ?></div>
-                    <div class="summary-sub">All Time</div>
+                    <div class="summary-value"><?php echo formatCurrency($total_other_income); ?></div>
+                    <div class="summary-sub">
+                        <?php echo $filter === 'all' ? 'All Time' : 'Period: ' . date('d M Y', strtotime($from_date)) . ' - ' . date('d M Y', strtotime($to_date)); ?>
+                    </div>
                 </div>
             </div>
 
+            <!-- EXPENSES -->
             <div class="summary-card card-expenses">
                 <div class="summary-icon"><i class="fas fa-receipt"></i></div>
                 <div class="summary-content">
                     <div class="summary-label">EXPENSES</div>
-                    <div class="summary-value"><?php echo formatCurrency($card_expenses); ?></div>
-                    <div class="summary-sub">All Time (incl. Salaries)</div>
+                    <div class="summary-value"><?php echo formatCurrency($total_expenses); ?></div>
+                    <div class="summary-sub">
+                        (incl. Salaries) • <?php echo $filter === 'all' ? 'All Time' : 'Period'; ?>
+                    </div>
                 </div>
             </div>
 
-            <div class="summary-card card-profit <?php echo $card_profit < 0 ? 'card-loss' : ''; ?>">
+            <!-- AVAILABLE PROFIT -->
+            <div class="summary-card card-profit <?php echo $available_profit <= 0 ? 'card-loss' : ''; ?>">
                 <div class="summary-icon"><i class="fas fa-chart-line"></i></div>
                 <div class="summary-content">
-                    <div class="summary-label">PROFIT</div>
-                    <div class="summary-value"><?php echo formatCurrency($card_profit); ?></div>
-                    <div class="summary-sub">Commissions + Other - Expenses</div>
+                    <div class="summary-label">AVAILABLE PROFIT</div>
+                    <div class="summary-value"><?php echo formatCurrency($available_profit); ?></div>
+                    <div class="summary-sub">
+                        Profit: <?php echo formatCurrency($total_profit); ?> 
+                        <?php if ($already_allocated > 0): ?>
+                            • Used: <?php echo formatCurrency($already_allocated); ?>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
         </div>
@@ -552,7 +719,6 @@ include_once '../../includes/admin_topbar.php';
         <!-- SINGLE CONTINUOUS TABLE -->
         <div class="table-container">
             
-            <!-- RED HEADER with Search + Scroll + Count -->
             <div class="table-header-red-with-controls">
                 <div class="thrc-left">
                     <div class="provider-search-wrapper">
@@ -621,7 +787,6 @@ include_once '../../includes/admin_topbar.php';
                                 );
                             ?>
                                 <?php if ($is_new_branch && $global_row > 1): ?>
-                                    <!-- RED LINE SEPARATOR between branches -->
                                     <tr class="branch-separator-row">
                                         <td colspan="9">
                                             <div class="branch-separator-line"></div>
@@ -806,15 +971,6 @@ body {
     border-radius: 50%;
     pointer-events: none;
 }
-.branch-status-card-blue::after {
-    content: '';
-    position: absolute;
-    bottom: -60%; left: 20%;
-    width: 200px; height: 200px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 50%;
-    pointer-events: none;
-}
 .branch-status-icon-blue {
     width: 48px;
     height: 48px;
@@ -936,19 +1092,6 @@ body {
     font-family: 'Inter', sans-serif; white-space: nowrap;
 }
 .btn-export:hover { background: #1D4ED8; transform: translateY(-1px); }
-.btn-reset {
-    background: var(--commission-hover);
-    color: var(--commission-text-secondary);
-    border: 1px solid var(--commission-border);
-    padding: 8px 16px; border-radius: 8px;
-    font-weight: 600; font-size: 12px;
-    cursor: pointer; transition: all 0.3s ease;
-    display: inline-flex; align-items: center; gap: 6px;
-}
-.btn-reset:hover {
-    background: var(--commission-border);
-    color: var(--commission-text);
-}
 
 /* DROPDOWN */
 .dropdown { position: relative; display: inline-block; }
@@ -976,6 +1119,182 @@ body {
 .dropdown-menu a i.fa-file-excel { color: #1D7D1D; }
 .dropdown-menu a i.fa-file-pdf { color: #DC2626; }
 .dropdown-menu a i.fa-print { color: #6B7280; }
+
+/* TIME FILTER BAR */
+.time-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    background: var(--commission-card-bg);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    border: 1px solid var(--commission-border);
+    box-shadow: 0 1px 3px var(--commission-shadow);
+    flex-wrap: wrap;
+}
+.time-filter-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--commission-text-secondary);
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+.time-filter-left i { color: #10B981; font-size: 14px; }
+.time-filter-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.time-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 14px;
+    background: var(--commission-input-bg);
+    color: var(--commission-text-secondary);
+    border: 1px solid var(--commission-border);
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.time-btn:hover {
+    background: var(--commission-hover);
+    color: var(--commission-text);
+    border-color: #10B981;
+    transform: translateY(-1px);
+}
+.time-btn.active {
+    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+    color: #FFFFFF;
+    border-color: #059669;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+}
+.time-btn.time-btn-custom {
+    background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+    color: #FFFFFF;
+    border-color: #6D28D9;
+}
+.time-btn.time-btn-custom:hover {
+    background: linear-gradient(135deg, #6D28D9 0%, #5B21B6 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+}
+.time-btn.time-btn-custom.active {
+    background: linear-gradient(135deg, #5B21B6 0%, #4C1D95 100%);
+    border-color: #4C1D95;
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.5);
+}
+
+/* CUSTOM FILTER BAR */
+.filter-bar-main {
+    padding: 14px 18px;
+    background: var(--commission-card-bg);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    border: 1px solid var(--commission-border);
+    box-shadow: 0 1px 3px var(--commission-shadow);
+}
+.filter-form-main {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+.filter-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 160px;
+}
+.filter-item label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--commission-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.filter-item label i { color: #10B981; font-size: 11px; }
+.filter-input {
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--commission-border);
+    font-size: 13px;
+    color: var(--commission-text);
+    background: var(--commission-input-bg);
+    outline: none;
+    transition: all 0.2s ease;
+    font-family: 'Inter', sans-serif;
+}
+.filter-input:focus {
+    border-color: #10B981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+    background: var(--commission-card-bg);
+}
+.filter-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.btn-filter-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+.btn-filter-main:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+.btn-reset-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    background: var(--commission-hover);
+    color: var(--commission-text-secondary);
+    border: 1px solid var(--commission-border);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.btn-reset-main:hover {
+    background: var(--commission-border);
+    color: var(--commission-text);
+    transform: translateY(-1px);
+}
 
 /* ALERTS */
 .alert {
@@ -1104,7 +1423,6 @@ html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color
     margin-top: auto; padding-top: 8px;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
-.cp-sublabel i { font-size: 10px; }
 
 /* SUMMARY CARDS */
 .summaries-grid-2x2 {
@@ -1270,7 +1588,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     position: relative; z-index: 1;
 }
 
-/* Provider Search */
 .provider-search-wrapper {
     display: flex;
     align-items: center;
@@ -1340,7 +1657,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     white-space: nowrap;
 }
 
-/* Scroll buttons */
 .scroll-btn {
     width: 40px;
     height: 40px;
@@ -1365,7 +1681,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(252, 211, 77, 0.6);
 }
-.scroll-btn:active { transform: translateY(0); }
 .scroll-label {
     font-size: 11px;
     font-weight: 800;
@@ -1379,7 +1694,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     padding: 0 6px;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
-.scroll-label i { font-size: 12px; }
 
 .record-count-red {
     font-size: 11px;
@@ -1399,7 +1713,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     color: #FCD34D;
 }
 
-/* TABLE RESPONSIVE */
 .table-responsive {
     overflow-x: auto;
     width: 100%;
@@ -1415,11 +1728,7 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     background: #DC2626;
     border-radius: 4px;
 }
-.table-responsive::-webkit-scrollbar-thumb:hover {
-    background: #B91C1C;
-}
 
-/* DATA TABLE */
 .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -1455,7 +1764,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
 }
 .data-table tbody td.text-right { text-align: right; }
 
-/* BRANCH SEPARATOR ROW */
 .branch-separator-row {
     background: transparent !important;
     border: none !important;
@@ -1473,28 +1781,8 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     box-shadow: 0 2px 8px rgba(220, 38, 38, 0.4);
     border-radius: 2px;
     margin: 8px 0;
-    position: relative;
-}
-.branch-separator-line::before {
-    content: '';
-    position: absolute;
-    top: -2px;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: rgba(220, 38, 38, 0.3);
-}
-.branch-separator-line::after {
-    content: '';
-    position: absolute;
-    bottom: -2px;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: rgba(220, 38, 38, 0.3);
 }
 
-/* PROVIDER ROW */
 .provider-row-item {
     background: var(--commission-card-bg);
 }
@@ -1508,7 +1796,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     display: none !important;
 }
 
-/* Row Number */
 .row-number {
     display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; border-radius: 50%;
@@ -1518,7 +1805,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     border: 1px solid var(--commission-border);
 }
 
-/* Provider Cell */
 .provider-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .provider-icon-circle {
     width: 38px; height: 38px; border-radius: 12px;
@@ -1530,7 +1816,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
 }
 .provider-icon-circle:hover {
     transform: scale(1.08) rotate(-5deg);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
 }
 .provider-info-text {
     display: flex; flex-direction: column;
@@ -1542,7 +1827,6 @@ html.dark-mode .card-profit.card-loss .summary-value { color: #FBBF24; }
     white-space: nowrap;
 }
 
-/* Branch Badge Cell */
 .branch-badge-cell {
     display: inline-flex;
     align-items: center;
@@ -1568,7 +1852,6 @@ html.dark-mode .branch-badge-cell {
 }
 html.dark-mode .branch-badge-cell i { color: #60A5FA; }
 
-/* Code Badge */
 .code-badge {
     display: inline-flex; align-items: center;
     padding: 4px 10px;
@@ -1585,7 +1868,6 @@ html.dark-mode .code-badge {
     color: #93C5FD; border-color: #3B82F6;
 }
 
-/* Type Badge */
 .type-badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 4px 10px; border-radius: 8px;
@@ -1593,20 +1875,17 @@ html.dark-mode .code-badge {
     text-transform: uppercase; letter-spacing: 0.5px;
     white-space: nowrap;
 }
-.type-badge i { font-size: 9px; }
 .type-bank { background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; }
 .type-mobile_money,
 .type-mobile { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
 .type-wallet { background: #EDE9FE; color: #5B21B6; border: 1px solid #C4B5FD; }
 .type-sacco { background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0; }
-.type-default { background: #F3F4F6; color: #374151; border: 1px solid #E5E7EB; }
 html.dark-mode .type-bank { background: #1E3A5F; color: #93C5FD; border-color: #3B82F6; }
 html.dark-mode .type-mobile_money,
 html.dark-mode .type-mobile { background: #5F3A1E; color: #FBBF24; border-color: #F59E0B; }
 html.dark-mode .type-wallet { background: #4C1D95; color: #C4B5FD; border-color: #A78BFA; }
 html.dark-mode .type-sacco { background: #14532D; color: #4ADE80; border-color: #16A34A; }
 
-/* Commission Amount */
 .commission-amount {
     display: inline-flex; align-items: center;
     padding: 6px 12px;
@@ -1629,7 +1908,6 @@ html.dark-mode .commission-amount {
     color: #D1FAE5; border-color: #10B981;
 }
 
-/* Date Cell */
 .date-cell {
     display: inline-flex; align-items: center; gap: 5px;
     font-size: 11px; font-weight: 600;
@@ -1642,7 +1920,6 @@ html.dark-mode .commission-amount {
     font-style: italic;
 }
 
-/* Added By Cell */
 .added-by-cell {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 5px 12px;
@@ -1660,7 +1937,6 @@ html.dark-mode .added-by-cell {
 }
 html.dark-mode .added-by-cell i { color: #FBBF24; }
 
-/* Provider Actions */
 .provider-actions {
     display: flex;
     gap: 8px;
@@ -1679,8 +1955,6 @@ html.dark-mode .added-by-cell i { color: #FBBF24; }
     transition: all 0.25s ease;
     text-decoration: none;
     font-size: 15px;
-    position: relative;
-    overflow: hidden;
 }
 .btn-provider-view {
     background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
@@ -1715,7 +1989,6 @@ html.dark-mode .btn-provider-delete {
     color: #FCA5A5; border-color: #DC2626;
 }
 
-/* No Results */
 .no-provider-results {
     text-align: center;
     padding: 40px 20px;
@@ -1736,7 +2009,6 @@ html.dark-mode .btn-provider-delete {
     font-weight: 500;
 }
 
-/* Empty State */
 .empty-state {
     text-align: center;
     padding: 50px 20px;
@@ -1769,9 +2041,7 @@ html.dark-mode .btn-provider-delete {
         justify-content: center;
         width: 100%;
     }
-    .provider-search-wrapper {
-        width: 100%;
-    }
+    .provider-search-wrapper { width: 100%; }
 }
 @media (max-width: 1024px) {
     .main-content { padding: 14px 16px !important; }
@@ -1783,7 +2053,6 @@ html.dark-mode .btn-provider-delete {
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
     .branch-status-card-blue { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 14px; }
-    .branch-status-info-blue { width: 100%; }
     .page-header { flex-direction: column; gap: 10px; align-items: flex-start; }
     .header-actions { width: 100%; flex-direction: column; align-items: stretch; }
     .header-actions .btn-add-capital,
@@ -1792,6 +2061,13 @@ html.dark-mode .btn-provider-delete {
     .header-actions .btn-export { justify-content: center; width: 100%; }
     .dropdown { width: 100%; }
     .dropdown-menu { width: 100%; right: auto; left: 0; }
+    .time-filter-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+    .time-filter-buttons { justify-content: center; }
+    .time-btn { flex: 1; min-width: 60px; justify-content: center; }
+    .filter-form-main { flex-direction: column; align-items: stretch; }
+    .filter-item { min-width: 100%; }
+    .filter-actions { width: 100%; flex-direction: column; }
+    .btn-filter-main, .btn-reset-main { width: 100%; justify-content: center; }
     .capital-section-wrapper { padding: 16px; }
     .capital-section-header { flex-direction: column; align-items: flex-start; }
     .capital-grid-3 { grid-template-columns: 1fr; gap: 10px; }
@@ -1804,6 +2080,7 @@ html.dark-mode .btn-provider-delete {
     .branch-status-info-blue { justify-content: center; }
     .branch-status-icon-blue { width: 40px; height: 40px; font-size: 16px; }
     .branch-status-name-blue { font-size: 14px; }
+    .time-btn { font-size: 10px; padding: 6px 10px; }
     .summaries-grid-2x2 { grid-template-columns: 1fr; gap: 10px; }
     .summary-card { padding: 12px 14px; min-height: 85px; gap: 10px; }
     .summary-icon { width: 42px; height: 42px; font-size: 16px; }
@@ -1849,14 +2126,20 @@ function exportData(format) {
     dropdown.classList.remove('show');
     var params = new URLSearchParams();
     params.set('format', format);
+    
     var selectedBranch = '<?php echo $selected_branch; ?>';
     if (selectedBranch && selectedBranch !== '0' && selectedBranch !== '') {
         params.set('branch_id', selectedBranch);
     }
-    var searchInput = document.getElementById('providerSearchInput');
-    if (searchInput && searchInput.value.trim()) {
-        params.set('search', searchInput.value.trim());
-    }
+    
+    var filter = '<?php echo $filter; ?>';
+    params.set('filter', filter);
+    
+    var fromDate = '<?php echo $from_date; ?>';
+    var toDate = '<?php echo $to_date; ?>';
+    params.set('from_date', fromDate);
+    params.set('to_date', toDate);
+    
     window.location.href = 'export.php?' + params.toString();
 }
 
@@ -1888,25 +2171,20 @@ function filterProviders(input) {
     }
     
     let matchCount = 0;
-    let lastVisibleBranchId = null;
     
     providerRows.forEach(row => {
         const searchData = row.getAttribute('data-search') || '';
-        const branchId = row.getAttribute('data-branch-id');
         
         if (searchData.includes(searchTerm)) {
             row.classList.remove('hidden-by-search');
             matchCount++;
-            lastVisibleBranchId = branchId;
         } else {
             row.classList.add('hidden-by-search');
         }
     });
     
-    // Hide all separators during search (cleaner look)
     separatorRows.forEach(row => row.classList.add('hidden-by-search'));
     
-    // Renumber visible rows
     let visibleIdx = 1;
     providerRows.forEach(row => {
         if (!row.classList.contains('hidden-by-search')) {
@@ -1954,8 +2232,7 @@ function confirmDeleteCommissions(providerName, count) {
     var msg = 'Are you sure you want to DELETE COMMISSIONS for:\n\n' +
               'Provider: ' + providerName + '\n' +
               'Commission Records: ' + count + '\n\n' +
-              'NOTE: The provider WILL REMAIN ACTIVE, only their commissions will be deleted.\n' +
-              'The provider commission will become 0.\n\n' +
+              'NOTE: The provider WILL REMAIN ACTIVE, only their commissions will be deleted.\n\n' +
               'This action cannot be undone.';
     return confirm(msg);
 }
