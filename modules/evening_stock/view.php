@@ -1,17 +1,14 @@
 <?php
 // ================================================================
 // FILE: modules/evening_stock/view.php
-// EVENING STOCK - VIEW DETAILS (ADMIN) - BLUE THEME
-// ✅ Shows full evening stock details
-// ✅ Provider breakdown table
-// ✅ Edit / Delete / Approve buttons
-// ✅ Print / Export
-// ✅ BLUE THEME (consistent with index.php, add.php, edit.php)
-// ✅ ALL INSTRUCTIONS IN ENGLISH
+// WAKALA FINANCIAL SYSTEM - VIEW EVENING STOCK (ADMIN)
+// 
+// ✅ BLUE THEME (matching with index.php)
+// ✅ GREEN THEME providers cards (soft green background)
+// ✅ 3 Providers per row (grid layout)
+// ✅ Cash + Grand Total at bottom
+// ✅ Full English UI
 // ================================================================
-
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
 
 require_once '../../config/config.php';
 require_once '../../config/database.php';
@@ -27,79 +24,44 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
-$role = $_SESSION['role'] ?? 'employee';
+$role    = $_SESSION['role'] ?? 'employee';
 
 if ($role !== 'admin' && $role !== 'super_admin') {
     header('Location: ../dashboard/employee.php');
     exit();
 }
 
-// ============================================================
-// GET STOCK ID
-// ============================================================
-$stock_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
-
-if ($stock_id <= 0) {
-    $_SESSION['error_message'] = 'Invalid stock ID.';
+$id = isset($_GET['id']) ? intval($_GET['id']) : 0;
+if ($id <= 0) {
+    $_SESSION['error_message'] = 'Invalid evening stock.';
     header('Location: index.php');
     exit();
 }
 
 // ============================================================
-// HANDLE STATUS UPDATE
+// FETCH EVENING STOCK
 // ============================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_status') {
-    try {
-        $new_status = $_POST['status'] ?? '';
-        $allowed = ['waiting', 'approved', 'adjusted', 'rejected'];
-        
-        if (!in_array($new_status, $allowed)) {
-            throw new Exception('Invalid status.');
-        }
-        
-        $stmt = $db->prepare("UPDATE evening_stocks SET status = ?, updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$new_status, $stock_id]);
-        
-        logActivity($user_id, 'Update Evening Stock Status', 'Evening Stock', $stock_id, '', 'Status changed to ' . $new_status);
-        
-        $_SESSION['success_message'] = 'Status updated to ' . ucfirst($new_status) . ' successfully!';
-        header('Location: view.php?id=' . $stock_id);
-        exit();
-        
-    } catch (Exception $e) {
-        $error_message = $e->getMessage();
-    }
-}
-
-// ============================================================
-// GET STOCK DATA
-// ============================================================
-try {
-    $sql = "SELECT es.*, 
-            e.full_name as employee_name,
-            e.email as employee_email,
-            e.employee_id as employee_code,
-            e.profile_pic as employee_avatar,
-            b.branch_name as branch_name,
-            b.branch_code as branch_code,
-            b.location as branch_location,
-            b.phone as branch_phone,
-            dr.report_number as daily_report_number,
-            dr.report_date as daily_report_date
-            FROM evening_stocks es
-            LEFT JOIN employees e ON es.employee_id = e.id
-            LEFT JOIN branches b ON es.branch_id = b.id
-            LEFT JOIN daily_reports dr ON es.daily_report_id = dr.id
-            WHERE es.id = ?";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute([$stock_id]);
-    $stock = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-} catch (PDOException $e) {
-    error_log("Error: " . $e->getMessage());
-    $stock = null;
-}
+$stmt = $db->prepare("
+    SELECT 
+        es.*,
+        e.full_name AS employee_name,
+        e.employee_id AS employee_code,
+        e.email AS employee_email,
+        e.phone AS employee_phone,
+        e.profile_pic AS employee_avatar,
+        b.branch_name AS branch_display_name,
+        b.branch_code AS branch_display_code,
+        b.location AS branch_location,
+        dr.report_number AS daily_report_number,
+        dr.report_date AS daily_report_date
+    FROM evening_stocks es
+    LEFT JOIN employees e ON es.employee_id = e.id
+    LEFT JOIN branches b ON es.branch_id = b.id
+    LEFT JOIN daily_reports dr ON es.daily_report_id = dr.id
+    WHERE es.id = ?
+");
+$stmt->execute([$id]);
+$stock = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$stock) {
     $_SESSION['error_message'] = 'Evening stock not found.';
@@ -108,64 +70,46 @@ if (!$stock) {
 }
 
 // ============================================================
-// GET PROVIDERS
+// FETCH PROVIDERS
 // ============================================================
-try {
-    $stmt = $db->prepare("
-        SELECT esp.*, 
-               p.icon_class as provider_icon,
-               p.color_code as provider_color,
-               p.provider_type
-        FROM evening_stock_providers esp
-        LEFT JOIN providers p ON esp.provider_id = p.id
-        WHERE esp.evening_stock_id = ?
-        ORDER BY esp.id ASC
-    ");
-    $stmt->execute([$stock_id]);
-    $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    $providers = [];
-}
+$stmt = $db->prepare("
+    SELECT 
+        esp.*,
+        p.icon_class, p.color_code, p.provider_type
+    FROM evening_stock_providers esp
+    LEFT JOIN providers p ON esp.provider_id = p.id
+    WHERE esp.evening_stock_id = ?
+    ORDER BY p.display_order, esp.provider_name
+");
+$stmt->execute([$id]);
+$providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ============================================================
 // CALCULATE TOTALS
-// ✅ Float from providers
-// ✅ Cash from evening_stocks.cash_balance (BRANCH CASH)
-// ✅ Grand Total = float + cash
 // ============================================================
+$total_float = 0;
 $total_opening_float = 0;
-$total_opening_cash = 0;
-$total_closing_float = 0;
-$total_provider_cash = 0;  // Provider cash (kwa display kwenye table)
-$total_deposits = 0;
-$total_withdrawals = 0;
-
 foreach ($providers as $p) {
-    $total_opening_float += floatval($p['opening_float']);
-    $total_opening_cash += floatval($p['opening_cash']);
-    $total_closing_float += floatval($p['closing_float']);
-    $total_provider_cash += floatval($p['closing_cash']);
-    $total_deposits += floatval($p['total_deposits']);
-    $total_withdrawals += floatval($p['total_withdrawals']);
+    $total_float += floatval(str_replace(',', '', $p['closing_float']));
+    $total_opening_float += floatval(str_replace(',', '', $p['opening_float']));
 }
 
-// ✅ Cash ya branch inatoka evening_stocks.cash_balance (SIO providers)
-$total_closing_cash = floatval($stock['cash_balance'] ?? 0);
+// ✅ CASH inatoka evening_stocks.cash_balance
+$cash_balance = floatval(str_replace(',', '', $stock['cash_balance'] ?? 0));
+$grand_total = $total_float + $cash_balance;
 
-// ✅ Grand Total = float + branch cash
-$grand_total = $total_closing_float + $total_closing_cash;
+$employee_initial = strtoupper(substr($stock['employee_name'] ?? 'N', 0, 1));
+$employee_avatar = $stock['employee_avatar'] ?? '';
 
-// Status labels
+// Status info
 $status_labels = [
-    'waiting' => ['label' => 'Waiting', 'icon' => 'fa-clock', 'color' => 'orange'],
-    'approved' => ['label' => 'Approved', 'icon' => 'fa-check-circle', 'color' => 'green'],
-    'adjusted' => ['label' => 'Adjusted', 'icon' => 'fa-sliders-h', 'color' => 'blue'],
-    'rejected' => ['label' => 'Rejected', 'icon' => 'fa-times-circle', 'color' => 'red']
+    'waiting'  => ['label' => 'Waiting',  'icon' => 'fa-clock',        'color' => 'orange', 'badge' => 'badge-waiting'],
+    'approved' => ['label' => 'Approved', 'icon' => 'fa-check-circle', 'color' => 'green',  'badge' => 'badge-approved'],
+    'adjusted' => ['label' => 'Adjusted', 'icon' => 'fa-sliders-h',    'color' => 'blue',   'badge' => 'badge-adjusted'],
+    'rejected' => ['label' => 'Rejected', 'icon' => 'fa-times-circle', 'color' => 'red',    'badge' => 'badge-rejected']
 ];
+$status_info = $status_labels[$stock['status']] ?? ['label' => $stock['status'], 'icon' => 'fa-circle', 'color' => 'gray', 'badge' => 'badge-open'];
 
-$status_info = $status_labels[$stock['status']] ?? ['label' => $stock['status'], 'icon' => 'fa-circle', 'color' => 'gray'];
-
-// Success/error messages
 $success_message = '';
 $error_message = '';
 if (isset($_SESSION['success_message'])) {
@@ -175,9 +119,6 @@ if (isset($_SESSION['success_message'])) {
 if (isset($_SESSION['error_message'])) {
     $error_message = $_SESSION['error_message'];
     unset($_SESSION['error_message']);
-}
-if (isset($error_message) && empty($error_message)) {
-    $error_message = '';
 }
 
 include_once '../../includes/admin_header.php';
@@ -189,27 +130,33 @@ include_once '../../includes/admin_topbar.php';
     <div class="main-content">
         
         <!-- ============================================================
-        BRANCH CARD — BLUE
+        BRANCH INDICATOR - BLUE
         ============================================================ -->
-        <div class="branch-status-card">
-            <div class="branch-status-icon">
-                <i class="fas fa-moon"></i>
-            </div>
-            <div class="branch-status-info">
-                <span class="branch-status-label">Evening Stock For</span>
-                <span class="branch-status-name"><?php echo htmlspecialchars($stock['branch_name'] ?? 'N/A'); ?></span>
-                <?php if (!empty($stock['branch_code'])): ?>
-                    <span class="branch-status-code"><?php echo htmlspecialchars($stock['branch_code']); ?></span>
+        <div class="branch-indicator">
+            <div class="branch-indicator-left">
+                <div class="branch-icon-wrapper">
+                    <i class="fas fa-store-alt"></i>
+                </div>
+                <div class="branch-info">
+                    <span class="branch-indicator-label">Branch</span>
+                    <span class="branch-indicator-name"><?php echo htmlspecialchars($stock['branch_display_name'] ?? 'N/A'); ?></span>
+                    <?php if (!empty($stock['branch_display_code'])): ?>
+                        <span class="branch-indicator-code"><?php echo htmlspecialchars($stock['branch_display_code']); ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php if (!empty($stock['branch_location'])): ?>
+                    <div class="branch-location">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <span><?php echo htmlspecialchars($stock['branch_location']); ?></span>
+                    </div>
                 <?php endif; ?>
-                <span class="branch-status-date">
-                    <i class="fas fa-calendar"></i>
-                    <?php echo date('d M Y', strtotime($stock['stock_date'])); ?>
-                </span>
             </div>
-            <a href="index.php?branch=<?php echo $stock['branch_id']; ?>" class="btn-back-card">
-                <i class="fas fa-arrow-left"></i>
-                <span>Back to List</span>
-            </a>
+            <div class="branch-indicator-right">
+                <a href="index.php?branch_id=<?php echo $stock['branch_id']; ?>" class="btn-back-card">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back to Stocks</span>
+                </a>
+            </div>
         </div>
 
         <!-- ============================================================
@@ -217,20 +164,22 @@ include_once '../../includes/admin_topbar.php';
         ============================================================ -->
         <div class="page-header">
             <div class="header-left">
-                <h2><i class="fas fa-file-invoice" style="color:#2563EB;"></i> Evening Stock Details</h2>
+                <h2><i class="fas fa-moon" style="color:#1E40AF;"></i> Evening Stock Details</h2>
                 <p class="text-muted">
-                    Reference: <strong><?php echo htmlspecialchars($stock['stock_number']); ?></strong>
+                    <i class="fas fa-hashtag"></i>
+                    <?php echo htmlspecialchars($stock['stock_number']); ?>
                 </p>
             </div>
             <div class="header-right">
-                <a href="edit.php?id=<?php echo $stock_id; ?>" class="btn btn-edit">
+                <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit">
                     <i class="fas fa-edit"></i> Edit
                 </a>
-                <a href="delete.php?id=<?php echo $stock_id; ?>" 
-                   class="btn btn-delete" 
-                   onclick="return confirmDelete('<?php echo addslashes($stock['stock_number']); ?>')">
+                <button onclick="window.print()" class="btn btn-print">
+                    <i class="fas fa-print"></i> Print
+                </button>
+                <button onclick="deleteStock(<?php echo $id; ?>, '<?php echo addslashes($stock['stock_number']); ?>')" class="btn btn-delete">
                     <i class="fas fa-trash"></i> Delete
-                </a>
+                </button>
             </div>
         </div>
 
@@ -239,374 +188,323 @@ include_once '../../includes/admin_topbar.php';
         ============================================================ -->
         <?php if (!empty($success_message)): ?>
             <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i> 
+                <i class="fas fa-check-circle"></i>
                 <span><?php echo $success_message; ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
-        
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger">
-                <i class="fas fa-exclamation-circle"></i> 
-                <span><?php echo htmlspecialchars($error_message); ?></span>
+                <i class="fas fa-exclamation-circle"></i>
+                <span><?php echo $error_message; ?></span>
                 <button class="alert-close" onclick="this.parentElement.remove()">&times;</button>
             </div>
         <?php endif; ?>
 
         <!-- ============================================================
-        HERO CARD — Grand Total
+        MAIN CARD (Blue Theme)
         ============================================================ -->
-        <div class="hero-card hero-<?php echo $status_info['color']; ?>">
-            <div class="hero-icon">
+        <div class="main-card">
+            <div class="main-card-icon">
                 <i class="fas fa-moon"></i>
             </div>
-            <div class="hero-content">
-                <span class="hero-label">Grand Total</span>
-                <span class="hero-amount"><?php echo formatCurrency($grand_total); ?></span>
-                <span class="hero-type">
-                    <span class="hero-type-badge">
-                        <i class="fas <?php echo $status_info['icon']; ?>"></i>
-                        <?php echo $status_info['label']; ?>
-                    </span>
+            <div class="main-card-content">
+                <div class="main-card-label">Evening Stock</div>
+                <div class="main-card-number"><?php echo htmlspecialchars($stock['stock_number']); ?></div>
+                <div class="main-card-desc">
+                    <?php echo date('d M Y', strtotime($stock['stock_date'])); ?>
+                    <?php if (!empty($stock['daily_report_number'])): ?>
+                        · Linked to <?php echo htmlspecialchars($stock['daily_report_number']); ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="main-card-badge">
+                <span class="badge <?php echo $status_info['badge']; ?>">
+                    <i class="fas <?php echo $status_info['icon']; ?>"></i> 
+                    <?php echo $status_info['label']; ?>
                 </span>
             </div>
-            <div class="hero-meta">
-                <div class="hero-meta-item">
-                    <span class="hmi-label">Total Float</span>
-                    <span class="hmi-value">
-                        <i class="fas fa-university"></i>
-                        <?php echo formatCurrency($total_closing_float); ?>
-                    </span>
+        </div>
+
+        <!-- ============================================================
+        TOTALS SUMMARY (3 cards)
+        ============================================================ -->
+        <div class="totals-grid">
+            <div class="total-card total-float">
+                <div class="total-icon"><i class="fas fa-coins"></i></div>
+                <div class="total-info">
+                    <span class="total-label">Total Float (Closing)</span>
+                    <span class="total-value"><?php echo formatCurrency($total_float); ?></span>
                 </div>
-                <div class="hero-meta-item">
-                    <span class="hmi-label">Branch Cash</span>
-                    <span class="hmi-value">
-                        <i class="fas fa-money-bill-wave"></i>
-                        <?php echo formatCurrency($total_closing_cash); ?>
-                    </span>
+            </div>
+            <div class="total-card total-cash">
+                <div class="total-icon"><i class="fas fa-money-bill-wave"></i></div>
+                <div class="total-info">
+                    <span class="total-label">Cash Balance</span>
+                    <span class="total-value"><?php echo formatCurrency($cash_balance); ?></span>
                 </div>
-                <div class="hero-meta-item">
-                    <span class="hmi-label">Providers</span>
-                    <span class="hmi-value">
-                        <i class="fas fa-list"></i>
-                        <?php echo count($providers); ?>
-                    </span>
+            </div>
+            <div class="total-card total-cumm">
+                <div class="total-icon"><i class="fas fa-chart-line"></i></div>
+                <div class="total-info">
+                    <span class="total-label">Grand Total</span>
+                    <span class="total-value"><?php echo formatCurrency($grand_total); ?></span>
                 </div>
             </div>
         </div>
 
         <!-- ============================================================
-        STATUS UPDATE BAR
+        DETAILS GRID
         ============================================================ -->
-        <div class="status-update-bar">
-            <div class="sub-left">
-                <i class="fas fa-tasks"></i>
-                <span class="sub-label">Update Status:</span>
-                <span class="sub-current">
-                    Current: <strong class="status-current status-<?php echo $status_info['color']; ?>">
-                        <i class="fas <?php echo $status_info['icon']; ?>"></i>
-                        <?php echo $status_info['label']; ?>
-                    </strong>
-                </span>
-            </div>
-            <form method="POST" action="" class="sub-form">
-                <input type="hidden" name="action" value="update_status">
-                <div class="sub-buttons">
-                    <button type="submit" name="status" value="waiting" class="btn-status btn-waiting" <?php echo $stock['status'] == 'waiting' ? 'disabled' : ''; ?>>
-                        <i class="fas fa-clock"></i> Waiting
-                    </button>
-                    <button type="submit" name="status" value="approved" class="btn-status btn-approved" <?php echo $stock['status'] == 'approved' ? 'disabled' : ''; ?>>
-                        <i class="fas fa-check-circle"></i> Approve
-                    </button>
-                    <button type="submit" name="status" value="adjusted" class="btn-status btn-adjusted" <?php echo $stock['status'] == 'adjusted' ? 'disabled' : ''; ?>>
-                        <i class="fas fa-sliders-h"></i> Adjust
-                    </button>
-                    <button type="submit" name="status" value="rejected" class="btn-status btn-rejected" <?php echo $stock['status'] == 'rejected' ? 'disabled' : ''; ?>>
-                        <i class="fas fa-times-circle"></i> Reject
-                    </button>
+        <div class="details-grid">
+            
+            <!-- STOCK INFO -->
+            <div class="detail-card">
+                <div class="detail-card-header">
+                    <div class="detail-icon" style="background: linear-gradient(135deg, #1E40AF, #2563EB);">
+                        <i class="fas fa-info-circle"></i>
+                    </div>
+                    <h3>Stock Information</h3>
                 </div>
-            </form>
-        </div>
+                <div class="detail-card-body">
+                    <div class="info-row">
+                        <span class="info-label">Stock Number</span>
+                        <span class="info-value mono"><?php echo htmlspecialchars($stock['stock_number']); ?></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Stock Date</span>
+                        <span class="info-value"><?php echo date('d M Y', strtotime($stock['stock_date'])); ?></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Submitted At</span>
+                        <span class="info-value"><?php echo date('d M Y H:i:s', strtotime($stock['submitted_at'])); ?></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Status</span>
+                        <span class="info-value">
+                            <span class="badge <?php echo $status_info['badge']; ?>">
+                                <i class="fas <?php echo $status_info['icon']; ?>"></i> 
+                                <?php echo $status_info['label']; ?>
+                            </span>
+                        </span>
+                    </div>
+                    <?php if (!empty($stock['daily_report_number'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Daily Report</span>
+                        <span class="info-value mono"><?php echo htmlspecialchars($stock['daily_report_number']); ?></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Daily Report Date</span>
+                        <span class="info-value"><?php echo date('d M Y', strtotime($stock['daily_report_date'])); ?></span>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
 
-        <!-- ============================================================
-        SUMMARY GRID — SEMI-TRANSPARENT COLORS
-        ============================================================ -->
-        <div class="summary-grid">
-            <div class="summary-card sc-total-float">
-                <div class="sc-icon sc-icon-blue">
-                    <i class="fas fa-university"></i>
+            <!-- EMPLOYEE INFO -->
+            <div class="detail-card">
+                <div class="detail-card-header">
+                    <div class="detail-icon" style="background: linear-gradient(135deg, #059669, #10B981);">
+                        <i class="fas fa-user-check"></i>
+                    </div>
+                    <h3>Employee Information</h3>
                 </div>
-                <div class="sc-content">
-                    <span class="sc-label">Total Float</span>
-                    <span class="sc-value"><?php echo formatCurrency($total_closing_float); ?></span>
-                    <span class="sc-sub">Provider float</span>
-                </div>
-            </div>
-            
-            <div class="summary-card sc-cash">
-                <div class="sc-icon sc-icon-teal">
-                    <i class="fas fa-money-bill-wave"></i>
-                </div>
-                <div class="sc-content">
-                    <span class="sc-label">Branch Cash</span>
-                    <span class="sc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
-                    <span class="sc-sub">From Daily Report</span>
-                </div>
-            </div>
-            
-            <div class="summary-card sc-deposits">
-                <div class="sc-icon sc-icon-green">
-                    <i class="fas fa-arrow-down"></i>
-                </div>
-                <div class="sc-content">
-                    <span class="sc-label">Total Deposits</span>
-                    <span class="sc-value text-success">+<?php echo formatCurrency($total_deposits); ?></span>
-                    <span class="sc-sub">Provider deposits</span>
-                </div>
-            </div>
-            
-            <div class="summary-card sc-withdrawals">
-                <div class="sc-icon sc-icon-red">
-                    <i class="fas fa-arrow-up"></i>
-                </div>
-                <div class="sc-content">
-                    <span class="sc-label">Total Withdrawals</span>
-                    <span class="sc-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span>
-                    <span class="sc-sub">Provider withdrawals</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- ============================================================
-        STOCK INFORMATION
-        ============================================================ -->
-        <div class="details-card">
-            <div class="section-header">
-                <h3><i class="fas fa-info-circle"></i> Stock Information</h3>
-            </div>
-            
-            <div class="details-grid">
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-hashtag"></i> Stock Number</span>
-                    <span class="detail-value detail-code"><?php echo htmlspecialchars($stock['stock_number']); ?></span>
-                </div>
-                
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-calendar"></i> Stock Date</span>
-                    <span class="detail-value"><?php echo date('l, d M Y', strtotime($stock['stock_date'])); ?></span>
-                </div>
-                
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-store-alt"></i> Branch</span>
-                    <span class="detail-value">
-                        <?php echo htmlspecialchars($stock['branch_name'] ?? 'N/A'); ?>
-                        <?php if (!empty($stock['branch_code'])): ?>
-                            <span class="code-pill"><?php echo htmlspecialchars($stock['branch_code']); ?></span>
-                        <?php endif; ?>
-                    </span>
-                </div>
-                
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-clipboard-check"></i> Daily Report</span>
-                    <span class="detail-value">
-                        <?php if (!empty($stock['daily_report_number'])): ?>
-                            <a href="../daily_report/view.php?id=<?php echo $stock['daily_report_id']; ?>" class="capital-link">
-                                <?php echo htmlspecialchars($stock['daily_report_number']); ?>
-                            </a>
+                <div class="detail-card-body">
+                    <div class="employee-box">
+                        <?php if ($employee_avatar && file_exists('../../' . $employee_avatar)): ?>
+                            <img src="../../<?php echo htmlspecialchars($employee_avatar); ?>" 
+                                 alt="" class="employee-img">
                         <?php else: ?>
-                            <span class="text-muted">N/A</span>
+                            <div class="employee-avatar"><?php echo $employee_initial; ?></div>
                         <?php endif; ?>
-                    </span>
-                </div>
-                
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-clock"></i> Submitted At</span>
-                    <span class="detail-value">
-                        <?php echo date('d M Y, h:i A', strtotime($stock['submitted_at'])); ?>
-                    </span>
-                </div>
-                
-                <div class="detail-item">
-                    <span class="detail-label"><i class="fas fa-sync-alt"></i> Last Updated</span>
-                    <span class="detail-value">
-                        <?php echo date('d M Y, h:i A', strtotime($stock['updated_at'])); ?>
-                    </span>
+                        <div class="employee-info">
+                            <span class="employee-name"><?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?></span>
+                            <span class="employee-code"><?php echo htmlspecialchars($stock['employee_code'] ?? '-'); ?></span>
+                        </div>
+                    </div>
+                    <?php if (!empty($stock['employee_email'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Email</span>
+                        <span class="info-value"><?php echo htmlspecialchars($stock['employee_email']); ?></span>
+                    </div>
+                    <?php endif; ?>
+                    <?php if (!empty($stock['employee_phone'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Phone</span>
+                        <span class="info-value"><?php echo htmlspecialchars($stock['employee_phone']); ?></span>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
+
         </div>
 
         <!-- ============================================================
-        PROVIDERS BREAKDOWN
+        PROVIDERS - GREEN THEME CARDS (3 PER ROW)
         ============================================================ -->
-        <div class="details-card">
-            <div class="section-header">
-                <h3><i class="fas fa-university"></i> Provider Breakdown</h3>
-                <span class="section-badge"><?php echo count($providers); ?> Providers</span>
-            </div>
+        <div class="providers-section">
             
-            <div class="providers-table-wrapper">
-                <table class="providers-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">#</th>
-                            <th>Provider</th>
-                            <th class="text-right">Opening Float</th>
-                            <th class="text-right">Opening Cash</th>
-                            <th class="text-right">Deposits</th>
-                            <th class="text-right">Withdrawals</th>
-                            <th class="text-right">Closing Float</th>
-                            <th class="text-right">Closing Cash</th>
-                            <th class="text-right">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $i = 1; foreach ($providers as $p): 
-                            $p_total = floatval($p['closing_float']) + floatval($p['closing_cash']);
-                        ?>
-                            <tr>
-                                <td><?php echo $i++; ?></td>
-                                <td>
-                                    <div class="provider-cell">
-                                        <div class="provider-icon-sm" style="background: <?php echo htmlspecialchars($p['provider_color'] ?? '#2563EB'); ?>;">
-                                            <i class="<?php echo htmlspecialchars($p['provider_icon'] ?? 'fas fa-university'); ?>"></i>
-                                        </div>
-                                        <div class="provider-info-cell">
-                                            <span class="provider-name"><?php echo htmlspecialchars($p['provider_name']); ?></span>
-                                            <span class="provider-code"><?php echo htmlspecialchars($p['provider_code']); ?></span>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-readonly"><?php echo formatCurrency($p['opening_float']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-readonly"><?php echo formatCurrency($p['opening_cash']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-readonly text-success">+<?php echo formatCurrency($p['total_deposits']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-readonly text-danger">-<?php echo formatCurrency($p['total_withdrawals']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-highlight"><?php echo formatCurrency($p['closing_float']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-highlight"><?php echo formatCurrency($p['closing_cash']); ?></span>
-                                </td>
-                                <td class="text-right">
-                                    <span class="amount-total"><?php echo formatCurrency($p_total); ?></span>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                    <tfoot>
-                        <tr class="totals-row">
-                            <td colspan="2" class="text-right"><strong>TOTALS</strong></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_opening_float); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_opening_cash); ?></span></td>
-                            <td class="text-right"><span class="total-value text-success">+<?php echo formatCurrency($total_deposits); ?></span></td>
-                            <td class="text-right"><span class="total-value text-danger">-<?php echo formatCurrency($total_withdrawals); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_provider_cash); ?></span></td>
-                            <td class="text-right"><span class="total-value"><?php echo formatCurrency($total_closing_float + $total_provider_cash); ?></span></td>
-                        </tr>
-                    </tfoot>
-                </table>
+            <!-- Section Header - Blue -->
+            <div class="section-header">
+                <div class="section-header-left">
+                    <div class="section-header-icon">
+                        <i class="fas fa-university"></i>
+                    </div>
+                    <div>
+                        <h3>Provider Closing Balances</h3>
+                        <p><?php echo count($providers); ?> providers in this stock</p>
+                    </div>
+                </div>
+                <span class="section-count-badge"><?php echo count($providers); ?></span>
             </div>
-        </div>
 
-        <!-- ============================================================
-        BRANCH CASH SUMMARY (LOCKED FROM DAILY REPORT)
-        ============================================================ -->
-        <div class="cash-summary-card">
-            <div class="csc-header">
-                <i class="fas fa-lock"></i>
-                <span>Branch Cash (Locked from Daily Report)</span>
-            </div>
-            <div class="csc-body">
-                <div class="csc-item">
-                    <span class="csc-label">Branch Cash Balance</span>
-                    <span class="csc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+            <?php if (count($providers) > 0): ?>
+                
+                <!-- ✅ Providers Grid - 3 per row - GREEN THEME -->
+                <div class="providers-grid">
+                    <?php $pi = 1; foreach ($providers as $p): 
+                        $p_color = $p['color_code'] ?? '#059669';
+                        $p_icon = $p['icon_class'] ?? 'fas fa-university';
+                        $p_type = $p['provider_type'] ?? 'bank';
+                        $p_type_label = ucfirst(str_replace('_', ' ', $p_type));
+                        $p_code = $p['provider_code'] ?? '-';
+                        $p_name = $p['provider_name'] ?? 'N/A';
+                        $p_opening = floatval(str_replace(',', '', $p['opening_float']));
+                        $p_closing = floatval(str_replace(',', '', $p['closing_float']));
+                        $p_cash = floatval(str_replace(',', '', $p['closing_cash']));
+                    ?>
+                        <div class="provider-card provider-card-green">
+                            
+                            <!-- Card Header - GREEN -->
+                            <div class="provider-card-header">
+                                <div class="provider-card-number"><?php echo $pi++; ?></div>
+                                <div class="provider-card-icon" style="background: <?php echo htmlspecialchars($p_color); ?>;">
+                                    <i class="<?php echo htmlspecialchars($p_icon); ?>"></i>
+                                </div>
+                                <div class="provider-card-type">
+                                    <span class="provider-type-badge type-<?php echo htmlspecialchars($p_type); ?>">
+                                        <i class="fas fa-<?php echo $p_type === 'mobile_money' ? 'mobile-alt' : ($p_type === 'bank' ? 'university' : 'wallet'); ?>"></i>
+                                        <?php echo htmlspecialchars($p_type_label); ?>
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <!-- Card Body - GREEN TEXT -->
+                            <div class="provider-card-body">
+                                <div class="provider-card-name">
+                                    <?php echo htmlspecialchars($p_name); ?>
+                                </div>
+                                <div class="provider-card-code">
+                                    <i class="fas fa-barcode"></i>
+                                    <?php echo htmlspecialchars($p_code); ?>
+                                </div>
+                            </div>
+                            
+                            <!-- Card Footer - Closing Float (GREEN) -->
+                            <div class="provider-card-footer">
+                                <span class="provider-card-footer-label">
+                                    <i class="fas fa-coins"></i> Closing Float
+                                </span>
+                                <span class="provider-card-footer-value">
+                                    <?php echo formatCurrency($p_closing); ?>
+                                </span>
+                            </div>
+
+                            <!-- ✅ Extra Row: Opening → Closing indicator -->
+                            <div class="provider-card-extra">
+                                <div class="pce-item">
+                                    <span class="pce-label">Opening:</span>
+                                    <span class="pce-value"><?php echo formatCurrency($p_opening); ?></span>
+                                </div>
+                                <?php if ($p_cash > 0): ?>
+                                <div class="pce-item pce-item-cash">
+                                    <span class="pce-label">Cash:</span>
+                                    <span class="pce-value"><?php echo formatCurrency($p_cash); ?></span>
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                            
+                        </div>
+                    <?php endforeach; ?>
                 </div>
-                <div class="csc-note">
-                    <i class="fas fa-info-circle"></i>
-                    Branch cash is locked from the Daily Report and cannot be edited here.
+
+                <!-- ============================================================
+                     CASH SUMMARY (BELOW PROVIDERS) - Blue Theme
+                     ============================================================ -->
+                <div class="cash-summary-section">
+                    
+                    <!-- Total Float Card -->
+                    <div class="cash-summary-card float-card">
+                        <div class="cash-summary-icon">
+                            <i class="fas fa-coins"></i>
+                        </div>
+                        <div class="cash-summary-info">
+                            <span class="cash-summary-label">Total Float</span>
+                            <span class="cash-summary-value"><?php echo formatCurrency($total_float); ?></span>
+                        </div>
+                    </div>
+
+                    <!-- Cash Card -->
+                    <div class="cash-summary-card cash-card">
+                        <div class="cash-summary-icon">
+                            <i class="fas fa-money-bill-wave"></i>
+                        </div>
+                        <div class="cash-summary-info">
+                            <span class="cash-summary-label">Cash Balance</span>
+                            <span class="cash-summary-value"><?php echo formatCurrency($cash_balance); ?></span>
+                        </div>
+                    </div>
+
+                    <!-- Grand Total Card -->
+                    <div class="cash-summary-card grand-card">
+                        <div class="cash-summary-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                        <div class="cash-summary-info">
+                            <span class="cash-summary-label">Total Float + Cash</span>
+                            <span class="cash-summary-value"><?php echo formatCurrency($grand_total); ?></span>
+                        </div>
+                    </div>
+
                 </div>
-            </div>
+
+            <?php else: ?>
+                <div class="empty-providers">
+                    <i class="fas fa-university"></i>
+                    <p>No providers in this stock.</p>
+                </div>
+            <?php endif; ?>
+
         </div>
 
         <!-- ============================================================
         NOTES
         ============================================================ -->
         <?php if (!empty($stock['notes'])): ?>
-        <div class="details-card">
-            <div class="section-header">
-                <h3><i class="fas fa-sticky-note"></i> Notes</h3>
+        <div class="notes-card">
+            <div class="notes-card-header">
+                <i class="fas fa-sticky-note"></i>
+                <h3>Notes</h3>
             </div>
-            <div class="notes-section">
-                <div class="note-block">
-                    <div class="note-content"><?php echo nl2br(htmlspecialchars($stock['notes'])); ?></div>
-                </div>
+            <div class="notes-card-body">
+                <p><?php echo nl2br(htmlspecialchars($stock['notes'])); ?></p>
             </div>
         </div>
         <?php endif; ?>
 
         <!-- ============================================================
-        AUDIT INFORMATION
+        ACTIONS
         ============================================================ -->
-        <div class="details-card">
-            <div class="section-header">
-                <h3><i class="fas fa-clipboard-check"></i> Audit Information</h3>
-            </div>
-            <div class="audit-grid">
-                <div class="audit-item">
-                    <div class="audit-icon"><i class="fas fa-user-plus"></i></div>
-                    <div class="audit-content">
-                        <span class="audit-label">Created By</span>
-                        <span class="audit-value"><?php echo htmlspecialchars($stock['employee_name'] ?? 'N/A'); ?></span>
-                        <?php if (!empty($stock['employee_code'])): ?>
-                            <span class="audit-sub"><?php echo htmlspecialchars($stock['employee_code']); ?></span>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                <div class="audit-item">
-                    <div class="audit-icon"><i class="fas fa-clock"></i></div>
-                    <div class="audit-content">
-                        <span class="audit-label">Submitted At</span>
-                        <span class="audit-value"><?php echo date('d M Y', strtotime($stock['submitted_at'])); ?></span>
-                        <span class="audit-sub"><?php echo date('h:i A', strtotime($stock['submitted_at'])); ?></span>
-                    </div>
-                </div>
-                <div class="audit-item">
-                    <div class="audit-icon"><i class="fas fa-sync-alt"></i></div>
-                    <div class="audit-content">
-                        <span class="audit-label">Last Updated</span>
-                        <span class="audit-value"><?php echo date('d M Y', strtotime($stock['updated_at'])); ?></span>
-                        <span class="audit-sub"><?php echo date('h:i A', strtotime($stock['updated_at'])); ?></span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ============================================================
-        BOTTOM ACTIONS
-        ============================================================ -->
-        <div class="bottom-actions">
-            <a href="index.php?branch=<?php echo $stock['branch_id']; ?>" class="btn btn-secondary">
-                <i class="fas fa-arrow-left"></i> Back to List
+        <div class="actions-card">
+            <a href="index.php?branch_id=<?php echo $stock['branch_id']; ?>" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back
             </a>
-            <a href="edit.php?id=<?php echo $stock_id; ?>" class="btn btn-edit">
+            <a href="edit.php?id=<?php echo $id; ?>" class="btn btn-edit-lg">
                 <i class="fas fa-edit"></i> Edit Stock
             </a>
-            <a href="print.php?id=<?php echo $stock_id; ?>" target="_blank" class="btn btn-print">
-                <i class="fas fa-print"></i> Print
-            </a>
-            <a href="delete.php?id=<?php echo $stock_id; ?>" 
-               class="btn btn-delete" 
-               onclick="return confirmDelete('<?php echo addslashes($stock['stock_number']); ?>')">
-                <i class="fas fa-trash"></i> Delete
-            </a>
+            <button onclick="window.print()" class="btn btn-print-lg">
+                <i class="fas fa-print"></i> Print Stock
+            </button>
         </div>
 
     </div>
@@ -615,973 +513,666 @@ include_once '../../includes/admin_topbar.php';
 
 <style>
 /* ============================================================
-   CSS VARIABLES — BLUE THEME
+   VARIABLES - BLUE THEME
    ============================================================ */
 :root {
-    --ev-bg: #F3F4F6;
-    --ev-text: #1F2937;
-    --ev-text-secondary: #6B7280;
-    --ev-text-light: #9CA3AF;
-    --ev-border: #E5E7EB;
-    --ev-card-bg: #FFFFFF;
-    --ev-input-bg: #F9FAFB;
-    --ev-hover: #F3F4F6;
-    --ev-shadow: rgba(0,0,0,0.06);
-    --ev-shadow-md: rgba(0,0,0,0.1);
+    --bg-body: #f0f4f8;
+    --bg-card: #ffffff;
+    --bg-table-even: #f8fafc;
+    --bg-input: #f8fafc;
+    --text-primary: #1e293b;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+    --text-light: #94a3b8;
+    --border-color: #cbd5e1;
+    --shadow-color: rgba(30, 64, 175, 0.08);
+    --shadow-hover: rgba(30, 64, 175, 0.15);
+    
+    --blue-primary: #1e40af;
+    --blue-dark: #1e3a8a;
+    --blue-mid: #2563eb;
+    --blue-light: #3b82f6;
+    --blue-lighter: #dbeafe;
+    --blue-lightest: #eff6ff;
+    
+    --green-primary: #059669;
+    --green-dark: #047857;
+    --green-darker: #065F46;
+    --green-light: #10b981;
+    --green-lighter: #d1fae5;
+    --green-lightest: #ecfdf5;
+    --green-accent: #34d399;
+    
+    --orange-primary: #d97706;
+    --orange-light: #f59e0b;
+    --red-primary: #bb0404;
+    --purple-primary: #7c3aed;
 }
-
 html.dark-mode {
-    --ev-bg: #0F172A;
-    --ev-text: #F9FAFB;
-    --ev-text-secondary: #9CA3AF;
-    --ev-text-light: #6B7280;
-    --ev-border: #334155;
-    --ev-card-bg: #1E293B;
-    --ev-input-bg: #334155;
-    --ev-hover: #334155;
-    --ev-shadow: rgba(0,0,0,0.3);
-    --ev-shadow-md: rgba(0,0,0,0.5);
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-table-even: #1a2332;
+    --bg-input: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --border-color: #334155;
+    --blue-lighter: #1e3a5f;
+    --blue-lightest: #1e293b;
+    --green-lighter: #065f46;
+    --green-lightest: #064e3b;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 100% !important; }
-body { background: var(--ev-bg) !important; color: var(--ev-text); }
-.main-wrapper { background: var(--ev-bg) !important; }
-.main-content { background: var(--ev-bg) !important; padding: 16px 20px !important; }
+.main-wrapper { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; }
+.main-content { overflow-x: hidden !important; max-width: 100% !important; width: 100% !important; padding: 16px 20px !important; }
+body { background: var(--bg-body) !important; color: var(--text-primary); }
+.main-wrapper, .main-content { background: var(--bg-body) !important; }
 
 /* ============================================================
-   BRANCH STATUS CARD — BLUE
+   BRANCH INDICATOR - BLUE
    ============================================================ */
-.branch-status-card {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    padding: 16px 22px;
-    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
-    border-radius: 12px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.35);
-    flex-wrap: wrap;
-    color: #FFFFFF;
-    position: relative;
-    overflow: hidden;
+.branch-indicator {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
+    border-radius: 12px; padding: 14px 22px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
+    flex-wrap: wrap; gap: 12px;
 }
-.branch-status-card::before {
-    content: '';
-    position: absolute;
-    top: -50%; right: -10%;
-    width: 250px; height: 250px;
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 50%;
-    pointer-events: none;
-}
-.branch-status-icon {
-    width: 52px;
-    height: 52px;
-    background: rgba(255, 255, 255, 0.18);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    color: #FCD34D;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
-    border: 1.5px solid rgba(252, 211, 77, 0.3);
-}
-.branch-status-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    position: relative;
-    z-index: 1;
-    flex: 1;
-}
-.branch-status-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.8);
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-}
-.branch-status-name {
-    font-size: 18px;
-    font-weight: 800;
-    color: #FFFFFF;
-}
-.branch-status-code {
-    font-size: 11px;
-    font-weight: 700;
-    color: #FCD34D;
-    padding: 3px 12px;
-    background: rgba(252, 211, 77, 0.2);
-    border-radius: 12px;
-    font-family: 'Courier New', monospace;
-}
-.branch-status-date {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.9);
-    padding: 3px 12px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
-    font-weight: 600;
-}
+.branch-indicator-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.branch-icon-wrapper { width: 42px; height: 42px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #FFF; flex-shrink: 0; border: 1.5px solid rgba(255,255,255,0.3); }
+.branch-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.branch-indicator-label { font-size: 10px; font-weight: 600; opacity: 0.85; text-transform: uppercase; letter-spacing: 1px; color: #FFF; }
+.branch-indicator-name { font-weight: 800; font-size: 16px; color: #FFF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.branch-indicator-code { font-size: 11px; font-weight: 700; color: #FFF; padding: 3px 12px; background: rgba(255,255,255,0.2); border-radius: 12px; border: 1px solid rgba(255,255,255,0.25); }
+.branch-location { display: flex; align-items: center; gap: 5px; font-size: 12px; color: rgba(255,255,255,0.9); padding: 4px 12px; background: rgba(255,255,255,0.12); border-radius: 12px; white-space: nowrap; }
+.branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .btn-back-card {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: #FFFFFF;
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 16px; background: rgba(255,255,255,0.12);
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    color: #FFF; text-decoration: none; font-size: 13px; font-weight: 600;
     transition: all 0.3s ease;
-    position: relative;
-    z-index: 1;
 }
-.btn-back-card:hover {
-    background: rgba(255, 255, 255, 0.25);
-    color: #FFFFFF;
-    transform: translateX(-3px);
-}
+.btn-back-card:hover { background: rgba(255,255,255,0.22); color: #FFF; }
 
 /* ============================================================
    PAGE HEADER
    ============================================================ */
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    gap: 16px;
-    flex-wrap: wrap;
-}
-.header-left h2 {
-    font-size: 22px;
-    font-weight: 800;
-    color: var(--ev-text);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.header-left .text-muted {
-    font-size: 13px;
-    color: var(--ev-text-secondary);
-    margin: 4px 0 0 0;
-}
-.header-left .text-muted strong {
-    color: #2563EB;
-    font-family: 'Courier New', monospace;
-    font-weight: 800;
-}
-.header-right { display: flex; gap: 8px; flex-wrap: wrap; }
-
-/* ============================================================
-   BUTTONS
-   ============================================================ */
-.btn {
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    text-decoration: none;
-    white-space: nowrap;
-}
-.btn-edit { background: #F59E0B; color: white; }
-.btn-edit:hover { background: #D97706; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(245,158,11,0.4); }
-.btn-delete { background: #DC2626; color: white; }
-.btn-delete:hover { background: #B91C1C; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(220,38,38,0.4); }
-.btn-print { background: #3B82F6; color: white; }
-.btn-print:hover { background: #2563EB; transform: translateY(-2px); color: white; box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
-.btn-secondary {
-    background: var(--ev-card-bg);
-    color: var(--ev-text-secondary);
-    border: 1.5px solid var(--ev-border);
-}
-.btn-secondary:hover { background: var(--ev-hover); color: var(--ev-text); }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+.page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; color: var(--text-primary); }
+.page-header .header-left h2 i { margin-right: 8px; }
+.page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 6px 0 0 0; display: flex; align-items: center; gap: 6px; font-family: 'Courier New', monospace; font-weight: 600; }
+.page-header .header-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ============================================================
    ALERTS
    ============================================================ */
-.alert {
-    padding: 14px 18px;
-    border-radius: 10px;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    font-size: 13px;
-}
+.alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); }
 .alert-success { background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0; }
 .alert-danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 html.dark-mode .alert-success { background: #065F46; color: #D1FAE5; border-color: #047857; }
 html.dark-mode .alert-danger { background: #7F1D1D; color: #FEE2E2; border-color: #991B1B; }
 .alert i { font-size: 20px; flex-shrink: 0; }
-.alert span { flex: 1; }
-.alert-close {
-    background: transparent;
-    border: none;
-    font-size: 22px;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.6;
-}
-.alert-close:hover { opacity: 1; }
+.alert span { flex: 1; font-size: 13px; font-weight: 500; }
+.alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
 
 /* ============================================================
-   HERO CARD
+   MAIN CARD - BLUE
    ============================================================ */
-.hero-card {
+.main-card {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     border-radius: 16px;
     padding: 28px 32px;
-    margin-bottom: 20px;
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: 24px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-    position: relative;
-    overflow: hidden;
-    color: #FFFFFF;
+    margin-bottom: 18px;
+    display: flex; align-items: center; gap: 24px;
+    color: #FFF; box-shadow: 0 8px 32px rgba(30, 64, 175, 0.25);
+    position: relative; overflow: hidden;
 }
-.hero-card::before {
-    content: '';
-    position: absolute;
-    top: -50%; right: -5%;
-    width: 400px; height: 400px;
-    background: rgba(255, 255, 255, 0.08);
+.main-card::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: none; }
+.main-card-icon {
+    width: 88px; height: 88px;
+    background: rgba(255,255,255,0.2);
     border-radius: 50%;
-    pointer-events: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px; flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.3);
+    position: relative; z-index: 1;
 }
-.hero-blue { background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%); }
-.hero-green { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
-.hero-purple { background: linear-gradient(135deg, #7C3AED 0%, #A855F7 100%); }
-.hero-red { background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%); }
-.hero-orange { background: linear-gradient(135deg, #D97706 0%, #F59E0B 100%); }
-.hero-gray { background: linear-gradient(135deg, #4B5563 0%, #6B7280 100%); }
+.main-card-content { flex: 1; min-width: 0; position: relative; z-index: 1; }
+.main-card-label { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.9); margin-bottom: 6px; }
+.main-card-number { font-size: clamp(22px, 2.5vw, 32px); font-weight: 900; font-family: 'Inter', 'Courier New', monospace; color: #FFF; word-break: break-all; line-height: 1.2; text-shadow: 0 3px 12px rgba(0,0,0,0.2); margin-bottom: 6px; }
+.main-card-desc { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.85); }
+.main-card-badge { position: relative; z-index: 1; }
 
-.hero-icon {
-    width: 80px;
-    height: 80px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 36px;
-    color: #FCD34D;
-    flex-shrink: 0;
-    border: 2px solid rgba(255, 255, 255, 0.25);
-    position: relative;
-    z-index: 1;
-}
-.hero-content {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    position: relative;
-    z-index: 1;
-    min-width: 0;
-}
-.hero-label {
-    font-size: 11px;
-    font-weight: 700;
-    color: rgba(255, 255, 255, 0.8);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-}
-.hero-amount {
-    font-size: clamp(28px, 3vw, 42px);
-    font-weight: 900;
-    color: #FFFFFF;
-    font-family: 'Inter', 'Courier New', monospace;
-    letter-spacing: -0.5px;
-    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
-    word-break: break-all;
-}
-.hero-type-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    background: rgba(255, 255, 255, 0.2);
-    color: #FFFFFF;
-    border: 1.5px solid rgba(255, 255, 255, 0.3);
-}
-.hero-meta {
-    display: flex;
-    gap: 12px;
-    position: relative;
-    z-index: 1;
-    flex-wrap: wrap;
-}
-.hero-meta-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 12px 18px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    min-width: 120px;
-}
-.hmi-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: rgba(255, 255, 255, 0.7);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-.hmi-value {
-    font-size: 13px;
-    font-weight: 700;
-    color: #FFFFFF;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-}
-.hmi-value i { font-size: 12px; color: #FCD34D; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 20px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; border: 1.5px solid; }
+.badge-locked, .badge-rejected { background: #FEE2E2; color: #991B1B; border-color: #FECACA; }
+.badge-open, .badge-approved { background: #D1FAE5; color: #059669; border-color: #A7F3D0; }
+.badge-waiting { background: #FEF3C7; color: #D97706; border-color: #FDE68A; }
+.badge-adjusted { background: #DBEAFE; color: #1D4ED8; border-color: #BFDBFE; }
+.badge-auto { background: #EDE9FE; color: #7C3AED; border-color: #C4B5FD; }
+.badge-manual { background: #FEF3C7; color: #D97706; border-color: #FDE68A; }
+html.dark-mode .badge-locked, html.dark-mode .badge-rejected { background: #7F1D1D; color: #FCA5A5; border-color: #DC2626; }
+html.dark-mode .badge-open, html.dark-mode .badge-approved { background: #065F46; color: #34D399; border-color: #10B981; }
+html.dark-mode .badge-waiting { background: #5F3A1E; color: #FBBF24; border-color: #D97706; }
+html.dark-mode .badge-adjusted { background: #1E3A5F; color: #60A5FA; border-color: #3B82F6; }
+.main-card .badge { background: rgba(255,255,255,0.25); color: #FFF; border-color: rgba(255,255,255,0.4); backdrop-filter: blur(8px); }
 
 /* ============================================================
-   STATUS UPDATE BAR
+   TOTALS GRID - 3 CARDS
    ============================================================ */
-.status-update-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    padding: 16px 22px;
-    background: var(--ev-card-bg);
-    border-radius: 12px;
-    border: 1.5px solid var(--ev-border);
-    box-shadow: 0 2px 8px var(--ev-shadow);
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}
-.sub-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-.sub-left > i {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #2563EB, #1D4ED8);
-    color: #FFFFFF;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    flex-shrink: 0;
-}
-.sub-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ev-text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-}
-.sub-current {
-    font-size: 13px;
-    color: var(--ev-text-secondary);
-}
-.status-current {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 12px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-}
-.status-orange { background: #FEF3C7; color: #92400E; }
-.status-green { background: #D1FAE5; color: #065F46; }
-.status-blue { background: #DBEAFE; color: #1D4ED8; }
-.status-red { background: #FEE2E2; color: #991B1B; }
-html.dark-mode .status-orange { background: #5F3A1E; color: #FBBF24; }
-html.dark-mode .status-green { background: #065F46; color: #34D399; }
-html.dark-mode .status-blue { background: #1E3A5F; color: #60A5FA; }
-html.dark-mode .status-red { background: #7F1D1D; color: #FCA5A5; }
-
-.sub-form { flex: 0 0 auto; }
-.sub-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.btn-status {
-    padding: 8px 16px;
-    border-radius: 8px;
-    border: 1.5px solid;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    transition: all 0.25s ease;
-    white-space: nowrap;
-    background: transparent;
-}
-.btn-waiting { color: #D97706; border-color: #FCD34D; }
-.btn-waiting:hover:not(:disabled) { background: #FEF3C7; }
-.btn-approved { color: #059669; border-color: #6EE7B7; }
-.btn-approved:hover:not(:disabled) { background: #D1FAE5; }
-.btn-adjusted { color: #2563EB; border-color: #93C5FD; }
-.btn-adjusted:hover:not(:disabled) { background: #DBEAFE; }
-.btn-rejected { color: #DC2626; border-color: #FCA5A5; }
-.btn-rejected:hover:not(:disabled) { background: #FEE2E2; }
-.btn-status:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    background: var(--ev-hover);
-}
-
-/* ============================================================
-   SUMMARY GRID — SEMI-TRANSPARENT COLORS
-   ============================================================ */
-.summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-}
-.summary-card {
-    background: var(--ev-card-bg);
-    border-radius: 14px;
-    padding: 18px 20px;
-    border: 1.5px solid var(--ev-border);
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    box-shadow: 0 2px 8px var(--ev-shadow);
-    transition: all 0.3s ease;
-    min-width: 0;
-}
-.summary-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 28px var(--ev-shadow-md);
-}
-
-/* ✅ Semi-transparent color accents */
-.sc-total-float  { background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(37, 99, 235, 0.08)); }
-.sc-cash         { background: linear-gradient(135deg, rgba(20, 184, 166, 0.15), rgba(13, 148, 136, 0.08)); }
-.sc-deposits     { background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.08)); }
-.sc-withdrawals  { background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.08)); }
-
-.sc-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    flex-shrink: 0;
-    color: #FFFFFF;
-}
-.sc-icon-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); }
-.sc-icon-green { background: linear-gradient(135deg, #10B981, #059669); }
-.sc-icon-teal { background: linear-gradient(135deg, #14B8A6, #0D9488); }
-.sc-icon-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-.sc-content { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.sc-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--ev-text-light);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-.sc-value {
-    font-size: 16px;
-    font-weight: 900;
-    color: var(--ev-text);
-    font-family: 'Inter', 'Courier New', monospace;
-    word-break: break-word;
-}
-.sc-sub {
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--ev-text-light);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-.text-success { color: #10B981; }
-.text-danger { color: #DC2626; }
-.text-muted { color: var(--ev-text-light); }
-
-/* ============================================================
-   DETAILS CARD
-   ============================================================ */
-.details-card {
-    background: var(--ev-card-bg);
-    border-radius: 14px;
-    border: 1.5px solid var(--ev-border);
-    box-shadow: 0 2px 8px var(--ev-shadow);
-    margin-bottom: 20px;
-    overflow: hidden;
-}
-.section-header {
-    padding: 16px 24px;
-    background: var(--ev-hover);
-    border-bottom: 1px solid var(--ev-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-.section-header h3 {
-    font-size: 14px;
-    font-weight: 800;
-    color: var(--ev-text);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-}
-.section-header h3 i { color: #2563EB; font-size: 15px; }
-.section-badge {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--ev-text-secondary);
-    background: var(--ev-card-bg);
-    padding: 4px 14px;
-    border-radius: 12px;
-    text-transform: uppercase;
-    border: 1px solid var(--ev-border);
-}
+.totals-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.total-card { display: flex; align-items: center; gap: 16px; padding: 20px 24px; border-radius: 14px; color: #FFF; box-shadow: 0 4px 16px rgba(0,0,0,0.15); position: relative; overflow: hidden; }
+.total-card::before { content: ''; position: absolute; top: -50%; right: -20%; width: 140px; height: 140px; background: rgba(255,255,255,0.1); border-radius: 50%; }
+.total-float { background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%); }
+.total-cash { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
+.total-cumm { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
+.total-icon { width: 52px; height: 52px; background: rgba(255,255,255,0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; border: 1.5px solid rgba(255,255,255,0.25); position: relative; z-index: 1; }
+.total-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; position: relative; z-index: 1; }
+.total-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; opacity: 0.9; }
+.total-value { font-size: clamp(15px, 1.5vw, 20px); font-weight: 900; font-family: 'Inter', 'Courier New', monospace; word-break: break-all; line-height: 1.2; }
 
 /* ============================================================
    DETAILS GRID
    ============================================================ */
-.details-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0;
-}
-.detail-item {
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--ev-border);
-    border-right: 1px solid var(--ev-border);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-.detail-item:nth-child(2n) { border-right: none; }
-.detail-item:nth-last-child(-n+2) { border-bottom: none; }
-.detail-label {
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--ev-text-light);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.detail-label i { color: #2563EB; font-size: 12px; }
-.detail-value {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--ev-text);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.detail-code {
-    font-family: 'Courier New', monospace;
-    color: #2563EB;
-    font-size: 14px;
-}
-.code-pill {
-    font-size: 11px;
-    font-weight: 700;
-    color: #1D4ED8;
-    background: #DBEAFE;
-    padding: 3px 10px;
-    border-radius: 8px;
-    font-family: 'Courier New', monospace;
-}
-html.dark-mode .code-pill { background: #1E3A5F; color: #60A5FA; }
-.capital-link {
-    font-weight: 700;
-    color: #3B82F6;
-    text-decoration: none;
-    font-family: 'Courier New', monospace;
-    font-size: 13px;
-}
-.capital-link:hover { text-decoration: underline; }
+.details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 18px; }
+.detail-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); }
+.detail-card-header { padding: 16px 20px; background: var(--bg-table-even); border-bottom: 1.5px solid var(--border-color); display: flex; align-items: center; gap: 14px; }
+.detail-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #FFF; flex-shrink: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.detail-card-header h3 { font-size: 15px; font-weight: 800; color: var(--text-primary); margin: 0; }
+.detail-card-body { padding: 18px 20px; }
+
+.info-row { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px dashed var(--border-color); gap: 12px; flex-wrap: wrap; }
+.info-row:last-child { border-bottom: none; }
+.info-label { font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.info-value { font-size: 13px; font-weight: 700; color: var(--text-primary); text-align: right; word-break: break-word; }
+.info-value.mono { font-family: 'Courier New', monospace; color: #1E40AF; }
+html.dark-mode .info-value.mono { color: #93c5fd; }
+
+.employee-box { display: flex; align-items: center; gap: 14px; padding: 16px; background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); border: 2px solid #A7F3D0; border-radius: 12px; margin-bottom: 16px; }
+html.dark-mode .employee-box { background: linear-gradient(135deg, #065F46, #047857); border-color: #10B981; }
+.employee-img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 3px solid #10B981; flex-shrink: 0; }
+.employee-avatar { width: 64px; height: 64px; border-radius: 50%; background: linear-gradient(135deg, #059669, #10B981); color: #FFF; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 24px; flex-shrink: 0; border: 3px solid #10B981; }
+.employee-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.employee-name { font-size: 16px; font-weight: 800; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.employee-code { display: inline-block; padding: 2px 10px; background: #059669; color: #FFF; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; align-self: flex-start; }
 
 /* ============================================================
-   PROVIDERS TABLE — BLUE HEADER
+   PROVIDERS SECTION - BLUE HEADER
    ============================================================ */
-.providers-table-wrapper {
-    overflow-x: auto;
-    background: var(--ev-card-bg);
-}
-.providers-table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 1100px;
-}
-.providers-table thead {
-    background: linear-gradient(135deg, #2563EB, #1D4ED8);
-}
-.providers-table thead th {
-    padding: 12px 14px;
-    text-align: left;
-    font-weight: 700;
-    color: #FFFFFF;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
-}
-.providers-table thead th.text-right { text-align: right; }
-.providers-table tbody tr {
-    border-bottom: 1px solid var(--ev-border);
-    transition: background 0.2s ease;
-}
-.providers-table tbody tr:hover { background: var(--ev-hover); }
-.providers-table tbody td {
-    padding: 12px 14px;
-    font-size: 13px;
-    color: var(--ev-text);
-    vertical-align: middle;
-}
-.providers-table tbody td.text-right { text-align: right; }
-
-.provider-cell {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.provider-icon-sm {
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #FFFFFF;
-    font-size: 13px;
-    flex-shrink: 0;
-    border: 1.5px solid rgba(255, 255, 255, 0.3);
-}
-.provider-info-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-.provider-name {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ev-text);
-    white-space: nowrap;
-}
-.provider-code {
-    font-size: 9px;
-    font-weight: 700;
-    color: #1D4ED8;
-    background: #DBEAFE;
-    padding: 1px 6px;
-    border-radius: 5px;
-    font-family: 'Courier New', monospace;
-    align-self: flex-start;
-}
-html.dark-mode .provider-code { background: #1E3A5F; color: #60A5FA; }
-
-.amount-readonly {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ev-text-secondary);
-    font-family: 'Courier New', monospace;
-}
-.amount-readonly.text-success { color: #10B981; }
-.amount-readonly.text-danger { color: #DC2626; }
-.amount-highlight {
-    font-size: 13px;
-    font-weight: 800;
-    color: #2563EB;
-    font-family: 'Courier New', monospace;
-}
-html.dark-mode .amount-highlight { color: #60A5FA; }
-.amount-total {
-    font-size: 14px;
-    font-weight: 900;
-    color: #059669;
-    font-family: 'Courier New', monospace;
-}
-html.dark-mode .amount-total { color: #34D399; }
-
-.providers-table tfoot {
-    background: var(--ev-hover);
-}
-.providers-table tfoot td {
-    padding: 14px;
-    border-top: 2px solid var(--ev-border);
-}
-.totals-row strong {
-    font-size: 12px;
-    letter-spacing: 1px;
-    color: #2563EB;
-    text-transform: uppercase;
-}
-html.dark-mode .totals-row strong { color: #60A5FA; }
-.total-value {
-    font-size: 14px;
-    font-weight: 900;
-    font-family: 'Courier New', monospace;
-    color: #2563EB;
-}
-html.dark-mode .total-value { color: #60A5FA; }
-.total-value.text-success { color: #10B981; }
-.total-value.text-danger { color: #DC2626; }
-
-/* ============================================================
-   BRANCH CASH SUMMARY CARD
-   ============================================================ */
-.cash-summary-card {
-    background: var(--ev-card-bg);
-    border-radius: 12px;
-    border: 2px solid #FCD34D;
+.providers-section {
+    background: var(--bg-card);
+    border-radius: 14px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    margin-bottom: 18px;
     overflow: hidden;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 8px var(--ev-shadow);
 }
-.csc-header {
-    padding: 12px 20px;
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    font-weight: 800;
-    color: #92400E;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    border-bottom: 2px solid #FCD34D;
-}
-html.dark-mode .csc-header {
-    background: linear-gradient(135deg, #5F3A1E, #78350F);
-    color: #FCD34D;
-    border-bottom-color: #F59E0B;
-}
-.csc-header i { font-size: 16px; }
-.csc-body {
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-.csc-item {
+
+.section-header {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+    padding: 18px 24px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
     flex-wrap: wrap;
+    gap: 10px;
+    color: #FFFFFF;
+    position: relative;
+    overflow: hidden;
 }
-.csc-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ev-text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+.section-header::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -5%;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 50%;
+    pointer-events: none;
 }
-.csc-value {
-    font-size: 20px;
-    font-weight: 900;
-    color: #D97706;
-    font-family: 'Inter', 'Courier New', monospace;
-}
-html.dark-mode .csc-value { color: #FCD34D; }
-.csc-note {
+.section-header-left {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--ev-text-secondary);
-    background: var(--ev-hover);
-    padding: 10px 14px;
-    border-radius: 8px;
-    border-left: 3px solid #FCD34D;
+    gap: 14px;
+    position: relative;
+    z-index: 1;
 }
-.csc-note i { color: #F59E0B; }
+.section-header-icon {
+    width: 46px; height: 46px;
+    background: rgba(255,255,255,0.18);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; color: #FFFFFF;
+    border: 1px solid rgba(255,255,255,0.25);
+}
+.section-header h3 {
+    font-size: 17px;
+    font-weight: 800;
+    margin: 0 0 2px 0;
+    color: #FFFFFF;
+}
+.section-header p {
+    font-size: 12px;
+    margin: 0;
+    color: rgba(255,255,255,0.85);
+    font-weight: 500;
+}
+.section-count-badge {
+    background: rgba(255,255,255,0.22);
+    color: #FFFFFF;
+    padding: 6px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 800;
+    border: 1px solid rgba(255,255,255,0.3);
+    position: relative;
+    z-index: 1;
+}
+
+/* ============================================================
+   PROVIDERS GRID - GREEN THEME - 3 PER ROW
+   ============================================================ */
+.providers-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    padding: 20px;
+}
+
+.provider-card {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 50%, #A7F3D0 100%);
+    border: 2px solid #6EE7B7;
+    border-radius: 16px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    position: relative;
+    min-width: 0;
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.12);
+}
+.provider-card::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 120px; height: 120px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 50%;
+    pointer-events: none;
+}
+html.dark-mode .provider-card {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%);
+    border-color: #10B981;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+}
+.provider-card:hover {
+    border-color: #059669;
+    transform: translateY(-6px);
+    box-shadow: 0 12px 32px rgba(5, 150, 105, 0.3);
+}
+
+.provider-card-header {
+    padding: 14px 16px;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1.5px solid rgba(5, 150, 105, 0.2);
+    position: relative;
+    z-index: 1;
+}
+html.dark-mode .provider-card-header {
+    background: rgba(15, 23, 42, 0.3);
+    border-bottom-color: rgba(16, 185, 129, 0.3);
+}
+.provider-card-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px; height: 28px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #059669, #10B981);
+    color: #FFFFFF;
+    font-size: 12px;
+    font-weight: 800;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(5, 150, 105, 0.3);
+}
+.provider-card-icon {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF;
+    font-size: 17px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.4);
+}
+.provider-card-type { margin-left: auto; flex-shrink: 0; }
+
+.provider-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    border: 1px solid;
+}
+.provider-type-badge i { font-size: 10px; }
+.type-bank { background: rgba(5, 150, 105, 0.15); color: #047857; border-color: rgba(5, 150, 105, 0.3); }
+.type-mobile_money { background: rgba(124, 58, 237, 0.15); color: #6D28D9; border-color: rgba(124, 58, 237, 0.3); }
+.type-other { background: rgba(217, 119, 6, 0.15); color: #B45309; border-color: rgba(217, 119, 6, 0.3); }
+html.dark-mode .type-bank { background: rgba(16, 185, 129, 0.25); color: #6EE7B7; border-color: rgba(16, 185, 129, 0.4); }
+html.dark-mode .type-mobile_money { background: rgba(167, 139, 250, 0.25); color: #C4B5FD; border-color: rgba(139, 92, 246, 0.4); }
+html.dark-mode .type-other { background: rgba(251, 191, 36, 0.25); color: #FCD34D; border-color: rgba(245, 158, 11, 0.4); }
+
+.provider-card-body {
+    padding: 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    z-index: 1;
+}
+.provider-card-name {
+    font-size: 15px;
+    font-weight: 800;
+    color: #065F46;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+    letter-spacing: -0.2px;
+}
+html.dark-mode .provider-card-name { color: #D1FAE5; }
+
+.provider-card-code {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    font-family: 'Courier New', monospace;
+    color: #047857;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 5px 12px;
+    border-radius: 8px;
+    align-self: flex-start;
+    border: 1.5px solid rgba(5, 150, 105, 0.3);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.1);
+}
+.provider-card-code i { font-size: 10px; color: #059669; }
+html.dark-mode .provider-card-code {
+    background: rgba(15, 23, 42, 0.4);
+    color: #6EE7B7;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+html.dark-mode .provider-card-code i { color: #34D399; }
+
+.provider-card-footer {
+    padding: 16px;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    border-top: 2px solid #065F46;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: relative;
+    z-index: 1;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.provider-card-footer-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: rgba(255, 255, 255, 0.85);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.provider-card-footer-label i { font-size: 11px; color: #FCD34D; }
+.provider-card-footer-value {
+    font-size: 20px;
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    color: #FFFFFF;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    word-break: break-all;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* ✅ Extra Row: Opening + Cash */
+.provider-card-extra {
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    border-top: 1px solid rgba(5, 150, 105, 0.15);
+    position: relative;
+    z-index: 1;
+}
+html.dark-mode .provider-card-extra {
+    background: rgba(15, 23, 42, 0.3);
+    border-top-color: rgba(16, 185, 129, 0.2);
+}
+.pce-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #047857;
+    white-space: nowrap;
+}
+html.dark-mode .pce-item { color: #6EE7B7; }
+.pce-label {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.85;
+}
+.pce-value {
+    font-family: 'Courier New', monospace;
+    font-weight: 900;
+    font-size: 11px;
+}
+.pce-item-cash { color: #059669; }
+html.dark-mode .pce-item-cash { color: #34D399; }
+
+/* ============================================================
+   CASH SUMMARY SECTION (BELOW PROVIDERS) - 3 CARDS
+   ============================================================ */
+.cash-summary-section {
+    padding: 0 20px 20px 20px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+.cash-summary-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 22px;
+    border-radius: 14px;
+    color: #FFFFFF;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+}
+.cash-summary-card::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 140px; height: 140px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.float-card { background: linear-gradient(135deg, #1E40AF 0%, #2563EB 100%); }
+.cash-card { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
+.grand-card { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
+.cash-summary-icon {
+    width: 52px; height: 52px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255,255,255,0.25);
+    position: relative;
+    z-index: 1;
+}
+.cash-summary-info {
+    display: flex; flex-direction: column;
+    gap: 4px; min-width: 0; flex: 1;
+    position: relative; z-index: 1;
+}
+.cash-summary-label {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
+    opacity: 0.9;
+}
+.cash-summary-value {
+    font-size: clamp(15px, 1.5vw, 20px);
+    font-weight: 900;
+    font-family: 'Inter', 'Courier New', monospace;
+    word-break: break-all;
+    line-height: 1.2;
+    letter-spacing: -0.3px;
+}
+
+/* ============================================================
+   EMPTY PROVIDERS
+   ============================================================ */
+.empty-providers {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+}
+.empty-providers i {
+    font-size: 56px;
+    color: var(--text-light);
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 16px;
+}
+.empty-providers p {
+    font-size: 14px;
+    margin: 0;
+    font-weight: 600;
+}
 
 /* ============================================================
    NOTES
    ============================================================ */
-.notes-section { padding: 20px 24px; }
-.note-block {
-    background: var(--ev-hover);
-    border-radius: 10px;
-    border-left: 4px solid #2563EB;
-    padding: 14px 18px;
-}
-.note-content {
-    font-size: 14px;
-    color: var(--ev-text);
-    line-height: 1.6;
-    font-weight: 500;
-}
+.notes-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); margin-bottom: 18px; }
+.notes-card-header { padding: 14px 20px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-bottom: 1.5px solid #FCD34D; display: flex; align-items: center; gap: 10px; }
+html.dark-mode .notes-card-header { background: linear-gradient(135deg, #5F3A1E, #78350F); border-color: #D97706; }
+.notes-card-header i { font-size: 18px; color: #D97706; }
+html.dark-mode .notes-card-header i { color: #FBBF24; }
+.notes-card-header h3 { font-size: 15px; font-weight: 800; color: #78350F; margin: 0; }
+html.dark-mode .notes-card-header h3 { color: #FDE68A; }
+.notes-card-body { padding: 18px 20px; }
+.notes-card-body p { font-size: 14px; line-height: 1.7; color: var(--text-primary); margin: 0; }
 
 /* ============================================================
-   AUDIT GRID
+   ACTIONS
    ============================================================ */
-.audit-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0;
-}
-.audit-item {
-    padding: 20px 24px;
-    border-right: 1px solid var(--ev-border);
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
-}
-.audit-item:last-child { border-right: none; }
-.audit-icon {
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1D4ED8;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    flex-shrink: 0;
-    border: 1.5px solid #93C5FD;
-}
-html.dark-mode .audit-icon {
-    background: linear-gradient(135deg, #1E3A5F, #1E40AF);
-    color: #60A5FA;
-    border-color: #3B82F6;
-}
-.audit-content {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-}
-.audit-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--ev-text-light);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-.audit-value {
-    font-size: 14px;
-    font-weight: 800;
-    color: var(--ev-text);
-}
-.audit-sub {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--ev-text-secondary);
-    font-family: 'Courier New', monospace;
-}
-
-/* ============================================================
-   BOTTOM ACTIONS
-   ============================================================ */
-.bottom-actions {
-    display: flex;
-    gap: 12px;
-    justify-content: center;
-    flex-wrap: wrap;
-    padding: 20px;
-    background: var(--ev-card-bg);
-    border-radius: 12px;
-    border: 1.5px solid var(--ev-border);
-    box-shadow: 0 2px 8px var(--ev-shadow);
-}
-.bottom-actions .btn { padding: 12px 24px; font-size: 14px; }
+.actions-card { display: flex; gap: 12px; padding: 20px 24px; background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); box-shadow: 0 2px 8px var(--shadow-color); flex-wrap: wrap; }
+.btn { padding: 12px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.3s ease; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
+.btn-secondary { background: var(--bg-table-even); color: var(--text-secondary); border: 1.5px solid var(--border-color); }
+.btn-secondary:hover { background: var(--bg-table-even); color: var(--text-primary); transform: translateY(-2px); }
+.btn-edit { background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
+.btn-edit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4); color: #FFF; }
+.btn-print { background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3); }
+.btn-print:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4); color: #FFF; }
+.btn-delete { background: linear-gradient(135deg, #DC2626, #B91C1C); color: #FFF; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
+.btn-delete:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4); color: #FFF; }
+.btn-edit-lg { flex: 1; justify-content: center; min-width: 180px; background: linear-gradient(135deg, #F59E0B, #D97706); color: #FFF; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
+.btn-edit-lg:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4); color: #FFF; }
+.btn-print-lg { flex: 1; justify-content: center; min-width: 180px; background: linear-gradient(135deg, #1E40AF, #2563EB); color: #FFF; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.3); }
+.btn-print-lg:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(30, 64, 175, 0.4); color: #FFF; }
 
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-@media (max-width: 1200px) {
-    .summary-grid { grid-template-columns: repeat(2, 1fr); }
-    .audit-grid { grid-template-columns: 1fr; }
-    .audit-item { border-right: none; border-bottom: 1px solid var(--ev-border); }
-    .audit-item:last-child { border-bottom: none; }
-}
 @media (max-width: 1024px) {
-    .hero-card {
-        grid-template-columns: 1fr;
-        text-align: center;
-        gap: 20px;
-    }
-    .hero-icon { margin: 0 auto; }
-    .hero-meta { justify-content: center; }
+    .totals-grid { grid-template-columns: 1fr; }
+    .details-grid { grid-template-columns: 1fr; }
+    .providers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cash-summary-section { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
-    .branch-status-card { flex-direction: column; align-items: flex-start; gap: 12px; padding: 14px 18px; }
-    .branch-status-info { width: 100%; }
+    .branch-indicator { flex-direction: column; align-items: flex-start; }
     .btn-back-card { width: 100%; justify-content: center; }
     .page-header { flex-direction: column; align-items: flex-start; }
-    .header-right { width: 100%; }
-    .header-right .btn { flex: 1; justify-content: center; }
-    .hero-card { padding: 20px 22px; }
-    .hero-icon { width: 64px; height: 64px; font-size: 28px; }
-    .summary-grid { grid-template-columns: 1fr; }
-    .details-grid { grid-template-columns: 1fr; }
-    .detail-item { border-right: none !important; }
-    .status-update-bar { flex-direction: column; align-items: stretch; }
-    .sub-buttons { width: 100%; }
-    .btn-status { flex: 1; justify-content: center; }
-    .bottom-actions { flex-direction: column; }
-    .bottom-actions .btn { width: 100%; justify-content: center; }
+    .page-header .header-right { width: 100%; }
+    .page-header .header-right .btn { flex: 1; justify-content: center; }
+    .main-card { flex-direction: column; text-align: center; padding: 22px 20px; }
+    .main-card-icon { width: 72px; height: 72px; font-size: 32px; }
+    .main-card-badge { width: 100%; }
+    .actions-card { flex-direction: column; }
+    .actions-card .btn { width: 100%; justify-content: center; }
+    .info-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .info-value { text-align: left; }
+    .providers-grid { grid-template-columns: 1fr; }
+    .cash-summary-section { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
-    .hero-icon { width: 56px; height: 56px; font-size: 24px; }
-    .hero-amount { font-size: clamp(22px, 7vw, 32px); }
-    .sc-value { font-size: 14px; }
-    .csc-value { font-size: 16px; }
+    .provider-card-footer-value { font-size: 18px; }
+    .cash-summary-value { font-size: 15px; }
+    .provider-card-icon { width: 38px; height: 38px; font-size: 15px; }
+    .cash-summary-icon { width: 46px; height: 46px; font-size: 18px; }
+}
+
+@media print {
+    .branch-indicator, .page-header, .actions-card, .alert { display: none !important; }
+    .main-wrapper, .main-content { background: #FFF !important; padding: 0 !important; }
+    .main-card, .total-card, .section-header, .cash-summary-card,
+    .provider-card, .provider-card-header, .provider-card-footer,
+    .provider-card-extra {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .providers-grid { grid-template-columns: repeat(3, 1fr); }
 }
 </style>
 
 <script>
-function confirmDelete(reference) {
-    return confirm(
-        'Are you sure you want to DELETE this evening stock?\n\n' +
-        'Reference: ' + reference + '\n\n' +
-        'This action cannot be undone.'
-    );
+function deleteStock(id, number) {
+    if (confirm('Delete evening stock "' + number + '"?\n\nThis action cannot be undone.')) {
+        window.location.href = 'delete.php?id=' + id;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    var successAlert = document.querySelector('.alert-success');
+    if (successAlert) {
+        setTimeout(function() {
+            successAlert.style.transition = 'opacity 0.4s ease';
+            successAlert.style.opacity = '0';
+            setTimeout(function() {
+                if (successAlert.parentElement) successAlert.remove();
+            }, 400);
+        }, 8000);
+    }
+
     function syncDarkMode() {
         var html = document.documentElement;
         var isDark = localStorage.getItem('darkMode') === 'true';
@@ -1590,15 +1181,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     syncDarkMode();
     document.addEventListener('darkModeChanged', function(e) { syncDarkMode(); });
-    
-    var successAlert = document.querySelector('.alert-success');
-    if (successAlert) {
-        setTimeout(function() {
-            successAlert.style.transition = 'opacity 0.4s ease';
-            successAlert.style.opacity = '0';
-            setTimeout(function() { if (successAlert.parentElement) successAlert.remove(); }, 400);
-        }, 5000);
-    }
 });
 </script>
 
