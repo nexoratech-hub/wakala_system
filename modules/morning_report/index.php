@@ -5,14 +5,15 @@
 // 
 // ✅ BLUE THEME
 // ✅ Summary Cards: 2x2 GRID + SOFT BACKGROUND (60% opacity)
+// ✅ Quick Filter Buttons: Today | Yesterday | Last 7 Days | Last 30 Days
 // ✅ "AWAITING STOCK" badge - INAANGALIA TAREHE YA LEO TU
 // ✅ Report Card Design
 // ✅ View/Edit/Delete on Report Header
 // ✅ Provider rows + Footer totals
 // ✅ ALL INSTRUCTIONS IN ENGLISH
 // 
-// 🔧 FIX: Default from_date/to_date = date('Y-m-d') - tarehe ya leo TU
-// 🔧 FIX: "AWAITING STOCK" inaangalia tarehe ya leo TU (sio jana)
+// 🔧 FIX: Default = LAST 7 DAYS (unaona reports za jana na juzi)
+// 🔧 FIX: "AWAITING STOCK" inaangalia tarehe ya leo TU
 // ================================================================
 
 require_once '../../config/config.php';
@@ -74,18 +75,49 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// ✅ FILTERS - DEFAULT = TAREHE YA LEO TU (FIXED!)
+// ✅ FILTERS - DEFAULT = LAST 7 DAYS (FIXED!)
 // ============================================================
 $today_date = date('Y-m-d');
+$week_ago_date = date('Y-m-d', strtotime('-7 days'));
 
-// ✅ FIX: Default from_date = to_date = date('Y-m-d')
-// Hii inaonyesha report za tarehe ya leo TU
-$from_date = isset($_GET['from_date']) ? $_GET['from_date'] : $today_date;
-$to_date   = isset($_GET['to_date'])   ? $_GET['to_date']   : $today_date;
-$search    = isset($_GET['search'])    ? trim($_GET['search']) : '';
+// ✅ Quick filter parameter
+$quick_filter = isset($_GET['quick']) ? $_GET['quick'] : '';
+
+// Handle quick filters
+switch ($quick_filter) {
+    case 'today':
+        $default_from = $today_date;
+        $default_to = $today_date;
+        break;
+    case 'yesterday':
+        $default_from = date('Y-m-d', strtotime('-1 day'));
+        $default_to = date('Y-m-d', strtotime('-1 day'));
+        break;
+    case 'week':
+        $default_from = $week_ago_date;
+        $default_to = $today_date;
+        break;
+    case 'month':
+        $default_from = date('Y-m-d', strtotime('-30 days'));
+        $default_to = $today_date;
+        break;
+    case 'all':
+        $default_from = '2020-01-01';
+        $default_to = $today_date;
+        break;
+    default:
+        // Default = LAST 7 DAYS
+        $default_from = $week_ago_date;
+        $default_to = $today_date;
+        break;
+}
+
+$from_date = isset($_GET['from_date']) && !empty($_GET['from_date']) ? $_GET['from_date'] : $default_from;
+$to_date   = isset($_GET['to_date']) && !empty($_GET['to_date']) ? $_GET['to_date'] : $default_to;
+$search    = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ============================================================
-// ✅ AWAITING STOCK CHECK - TAREHE YA LEO TU (FIXED!)
+// ✅ AWAITING STOCK CHECK - TAREHE YA LEO TU
 // ============================================================
 $awaiting_today = true;
 $awaiting_branch_name = '';
@@ -170,11 +202,7 @@ try {
 // ============================================================
 // ✅ CHECK "AWAITING STOCK" - TAREHE YA LEO TU
 // ============================================================
-// Tunaangalia kama branch iliyochaguliwa ina morning report ya LEO
-// Kama haina, tunaonyesha "AWAITING STOCK" banner
-
 if ($selected_branch > 0) {
-    // Branch moja - angalia kama ina report ya LEO
     $stmt = $db->prepare("
         SELECT COUNT(*) FROM morning_reports 
         WHERE branch_id = ? AND report_date = ?
@@ -182,15 +210,12 @@ if ($selected_branch > 0) {
     $stmt->execute([$selected_branch, $today_date]);
     
     if ($stmt->fetchColumn() > 0) {
-        // Ina report ya leo - haipo awaiting
         $awaiting_today = false;
     } else {
-        // Haina report ya leo - ipo awaiting
         $awaiting_today = true;
         $awaiting_branch_name = $branch_name;
     }
 } else {
-    // All branches - angalia kama KILA branch ina report ya LEO
     $awaiting_branches = [];
     foreach ($branches as $b) {
         $stmt = $db->prepare("
@@ -200,16 +225,13 @@ if ($selected_branch > 0) {
         $stmt->execute([$b['id'], $today_date]);
         
         if ($stmt->fetchColumn() == 0) {
-            // Branch hii haina report ya leo
             $awaiting_branches[] = $b['branch_name'];
         }
     }
     
     if (empty($awaiting_branches)) {
-        // Branch zote zina report za leo
         $awaiting_today = false;
     } else {
-        // Kuna branch ambazo hazina report za leo
         $awaiting_today = true;
         $awaiting_branch_name = implode(', ', $awaiting_branches);
     }
@@ -306,9 +328,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-             ✅ AWAITING STOCK BANNER - INAONEKANA KAMA HAKUNA REPORT YA LEO
-             ============================================================ -->
+        <!-- AWAITING STOCK BANNER -->
         <?php if ($awaiting_today): ?>
             <div class="awaiting-banner">
                 <div class="awaiting-icon">
@@ -332,12 +352,9 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-             SUMMARY CARDS - 2x2 GRID + SOFT BACKGROUND (60% opacity)
-             ============================================================ -->
+        <!-- SUMMARY CARDS - 2x2 GRID -->
         <div class="summary-cards">
             
-            <!-- CARD 1: TOTAL REPORTS (Blue) -->
             <div class="summary-card summary-blue">
                 <div class="sc-bg-icon sc-bg-blue">
                     <i class="fas fa-file-alt"></i>
@@ -348,7 +365,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- CARD 2: TOTAL FLOAT (Green) -->
             <div class="summary-card summary-green">
                 <div class="sc-bg-icon sc-bg-green">
                     <i class="fas fa-coins"></i>
@@ -359,7 +375,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- CARD 3: TOTAL CASH (Orange) -->
             <div class="summary-card summary-orange">
                 <div class="sc-bg-icon sc-bg-orange">
                     <i class="fas fa-money-bill-wave"></i>
@@ -370,7 +385,6 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
-            <!-- CARD 4: GRAND TOTAL (Purple) -->
             <div class="summary-card summary-purple">
                 <div class="sc-bg-icon sc-bg-purple">
                     <i class="fas fa-chart-line"></i>
@@ -381,6 +395,38 @@ include_once '../../includes/admin_topbar.php';
                 </div>
             </div>
 
+        </div>
+
+        <!-- ============================================================
+             ✅ QUICK FILTER BUTTONS (NEW!)
+             ============================================================ -->
+        <div class="quick-filter-bar">
+            <div class="qfb-left">
+                <i class="fas fa-filter"></i>
+                <span class="qfb-label">Quick Filter:</span>
+            </div>
+            <div class="qfb-buttons">
+                <a href="?quick=today&branch_id=<?php echo $selected_branch; ?>" 
+                   class="quick-btn <?php echo $quick_filter === 'today' ? 'active' : ''; ?>">
+                    <i class="fas fa-calendar-day"></i> Today
+                </a>
+                <a href="?quick=yesterday&branch_id=<?php echo $selected_branch; ?>" 
+                   class="quick-btn <?php echo $quick_filter === 'yesterday' ? 'active' : ''; ?>">
+                    <i class="fas fa-calendar-minus"></i> Yesterday
+                </a>
+                <a href="?quick=week&branch_id=<?php echo $selected_branch; ?>" 
+                   class="quick-btn <?php echo $quick_filter === 'week' || $quick_filter === '' ? 'active' : ''; ?>">
+                    <i class="fas fa-calendar-week"></i> Last 7 Days
+                </a>
+                <a href="?quick=month&branch_id=<?php echo $selected_branch; ?>" 
+                   class="quick-btn <?php echo $quick_filter === 'month' ? 'active' : ''; ?>">
+                    <i class="fas fa-calendar-alt"></i> Last 30 Days
+                </a>
+                <a href="?quick=all&branch_id=<?php echo $selected_branch; ?>" 
+                   class="quick-btn <?php echo $quick_filter === 'all' ? 'active' : ''; ?>">
+                    <i class="fas fa-infinity"></i> All Time
+                </a>
+            </div>
         </div>
 
         <!-- FILTERS -->
@@ -442,7 +488,6 @@ include_once '../../includes/admin_topbar.php';
                     <!-- REPORT HEADER -->
                     <div class="report-header">
                         
-                        <!-- LEFT: Report Info -->
                         <div class="report-header-info">
                             <div class="report-header-icon">
                                 <i class="fas fa-sun"></i>
@@ -475,7 +520,6 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         </div>
                         
-                        <!-- CENTER: Employee -->
                         <div class="report-header-employee">
                             <div class="employee-cell">
                                 <?php if ($avatar && file_exists('../../' . $avatar)): ?>
@@ -505,7 +549,6 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         </div>
                         
-                        <!-- RIGHT: Action Buttons (View + Edit + Delete) -->
                         <div class="report-header-actions">
                             <a href="view.php?id=<?php echo $rid; ?>" 
                                class="btn-action-header btn-view-header"
@@ -595,7 +638,6 @@ include_once '../../includes/admin_topbar.php';
                                     <?php endforeach; ?>
                                 </tbody>
                                 <tfoot>
-                                    <!-- TOTAL FLOAT -->
                                     <tr class="total-float-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label">
@@ -608,7 +650,6 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                     </tr>
-                                    <!-- CASH -->
                                     <tr class="cash-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label">
@@ -621,7 +662,6 @@ include_once '../../includes/admin_topbar.php';
                                             </span>
                                         </td>
                                     </tr>
-                                    <!-- GRAND TOTAL -->
                                     <tr class="grand-total-row">
                                         <td colspan="4" class="text-right">
                                             <span class="tfoot-label grand">
@@ -652,7 +692,10 @@ include_once '../../includes/admin_topbar.php';
             <div class="empty-state">
                 <i class="fas fa-sun"></i>
                 <h3>No Morning Reports</h3>
-                <p>No morning reports found for today (<?php echo date('d M Y'); ?>).</p>
+                <p>No morning reports found between <strong><?php echo date('d M Y', strtotime($from_date)); ?></strong> and <strong><?php echo date('d M Y', strtotime($to_date)); ?></strong>.</p>
+                <p style="font-size: 12px; color: #9CA3AF; margin-bottom: 20px;">
+                    Try changing the date range or use the quick filter buttons above.
+                </p>
                 <button type="button" class="btn-add" onclick="openAddPicker()">
                     <i class="fas fa-plus-circle"></i> Create First Report
                 </button>
@@ -822,7 +865,7 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
 @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ============================================================
-   AWAITING STOCK BANNER - ENGLISH
+   AWAITING STOCK BANNER
    ============================================================ */
 .awaiting-banner {
     background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 50%, #FCD34D 100%);
@@ -891,7 +934,6 @@ html.dark-mode .awaiting-content p { color: #FDE68A; }
     border-radius: 4px;
     font-weight: 800;
 }
-html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #FCD34D; }
 .awaiting-action { position: relative; z-index: 1; flex-shrink: 0; }
 .btn-awaiting-add {
     background: linear-gradient(135deg, #D97706 0%, #B45309 100%);
@@ -912,7 +954,7 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
 }
 
 /* ============================================================
-   ✅ SUMMARY CARDS - SOFT BACKGROUND (60% opacity)
+   SUMMARY CARDS - 2x2
    ============================================================ */
 .summary-cards {
     display: grid;
@@ -921,7 +963,6 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
     margin-bottom: 20px;
     width: 100%;
 }
-
 .summary-card {
     position: relative;
     display: flex;
@@ -935,7 +976,6 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
     min-width: 0;
     overflow: hidden;
 }
-
 .summary-blue {
     background: linear-gradient(135deg, rgba(219, 234, 254, 0.6) 0%, rgba(191, 219, 254, 0.6) 100%);
     border-color: rgba(59, 130, 246, 0.4);
@@ -952,7 +992,6 @@ html.dark-mode .awaiting-content strong { background: rgba(0,0,0,0.25); color: #
     background: linear-gradient(135deg, rgba(237, 233, 254, 0.6) 0%, rgba(221, 214, 254, 0.6) 100%);
     border-color: rgba(139, 92, 246, 0.4);
 }
-
 html.dark-mode .summary-blue {
     background: linear-gradient(135deg, rgba(30, 58, 95, 0.6) 0%, rgba(30, 64, 175, 0.6) 100%);
     border-color: rgba(59, 130, 246, 0.5);
@@ -969,16 +1008,13 @@ html.dark-mode .summary-purple {
     background: linear-gradient(135deg, rgba(76, 29, 149, 0.6) 0%, rgba(91, 33, 182, 0.6) 100%);
     border-color: rgba(139, 92, 246, 0.5);
 }
-
 .summary-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
-
 .sc-bg-icon {
     position: absolute;
-    right: -10px;
-    bottom: -15px;
+    right: -10px; bottom: -15px;
     font-size: 110px;
     opacity: 0.08;
     pointer-events: none;
@@ -989,13 +1025,11 @@ html.dark-mode .summary-purple {
 .sc-bg-green { color: #059669; }
 .sc-bg-orange { color: #d97706; }
 .sc-bg-purple { color: #7c3aed; }
-
 html.dark-mode .sc-bg-icon { opacity: 0.12; }
 html.dark-mode .sc-bg-blue { color: #60a5fa; }
 html.dark-mode .sc-bg-green { color: #34d399; }
 html.dark-mode .sc-bg-orange { color: #fbbf24; }
 html.dark-mode .sc-bg-purple { color: #a78bfa; }
-
 .sc-content {
     display: flex;
     flex-direction: column;
@@ -1005,7 +1039,6 @@ html.dark-mode .sc-bg-purple { color: #a78bfa; }
     position: relative;
     z-index: 1;
 }
-
 .sc-label {
     font-size: 11px;
     text-transform: uppercase;
@@ -1015,7 +1048,6 @@ html.dark-mode .sc-bg-purple { color: #a78bfa; }
     overflow: hidden;
     text-overflow: ellipsis;
 }
-
 .sc-value {
     font-size: 26px;
     font-weight: 900;
@@ -1027,7 +1059,6 @@ html.dark-mode .sc-bg-purple { color: #a78bfa; }
     max-width: 100%;
     font-family: 'Inter', 'Courier New', monospace;
 }
-
 .summary-blue .sc-label { color: #1e40af; }
 .summary-blue .sc-value { color: #1e3a8a; }
 .summary-green .sc-label { color: #047857; }
@@ -1036,7 +1067,6 @@ html.dark-mode .sc-bg-purple { color: #a78bfa; }
 .summary-orange .sc-value { color: #78350F; }
 .summary-purple .sc-label { color: #6D28D9; }
 .summary-purple .sc-value { color: #4C1D95; }
-
 html.dark-mode .summary-blue .sc-label { color: #93c5fd; }
 html.dark-mode .summary-blue .sc-value { color: #DBEAFE; }
 html.dark-mode .summary-green .sc-label { color: #6ee7b7; }
@@ -1045,6 +1075,71 @@ html.dark-mode .summary-orange .sc-label { color: #fcd34d; }
 html.dark-mode .summary-orange .sc-value { color: #FEF3C7; }
 html.dark-mode .summary-purple .sc-label { color: #c4b5fd; }
 html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
+
+/* ============================================================
+   ✅ QUICK FILTER BAR (NEW!)
+   ============================================================ */
+.quick-filter-bar {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 12px 18px;
+    margin-bottom: 14px;
+    border: 1.5px solid var(--border-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.qfb-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+.qfb-left i { color: #1e40af; font-size: 14px; }
+.qfb-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+.quick-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 14px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.25s ease;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.quick-btn:hover {
+    background: var(--bg-table-hover);
+    color: #1e40af;
+    border-color: #3b82f6;
+    transform: translateY(-1px);
+}
+.quick-btn.active {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+    color: #FFFFFF;
+    border-color: #1e40af;
+    box-shadow: 0 3px 10px rgba(30, 64, 175, 0.35);
+}
+.quick-btn i { font-size: 11px; }
 
 /* ============================================================
    FILTERS
@@ -1078,9 +1173,6 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
     border-color: var(--blue-light);
 }
 
-/* ============================================================
-   REPORT HEADER
-   ============================================================ */
 .report-header {
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
     padding: 20px 24px;
@@ -1100,7 +1192,6 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
     background: rgba(255, 255, 255, 0.08);
     border-radius: 50%; pointer-events: none;
 }
-
 .report-header-info { display: flex; align-items: center; gap: 16px; position: relative; z-index: 1; min-width: 0; }
 .report-header-icon {
     width: 54px; height: 54px;
@@ -1244,7 +1335,6 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
     font-family: 'Inter', sans-serif;
 }
 .btn-action-header i { font-size: 13px; }
-.btn-action-header span { display: inline-block; }
 
 .btn-view-header {
     background: #FFFFFF;
@@ -1317,9 +1407,8 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
 /* ============================================================
    REPORT BODY - PROVIDER TABLE
    ============================================================ */
-.report-body { padding: 0; background: var(--bg-card); }
-
-.provider-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.report-body { padding: 0; background: var(--bg-card); overflow-x: auto; }
+.provider-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 700px; }
 
 .provider-table thead tr {
     background: var(--bg-table-even);
@@ -1486,6 +1575,7 @@ html.dark-mode .grand-total-row .tfoot-label { color: #fcd34d; }
 .empty-state i { font-size: 56px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 16px; }
 .empty-state h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
 .empty-state p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
+.empty-state p strong { color: #1e40af; font-weight: 800; }
 
 /* ============================================================
    MODAL
@@ -1623,6 +1713,10 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .sc-value { font-size: 18px; letter-spacing: -0.3px; }
     .sc-label { font-size: 9px; letter-spacing: 0.8px; }
 
+    .quick-filter-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+    .qfb-buttons { justify-content: center; }
+    .quick-btn { flex: 1; min-width: 100px; justify-content: center; }
+
     .filters-form { flex-direction: column; }
     .filter-group { width: 100%; }
     .filter-group .form-control { width: 100%; }
@@ -1662,10 +1756,10 @@ html.dark-mode .bpc-code { background: #1e3a5f; color: #93c5fd; }
     .sc-label { font-size: 8px; }
     .report-header-number { font-size: 12px; }
     .btn-action-header { padding: 8px 10px; font-size: 10px; }
-    .btn-action-header span { font-size: 10px; }
     .provider-table { min-width: 500px; }
     .provider-table thead th { padding: 8px 10px; font-size: 8px; }
     .provider-table tbody td { padding: 10px 10px; }
+    .quick-btn { font-size: 10px; padding: 6px 10px; }
 }
 </style>
 

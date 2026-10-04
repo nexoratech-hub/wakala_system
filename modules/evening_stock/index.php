@@ -2,10 +2,8 @@
 // ================================================================
 // FILE: modules/evening_stock/index.php
 // EVENING STOCK - ADMIN INDEX (BLUE THEME)
-// ✅ Provider-per-row (kama Morning Report)
-// ✅ Cash inasomwa kutoka evening_stocks.cash_balance
-// ✅ Float inahesabiwa kutoka evening_stock_providers.closing_float
-// ✅ Grand Total = Float + Cash
+// ✅ OPENING inachukuliwa kutoka MORNING REPORT
+// ✅ CLOSING inachukuliwa kutoka DAILY REPORT (fallback: evening_stock_providers)
 // ================================================================
 
 error_reporting(E_ALL);
@@ -35,7 +33,9 @@ if ($role !== 'admin' && $role !== 'super_admin') {
 // ============================================================
 // GET FILTERS
 // ============================================================
-$from_date     = isset($_GET['from_date']) ? $_GET['from_date'] : date('Y-m-d');
+$yesterday = date('Y-m-d', strtotime('-1 day'));
+
+$from_date     = isset($_GET['from_date']) ? $_GET['from_date'] : $yesterday;
 $to_date       = isset($_GET['to_date'])   ? $_GET['to_date']   : date('Y-m-d');
 $status_filter = isset($_GET['status'])    ? $_GET['status']    : '';
 
@@ -73,12 +73,72 @@ if ($selected_branch > 0) {
 }
 
 // ============================================================
-// FETCH EVENING STOCKS + PROVIDERS
+// HELPER: Chukua OPENING kutoka Morning Report
+// ============================================================
+function getMorningOpening($db, $stock_date, $branch_id) {
+    $map = [];
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                mrp.provider_id,
+                mrp.float_balance  AS opening_float,
+                mrp.cash_balance   AS opening_cash
+            FROM morning_report_providers mrp
+            INNER JOIN morning_reports mr ON mrp.report_id = mr.id
+            WHERE mr.report_date = ?
+              AND mr.branch_id = ?
+        ");
+        $stmt->execute([$stock_date, $branch_id]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[intval($row['provider_id'])] = [
+                'float' => floatval($row['opening_float']),
+                'cash'  => floatval($row['opening_cash']),
+            ];
+        }
+    } catch (PDOException $e) {
+        error_log("Morning fetch error: " . $e->getMessage());
+    }
+    return $map;
+}
+
+// ============================================================
+// HELPER: Chukua CLOSING kutoka Daily Report
+// ============================================================
+function getDailyClosing($db, $stock_date, $branch_id) {
+    $map = [];
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                drp.provider_id,
+                drp.float_balance  AS closing_float,
+                drp.cash_balance   AS closing_cash
+            FROM daily_report_providers drp
+            INNER JOIN daily_reports dr ON drp.report_id = dr.id
+            WHERE dr.report_date = ?
+              AND dr.branch_id = ?
+        ");
+        $stmt->execute([$stock_date, $branch_id]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[intval($row['provider_id'])] = [
+                'float' => floatval($row['closing_float']),
+                'cash'  => floatval($row['closing_cash']),
+            ];
+        }
+    } catch (PDOException $e) {
+        error_log("Daily fetch error: " . $e->getMessage());
+    }
+    return $map;
+}
+
+// ============================================================
+// FETCH EVENING STOCKS
 // ============================================================
 $stocks = [];
 $total_stocks = 0;
-$total_float = 0;
-$total_cash = 0;
+$total_opening_float = 0;
+$total_opening_cash  = 0;
+$total_closing_float = 0;
+$total_closing_cash  = 0;
 $total_waiting = 0;
 $total_approved = 0;
 $total_adjusted = 0;
@@ -118,8 +178,20 @@ try {
     $stmt->execute($params);
     $stocks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // 2. Fetch providers for each stock
+    // 2. Kwa kila stock, chukua opening (morning) + closing (daily/fallback)
     foreach ($stocks as &$stock) {
+
+        $stock_id     = intval($stock['id']);
+        $stock_date   = $stock['stock_date'];
+        $stock_branch = intval($stock['branch_id']);
+
+        // OPENING kutoka Morning Report
+        $morning_map = getMorningOpening($db, $stock_date, $stock_branch);
+
+        // CLOSING kutoka Daily Report
+        $daily_map = getDailyClosing($db, $stock_date, $stock_branch);
+
+        // Providers list kutoka evening_stock_providers
         $stmt_p = $db->prepare("
             SELECT 
                 esp.*,
@@ -129,29 +201,73 @@ try {
             WHERE esp.evening_stock_id = ?
             ORDER BY p.display_order, esp.provider_name
         ");
-        $stmt_p->execute([$stock['id']]);
-        $stock['providers'] = $stmt_p->fetchAll(PDO::FETCH_ASSOC);
+        $stmt_p->execute([$stock_id]);
+        $evening_providers = $stmt_p->fetchAll(PDO::FETCH_ASSOC);
 
-        // ✅ Calculate totals
-        // FLOAT = SUM ya closing_float kutoka providers
-        $stock['total_float'] = 0;
-        foreach ($stock['providers'] as $p) {
-            $stock['total_float'] += floatval($p['closing_float']);
+        // Unganisha data
+        $merged_providers = [];
+        $stock_opening_float = 0;
+        $stock_opening_cash  = 0;
+        $stock_closing_float = 0;
+        $stock_closing_cash  = 0;
+
+        foreach ($evening_providers as $ep) {
+            $pid = intval($ep['provider_id']);
+
+            // OPENING — Morning Report
+            $opening_float = isset($morning_map[$pid]) ? $morning_map[$pid]['float'] : 0;
+            $opening_cash  = isset($morning_map[$pid]) ? $morning_map[$pid]['cash']  : 0;
+
+            // CLOSING — Daily Report; kama haipo, tumia evening_stock_providers (fallback)
+            if (isset($daily_map[$pid])) {
+                $closing_float = $daily_map[$pid]['float'];
+                $closing_cash  = $daily_map[$pid]['cash'];
+            } else {
+                // FALLBACK: Chukua kutoka evening_stock_providers
+                $closing_float = floatval($ep['closing_float']);
+                $closing_cash  = floatval($ep['closing_cash']);
+            }
+
+            $total_row = $closing_float + $closing_cash;
+
+            $merged_providers[] = [
+                'provider_id'    => $pid,
+                'provider_code'  => $ep['provider_code'],
+                'provider_name'  => $ep['provider_name'],
+                'icon_class'     => $ep['icon_class']    ?? 'fas fa-university',
+                'color_code'     => $ep['color_code']    ?? '#1e40af',
+                'provider_type'  => $ep['provider_type'] ?? 'bank',
+                'display_order'  => $ep['display_order'] ?? 999,
+                'opening_float'  => $opening_float,
+                'opening_cash'   => $opening_cash,
+                'closing_float'  => $closing_float,
+                'closing_cash'   => $closing_cash,
+                'total'          => $total_row,
+            ];
+
+            $stock_opening_float += $opening_float;
+            $stock_opening_cash  += $opening_cash;
+            $stock_closing_float += $closing_float;
+            $stock_closing_cash  += $closing_cash;
         }
-        
-        // ✅ CASH inatoka evening_stocks.cash_balance (siyo providers)
-        $stock['total_cash'] = floatval($stock['cash_balance'] ?? 0);
-        
-        $stock['provider_count'] = count($stock['providers']);
-        $stock['grand_total'] = $stock['total_float'] + $stock['total_cash'];
+
+        $stock['providers']          = $merged_providers;
+        $stock['provider_count']     = count($merged_providers);
+        $stock['stock_opening_float']= $stock_opening_float;
+        $stock['stock_opening_cash'] = $stock_opening_cash;
+        $stock['stock_closing_float']= $stock_closing_float;
+        $stock['stock_closing_cash'] = $stock_closing_cash;
+        $stock['grand_total']        = $stock_closing_float + $stock_closing_cash;
     }
     unset($stock);
 
     // 3. Grand totals
     $total_stocks = count($stocks);
     foreach ($stocks as $s) {
-        $total_float += $s['total_float'];
-        $total_cash  += $s['total_cash'];
+        $total_opening_float += $s['stock_opening_float'];
+        $total_opening_cash  += $s['stock_opening_cash'];
+        $total_closing_float += $s['stock_closing_float'];
+        $total_closing_cash  += $s['stock_closing_cash'];
 
         switch ($s['status']) {
             case 'waiting':  $total_waiting++;  break;
@@ -194,10 +310,8 @@ include_once '../../includes/admin_topbar.php';
 
 <div class="main-wrapper">
     <div class="main-content">
-        
-        <!-- ============================================================
-        BRANCH INDICATOR - BLUE THEME
-        ============================================================ -->
+
+        <!-- BRANCH INDICATOR -->
         <div class="branch-indicator">
             <div class="branch-indicator-left">
                 <div class="branch-icon-wrapper">
@@ -227,13 +341,11 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        PAGE HEADER
-        ============================================================ -->
+        <!-- PAGE HEADER -->
         <div class="page-header">
             <div class="header-left">
                 <h2><i class="fas fa-moon" style="color:#1E40AF;"></i> Evening Stock</h2>
-                <p class="text-muted">Provider-by-provider closing balances</p>
+                <p class="text-muted">Opening (Morning) → Closing (Daily Report)</p>
             </div>
             <div class="header-right">
                 <a href="add.php?branch=<?php echo $selected_branch; ?>&date=<?php echo date('Y-m-d'); ?>" class="btn-add">
@@ -251,9 +363,7 @@ include_once '../../includes/admin_topbar.php';
             </div>
         </div>
 
-        <!-- ============================================================
-        ALERTS
-        ============================================================ -->
+        <!-- ALERTS -->
         <?php if (!empty($success_message)): ?>
             <div class="alert alert-success">
                 <i class="fas fa-check-circle"></i>
@@ -270,15 +380,11 @@ include_once '../../includes/admin_topbar.php';
             </div>
         <?php endif; ?>
 
-        <!-- ============================================================
-        SUMMARY CARDS - 2x2 GRID
-        ============================================================ -->
+        <!-- SUMMARY CARDS -->
         <div class="summary-cards">
-            
+
             <div class="summary-card summary-blue">
-                <div class="sc-bg-icon sc-bg-blue">
-                    <i class="fas fa-file-alt"></i>
-                </div>
+                <div class="sc-bg-icon sc-bg-blue"><i class="fas fa-file-alt"></i></div>
                 <div class="sc-content">
                     <span class="sc-label">Total Stocks</span>
                     <span class="sc-value"><?php echo number_format($total_stocks); ?></span>
@@ -286,40 +392,48 @@ include_once '../../includes/admin_topbar.php';
             </div>
 
             <div class="summary-card summary-green">
-                <div class="sc-bg-icon sc-bg-green">
-                    <i class="fas fa-coins"></i>
-                </div>
+                <div class="sc-bg-icon sc-bg-green"><i class="fas fa-coins"></i></div>
                 <div class="sc-content">
-                    <span class="sc-label">Total Float</span>
-                    <span class="sc-value"><?php echo formatCurrency($total_float); ?></span>
+                    <span class="sc-label">Opening Float</span>
+                    <span class="sc-value"><?php echo formatCurrency($total_opening_float); ?></span>
                 </div>
             </div>
 
             <div class="summary-card summary-orange">
-                <div class="sc-bg-icon sc-bg-orange">
-                    <i class="fas fa-money-bill-wave"></i>
-                </div>
+                <div class="sc-bg-icon sc-bg-orange"><i class="fas fa-money-bill-wave"></i></div>
                 <div class="sc-content">
-                    <span class="sc-label">Total Cash</span>
-                    <span class="sc-value"><?php echo formatCurrency($total_cash); ?></span>
+                    <span class="sc-label">Opening Cash</span>
+                    <span class="sc-value"><?php echo formatCurrency($total_opening_cash); ?></span>
                 </div>
             </div>
 
             <div class="summary-card summary-purple">
-                <div class="sc-bg-icon sc-bg-purple">
-                    <i class="fas fa-chart-line"></i>
+                <div class="sc-bg-icon sc-bg-purple"><i class="fas fa-chart-line"></i></div>
+                <div class="sc-content">
+                    <span class="sc-label">Closing Float</span>
+                    <span class="sc-value"><?php echo formatCurrency($total_closing_float); ?></span>
                 </div>
+            </div>
+
+            <div class="summary-card summary-blue">
+                <div class="sc-bg-icon sc-bg-blue"><i class="fas fa-wallet"></i></div>
+                <div class="sc-content">
+                    <span class="sc-label">Closing Cash</span>
+                    <span class="sc-value"><?php echo formatCurrency($total_closing_cash); ?></span>
+                </div>
+            </div>
+
+            <div class="summary-card summary-purple">
+                <div class="sc-bg-icon sc-bg-purple"><i class="fas fa-calculator"></i></div>
                 <div class="sc-content">
                     <span class="sc-label">Grand Total</span>
-                    <span class="sc-value"><?php echo formatCurrency($total_float + $total_cash); ?></span>
+                    <span class="sc-value"><?php echo formatCurrency($total_closing_float + $total_closing_cash); ?></span>
                 </div>
             </div>
 
         </div>
 
-        <!-- ============================================================
-        FILTERS
-        ============================================================ -->
+        <!-- FILTERS -->
         <div class="filters-bar">
             <form method="GET" action="" class="filters-form">
                 <div class="filter-group">
@@ -363,29 +477,24 @@ include_once '../../includes/admin_topbar.php';
             </form>
         </div>
 
-        <!-- ============================================================
-        REPORT CARDS - PROVIDER PER ROW
-        ============================================================ -->
+        <!-- REPORT CARDS -->
         <?php if (count($stocks) > 0): ?>
-            
+
             <?php foreach ($stocks as $stock): 
                 $sid = intval($stock['id']);
                 $emp_initial = strtoupper(substr($stock['employee_name'] ?? 'N', 0, 1));
                 $avatar = $stock['employee_avatar'] ?? '';
                 $providers = $stock['providers'] ?? [];
                 $provider_count = count($providers);
-                $stock_float = floatval($stock['total_float']);
-                $stock_cash = floatval($stock['total_cash']);
-                $stock_total = $stock_float + $stock_cash;
-                
+                $stock_total = $stock['grand_total'];
                 $status_info = $status_labels[$stock['status']] ?? ['label' => $stock['status'], 'icon' => 'fa-circle', 'color' => 'gray'];
             ?>
-                
+
                 <div class="report-card">
-                    
+
                     <!-- REPORT HEADER -->
                     <div class="report-header">
-                        
+
                         <div class="report-header-info">
                             <div class="report-header-icon">
                                 <i class="fas fa-moon"></i>
@@ -410,8 +519,7 @@ include_once '../../includes/admin_topbar.php';
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- CENTER: Employee -->
+
                         <div class="report-header-employee">
                             <div class="employee-cell">
                                 <?php if ($avatar && file_exists('../../' . $avatar)): ?>
@@ -424,39 +532,24 @@ include_once '../../includes/admin_topbar.php';
                                     <span class="emp-code"><?php echo htmlspecialchars($stock['employee_code'] ?? '-'); ?></span>
                                 </div>
                             </div>
-                            <div class="employee-cash">
-                                <i class="fas fa-money-bill-wave"></i>
-                                Cash: <strong><?php echo formatCurrency($stock_cash); ?></strong>
-                            </div>
                         </div>
-                        
-                        <!-- RIGHT: Actions -->
+
                         <div class="report-header-actions">
-                            <a href="view.php?id=<?php echo $sid; ?>" 
-                               class="btn-action-header btn-view-header"
-                               title="View Stock">
-                                <i class="fas fa-eye"></i>
-                                <span>View</span>
+                            <a href="view.php?id=<?php echo $sid; ?>" class="btn-action-header btn-view-header" title="View Stock">
+                                <i class="fas fa-eye"></i><span>View</span>
                             </a>
-                            
-                            <a href="edit.php?id=<?php echo $sid; ?>" 
-                               class="btn-action-header btn-edit-header"
-                               title="Edit Stock">
-                                <i class="fas fa-edit"></i>
-                                <span>Edit</span>
+                            <a href="edit.php?id=<?php echo $sid; ?>" class="btn-action-header btn-edit-header" title="Edit Stock">
+                                <i class="fas fa-edit"></i><span>Edit</span>
                             </a>
-                            
                             <button onclick="deleteStock(<?php echo $sid; ?>, '<?php echo addslashes($stock['stock_number']); ?>')" 
-                                    class="btn-action-header btn-delete-header"
-                                    title="Delete Stock">
-                                <i class="fas fa-trash"></i>
-                                <span>Delete</span>
+                                    class="btn-action-header btn-delete-header" title="Delete Stock">
+                                <i class="fas fa-trash"></i><span>Delete</span>
                             </button>
                         </div>
-                        
+
                     </div>
-                    
-                    <!-- REPORT BODY (Provider Table) -->
+
+                    <!-- REPORT BODY -->
                     <div class="report-body">
                         <?php if ($provider_count > 0): ?>
                             <table class="provider-table">
@@ -464,12 +557,13 @@ include_once '../../includes/admin_topbar.php';
                                     <tr>
                                         <th style="width:50px;">#</th>
                                         <th>Provider</th>
-                                        <th style="width:150px;">Code</th>
-                                        <th style="width:150px;">Type</th>
-                                        <th class="text-right" style="width:180px;">Opening Float</th>
-                                        <th class="text-right" style="width:180px;">Closing Float</th>
-                                        <th class="text-right" style="width:180px;">Closing Cash</th>
-                                        <th class="text-right" style="width:180px;">Total</th>
+                                        <th style="width:130px;">Code</th>
+                                        <th style="width:140px;">Type</th>
+                                        <th class="text-right" style="width:150px;">Opening Float</th>
+                                        <th class="text-right" style="width:150px;">Opening Cash</th>
+                                        <th class="text-right" style="width:150px;">Closing Float</th>
+                                        <th class="text-right" style="width:150px;">Closing Cash</th>
+                                        <th class="text-right" style="width:150px;">Total</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -480,30 +574,23 @@ include_once '../../includes/admin_topbar.php';
                                         $p_type_label = ucfirst(str_replace('_', ' ', $p_type));
                                         $p_code = $p['provider_code'] ?? '-';
                                         $p_name = $p['provider_name'] ?? 'N/A';
-                                        $p_opening = floatval($p['opening_float']);
-                                        $p_closing = floatval($p['closing_float']);
-                                        $p_cash = floatval($p['closing_cash']);
-                                        $p_total = $p_closing + $p_cash;
+                                        $p_opening_float = floatval($p['opening_float']);
+                                        $p_opening_cash  = floatval($p['opening_cash']);
+                                        $p_closing_float = floatval($p['closing_float']);
+                                        $p_closing_cash  = floatval($p['closing_cash']);
+                                        $p_total = $p_closing_float + $p_closing_cash;
                                     ?>
                                         <tr>
-                                            <td>
-                                                <span class="provider-row-number"><?php echo $pi++; ?></span>
-                                            </td>
+                                            <td><span class="provider-row-number"><?php echo $pi++; ?></span></td>
                                             <td>
                                                 <div class="provider-cell">
                                                     <div class="provider-icon" style="background: <?php echo htmlspecialchars($p_color); ?>;">
                                                         <i class="<?php echo htmlspecialchars($p_icon); ?>"></i>
                                                     </div>
-                                                    <span class="provider-name">
-                                                        <?php echo htmlspecialchars($p_name); ?>
-                                                    </span>
+                                                    <span class="provider-name"><?php echo htmlspecialchars($p_name); ?></span>
                                                 </div>
                                             </td>
-                                            <td>
-                                                <span class="code-badge">
-                                                    <?php echo htmlspecialchars($p_code); ?>
-                                                </span>
-                                            </td>
+                                            <td><span class="code-badge"><?php echo htmlspecialchars($p_code); ?></span></td>
                                             <td>
                                                 <span class="provider-type-badge type-<?php echo htmlspecialchars($p_type); ?>">
                                                     <i class="fas fa-<?php echo $p_type === 'mobile_money' ? 'mobile-alt' : ($p_type === 'bank' ? 'university' : 'wallet'); ?>"></i>
@@ -512,17 +599,22 @@ include_once '../../includes/admin_topbar.php';
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-badge amount-opening">
-                                                    <?php echo formatCurrency($p_opening); ?>
+                                                    <?php echo formatCurrency($p_opening_float); ?>
+                                                </span>
+                                            </td>
+                                            <td class="text-right">
+                                                <span class="amount-badge amount-opening">
+                                                    <?php echo formatCurrency($p_opening_cash); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-badge amount-float">
-                                                    <?php echo formatCurrency($p_closing); ?>
+                                                    <?php echo formatCurrency($p_closing_float); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
                                                 <span class="amount-badge amount-cash">
-                                                    <?php echo formatCurrency($p_cash); ?>
+                                                    <?php echo formatCurrency($p_closing_cash); ?>
                                                 </span>
                                             </td>
                                             <td class="text-right">
@@ -534,43 +626,44 @@ include_once '../../includes/admin_topbar.php';
                                     <?php endforeach; ?>
                                 </tbody>
                                 <tfoot>
-                                    <!-- TOTAL FLOAT -->
+                                    <tr class="opening-float-row">
+                                        <td colspan="8" class="text-right">
+                                            <span class="tfoot-label"><i class="fas fa-coins"></i> TOTAL OPENING FLOAT (Morning)</span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="amount-badge amount-opening"><?php echo formatCurrency($stock['stock_opening_float']); ?></span>
+                                        </td>
+                                    </tr>
+                                    <tr class="opening-cash-row">
+                                        <td colspan="8" class="text-right">
+                                            <span class="tfoot-label"><i class="fas fa-money-bill-wave"></i> TOTAL OPENING CASH (Morning)</span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="amount-badge amount-opening"><?php echo formatCurrency($stock['stock_opening_cash']); ?></span>
+                                        </td>
+                                    </tr>
                                     <tr class="total-float-row">
-                                        <td colspan="7" class="text-right">
-                                            <span class="tfoot-label">
-                                                <i class="fas fa-coins"></i> TOTAL FLOAT (Closing)
-                                            </span>
+                                        <td colspan="8" class="text-right">
+                                            <span class="tfoot-label"><i class="fas fa-coins"></i> TOTAL CLOSING FLOAT (Daily)</span>
                                         </td>
                                         <td class="text-right">
-                                            <span class="amount-badge amount-total">
-                                                <?php echo formatCurrency($stock_float); ?>
-                                            </span>
+                                            <span class="amount-badge amount-total"><?php echo formatCurrency($stock['stock_closing_float']); ?></span>
                                         </td>
                                     </tr>
-                                    <!-- CASH -->
                                     <tr class="cash-row">
-                                        <td colspan="7" class="text-right">
-                                            <span class="tfoot-label">
-                                                <i class="fas fa-money-bill-wave"></i> TOTAL CASH (Closing)
-                                            </span>
+                                        <td colspan="8" class="text-right">
+                                            <span class="tfoot-label"><i class="fas fa-money-bill-wave"></i> TOTAL CLOSING CASH (Daily)</span>
                                         </td>
                                         <td class="text-right">
-                                            <span class="amount-badge amount-cash">
-                                                <?php echo formatCurrency($stock_cash); ?>
-                                            </span>
+                                            <span class="amount-badge amount-cash"><?php echo formatCurrency($stock['stock_closing_cash']); ?></span>
                                         </td>
                                     </tr>
-                                    <!-- GRAND TOTAL -->
                                     <tr class="grand-total-row">
-                                        <td colspan="7" class="text-right">
-                                            <span class="tfoot-label grand">
-                                                <i class="fas fa-chart-line"></i> GRAND TOTAL (Float + Cash)
-                                            </span>
+                                        <td colspan="8" class="text-right">
+                                            <span class="tfoot-label grand"><i class="fas fa-chart-line"></i> GRAND TOTAL (Closing Float + Closing Cash)</span>
                                         </td>
                                         <td class="text-right">
-                                            <span class="amount-badge amount-grand">
-                                                <?php echo formatCurrency($stock_total); ?>
-                                            </span>
+                                            <span class="amount-badge amount-grand"><?php echo formatCurrency($stock_total); ?></span>
                                         </td>
                                     </tr>
                                 </tfoot>
@@ -582,11 +675,11 @@ include_once '../../includes/admin_topbar.php';
                             </div>
                         <?php endif; ?>
                     </div>
-                    
+
                 </div>
-                
+
             <?php endforeach; ?>
-            
+
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-moon"></i>
@@ -631,9 +724,6 @@ include_once '../../includes/admin_topbar.php';
     --blue-light: #3b82f6;
     --blue-lighter: #dbeafe;
     --blue-lightest: #eff6ff;
-    --green-primary: #059669;
-    --orange-primary: #d97706;
-    --purple-primary: #7c3aed;
 }
 html.dark-mode {
     --bg-body: #0f172a;
@@ -657,9 +747,7 @@ html, body { overflow-x: hidden !important; max-width: 100vw !important; width: 
 body { background: var(--bg-body) !important; color: var(--text-primary); }
 .main-wrapper, .main-content { background: var(--bg-body) !important; }
 
-/* ============================================================
-   BRANCH INDICATOR
-   ============================================================ */
+/* BRANCH INDICATOR */
 .branch-indicator { 
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); 
     border-radius: 12px; padding: 14px 22px; margin-bottom: 14px; 
@@ -685,18 +773,14 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .branch-indicator-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; position: relative; z-index: 1; }
 .branch-indicator-right .date-display { font-size: 12px; color: rgba(255,255,255,0.95); padding: 6px 14px; background: rgba(255, 255, 255, 0.15); border-radius: 16px; display: flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 600; }
 
-/* ============================================================
-   PAGE HEADER
-   ============================================================ */
+/* PAGE HEADER */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }
 .page-header .header-left h2 { font-size: 22px; font-weight: 800; margin: 0; color: var(--text-primary); }
 .page-header .header-left h2 i { margin-right: 10px; }
 .page-header .header-left .text-muted { font-size: 13px; color: var(--text-muted); margin: 4px 0 0 0; font-weight: 500; }
 .page-header .header-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
-/* ============================================================
-   BUTTONS
-   ============================================================ */
+/* BUTTONS */
 .btn-add { background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); color: #FFFFFF; padding: 11px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; text-decoration: none; box-shadow: 0 4px 14px rgba(30, 64, 175, 0.35); white-space: nowrap; }
 .btn-add:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(30, 64, 175, 0.5); color: #FFFFFF; }
 .btn-export { background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: #FFFFFF; padding: 11px 22px; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; text-decoration: none; box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35); white-space: nowrap; }
@@ -704,9 +788,7 @@ body { background: var(--bg-body) !important; color: var(--text-primary); }
 .btn-back { background: var(--bg-card); color: var(--text-secondary); border: 1.5px solid var(--border-color); padding: 10px 20px; border-radius: 10px; font-weight: 600; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; text-decoration: none; white-space: nowrap; }
 .btn-back:hover { background: var(--blue-lightest); color: var(--blue-primary); border-color: var(--blue-light); transform: translateY(-2px); }
 
-/* ============================================================
-   ALERTS
-   ============================================================ */
+/* ALERTS */
 .alert { padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px var(--shadow-color); }
 .alert-success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
 .alert-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
@@ -717,12 +799,10 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
 .alert-close { background: transparent; border: none; font-size: 22px; color: inherit; cursor: pointer; opacity: 0.6; }
 .alert-close:hover { opacity: 1; }
 
-/* ============================================================
-   SUMMARY CARDS - 2x2
-   ============================================================ */
+/* SUMMARY CARDS */
 .summary-cards {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
     margin-bottom: 20px;
     width: 100%;
@@ -740,48 +820,16 @@ html.dark-mode .alert-danger { background: #7f1d1d; color: #fee2e2; border-color
     min-width: 0;
     overflow: hidden;
 }
-.summary-blue {
-    background: linear-gradient(135deg, rgba(219, 234, 254, 0.6) 0%, rgba(191, 219, 254, 0.6) 100%);
-    border-color: rgba(59, 130, 246, 0.4);
-}
-.summary-green {
-    background: linear-gradient(135deg, rgba(209, 250, 229, 0.6) 0%, rgba(167, 243, 208, 0.6) 100%);
-    border-color: rgba(16, 185, 129, 0.4);
-}
-.summary-orange {
-    background: linear-gradient(135deg, rgba(254, 243, 199, 0.6) 0%, rgba(253, 230, 138, 0.6) 100%);
-    border-color: rgba(245, 158, 11, 0.4);
-}
-.summary-purple {
-    background: linear-gradient(135deg, rgba(237, 233, 254, 0.6) 0%, rgba(221, 214, 254, 0.6) 100%);
-    border-color: rgba(139, 92, 246, 0.4);
-}
-html.dark-mode .summary-blue {
-    background: linear-gradient(135deg, rgba(30, 58, 95, 0.6) 0%, rgba(30, 64, 175, 0.6) 100%);
-    border-color: rgba(59, 130, 246, 0.5);
-}
-html.dark-mode .summary-green {
-    background: linear-gradient(135deg, rgba(6, 95, 70, 0.6) 0%, rgba(4, 120, 87, 0.6) 100%);
-    border-color: rgba(16, 185, 129, 0.5);
-}
-html.dark-mode .summary-orange {
-    background: linear-gradient(135deg, rgba(95, 58, 30, 0.6) 0%, rgba(120, 53, 15, 0.6) 100%);
-    border-color: rgba(217, 119, 6, 0.5);
-}
-html.dark-mode .summary-purple {
-    background: linear-gradient(135deg, rgba(76, 29, 149, 0.6) 0%, rgba(91, 33, 182, 0.6) 100%);
-    border-color: rgba(139, 92, 246, 0.5);
-}
+.summary-blue { background: linear-gradient(135deg, rgba(219, 234, 254, 0.6) 0%, rgba(191, 219, 254, 0.6) 100%); border-color: rgba(59, 130, 246, 0.4); }
+.summary-green { background: linear-gradient(135deg, rgba(209, 250, 229, 0.6) 0%, rgba(167, 243, 208, 0.6) 100%); border-color: rgba(16, 185, 129, 0.4); }
+.summary-orange { background: linear-gradient(135deg, rgba(254, 243, 199, 0.6) 0%, rgba(253, 230, 138, 0.6) 100%); border-color: rgba(245, 158, 11, 0.4); }
+.summary-purple { background: linear-gradient(135deg, rgba(237, 233, 254, 0.6) 0%, rgba(221, 214, 254, 0.6) 100%); border-color: rgba(139, 92, 246, 0.4); }
+html.dark-mode .summary-blue { background: linear-gradient(135deg, rgba(30, 58, 95, 0.6) 0%, rgba(30, 64, 175, 0.6) 100%); border-color: rgba(59, 130, 246, 0.5); }
+html.dark-mode .summary-green { background: linear-gradient(135deg, rgba(6, 95, 70, 0.6) 0%, rgba(4, 120, 87, 0.6) 100%); border-color: rgba(16, 185, 129, 0.5); }
+html.dark-mode .summary-orange { background: linear-gradient(135deg, rgba(95, 58, 30, 0.6) 0%, rgba(120, 53, 15, 0.6) 100%); border-color: rgba(217, 119, 6, 0.5); }
+html.dark-mode .summary-purple { background: linear-gradient(135deg, rgba(76, 29, 149, 0.6) 0%, rgba(91, 33, 182, 0.6) 100%); border-color: rgba(139, 92, 246, 0.5); }
 .summary-card:hover { transform: translateY(-4px); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12); }
-.sc-bg-icon {
-    position: absolute;
-    right: -10px; bottom: -15px;
-    font-size: 110px;
-    opacity: 0.08;
-    pointer-events: none;
-    line-height: 1;
-    transform: rotate(-15deg);
-}
+.sc-bg-icon { position: absolute; right: -10px; bottom: -15px; font-size: 110px; opacity: 0.08; pointer-events: none; line-height: 1; transform: rotate(-15deg); }
 .sc-bg-blue { color: #1e40af; }
 .sc-bg-green { color: #059669; }
 .sc-bg-orange { color: #d97706; }
@@ -793,7 +841,7 @@ html.dark-mode .sc-bg-orange { color: #fbbf24; }
 html.dark-mode .sc-bg-purple { color: #a78bfa; }
 .sc-content { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; position: relative; z-index: 1; }
 .sc-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-value { font-size: 26px; font-weight: 900; line-height: 1.1; letter-spacing: -0.5px; word-break: break-word; overflow-wrap: anywhere; display: block; max-width: 100%; font-family: 'Inter', 'Courier New', monospace; }
+.sc-value { font-size: 22px; font-weight: 900; line-height: 1.1; letter-spacing: -0.5px; word-break: break-word; overflow-wrap: anywhere; display: block; max-width: 100%; font-family: 'Inter', 'Courier New', monospace; }
 .summary-blue .sc-label { color: #1e40af; }
 .summary-blue .sc-value { color: #1e3a8a; }
 .summary-green .sc-label { color: #047857; }
@@ -811,9 +859,7 @@ html.dark-mode .summary-orange .sc-value { color: #FEF3C7; }
 html.dark-mode .summary-purple .sc-label { color: #c4b5fd; }
 html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
 
-/* ============================================================
-   FILTERS
-   ============================================================ */
+/* FILTERS */
 .filters-bar { background: var(--bg-card); padding: 16px 20px; border-radius: 12px; border: 1.5px solid var(--border-color); margin-bottom: 18px; max-width: 100%; box-shadow: 0 2px 8px var(--shadow-color); }
 .filters-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 5px; }
@@ -826,80 +872,19 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
 .btn-reset { background: var(--bg-card); color: var(--text-secondary); border: 1.5px solid var(--border-color); padding: 9px 18px; border-radius: 8px; font-weight: 600; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.3s ease; text-decoration: none; white-space: nowrap; }
 .btn-reset:hover { background: var(--blue-lightest); color: var(--blue-primary); border-color: var(--blue-light); }
 
-/* ============================================================
-   REPORT CARD
-   ============================================================ */
-.report-card {
-    background: var(--bg-card);
-    border-radius: 14px;
-    border: 1.5px solid var(--border-color);
-    overflow: hidden;
-    box-shadow: 0 2px 8px var(--shadow-color);
-    margin-bottom: 20px;
-    transition: all 0.3s ease;
-}
-.report-card:hover {
-    box-shadow: 0 8px 24px var(--shadow-hover);
-    border-color: var(--blue-light);
-}
+/* REPORT CARD */
+.report-card { background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); overflow: hidden; box-shadow: 0 2px 8px var(--shadow-color); margin-bottom: 20px; transition: all 0.3s ease; }
+.report-card:hover { box-shadow: 0 8px 24px var(--shadow-hover); border-color: var(--blue-light); }
 
-/* ============================================================
-   REPORT HEADER
-   ============================================================ */
-.report-header {
-    background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%);
-    padding: 20px 24px;
-    display: grid;
-    grid-template-columns: 1fr auto auto;
-    gap: 20px;
-    align-items: center;
-    color: #FFFFFF;
-    position: relative;
-    overflow: hidden;
-}
-.report-header::before {
-    content: '';
-    position: absolute;
-    top: -50%; right: -5%;
-    width: 250px; height: 250px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 50%; pointer-events: none;
-}
+/* REPORT HEADER */
+.report-header { background: linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%); padding: 20px 24px; display: grid; grid-template-columns: 1fr auto auto; gap: 20px; align-items: center; color: #FFFFFF; position: relative; overflow: hidden; }
+.report-header::before { content: ''; position: absolute; top: -50%; right: -5%; width: 250px; height: 250px; background: rgba(255, 255, 255, 0.08); border-radius: 50%; pointer-events: none; }
 .report-header-info { display: flex; align-items: center; gap: 16px; position: relative; z-index: 1; min-width: 0; }
-.report-header-icon {
-    width: 54px; height: 54px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 14px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0;
-    border: 1.5px solid rgba(255, 255, 255, 0.3);
-    backdrop-filter: blur(8px);
-}
+.report-header-icon { width: 54px; height: 54px; background: rgba(255, 255, 255, 0.2); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; border: 1.5px solid rgba(255, 255, 255, 0.3); backdrop-filter: blur(8px); }
 .report-header-text { min-width: 0; }
-.report-header-number {
-    font-family: 'Courier New', monospace;
-    font-size: 16px;
-    font-weight: 900;
-    color: #FFFFFF;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-    word-break: break-all;
-}
+.report-header-number { font-family: 'Courier New', monospace; font-size: 16px; font-weight: 900; color: #FFFFFF; letter-spacing: 0.5px; margin-bottom: 6px; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15); word-break: break-all; }
 .report-header-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.report-header-meta-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.95);
-    padding: 4px 10px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    white-space: nowrap;
-}
+.report-header-meta-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.95); padding: 4px 10px; background: rgba(255, 255, 255, 0.15); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.2); white-space: nowrap; }
 .report-header-meta-item i { font-size: 10px; }
 .report-header-meta-item.status-orange { background: rgba(245, 158, 11, 0.35); border-color: rgba(252, 211, 77, 0.5); }
 .report-header-meta-item.status-green { background: rgba(16, 185, 129, 0.35); border-color: rgba(167, 243, 208, 0.5); }
@@ -907,210 +892,47 @@ html.dark-mode .summary-purple .sc-value { color: #EDE9FE; }
 .report-header-meta-item.status-red { background: rgba(220, 38, 38, 0.35); border-color: rgba(254, 202, 202, 0.5); }
 .report-header-meta-item.status-gray { background: rgba(107, 114, 128, 0.35); border-color: rgba(209, 213, 219, 0.5); }
 
-.report-header-employee {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    position: relative;
-    z-index: 1;
-    padding: 0 20px;
-    border-left: 2px solid rgba(255, 255, 255, 0.2);
-    border-right: 2px solid rgba(255, 255, 255, 0.2);
-}
+.report-header-employee { display: flex; align-items: center; gap: 20px; position: relative; z-index: 1; padding: 0 20px; border-left: 2px solid rgba(255, 255, 255, 0.2); border-right: 2px solid rgba(255, 255, 255, 0.2); }
 .employee-cell { display: flex; align-items: center; gap: 12px; }
-.emp-avatar-img {
-    width: 46px; height: 46px;
-    border-radius: 50%; object-fit: cover;
-    border: 3px solid #FFFFFF;
-    flex-shrink: 0; background: #f3f4f6;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-.emp-avatar {
-    width: 46px; height: 46px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.25);
-    color: #FFFFFF;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 900; font-size: 18px;
-    flex-shrink: 0;
-    border: 3px solid #FFFFFF;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    backdrop-filter: blur(8px);
-}
+.emp-avatar-img { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; border: 3px solid #FFFFFF; flex-shrink: 0; background: #f3f4f6; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); }
+.emp-avatar { width: 46px; height: 46px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 18px; flex-shrink: 0; border: 3px solid #FFFFFF; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); backdrop-filter: blur(8px); }
 .emp-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.emp-name {
-    font-size: 14px; font-weight: 800;
-    color: #FFFFFF;
-    white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 180px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-}
-.emp-code {
-    font-size: 10px; font-weight: 700;
-    color: #FFFFFF;
-    font-family: 'Courier New', monospace;
-    background: rgba(255, 255, 255, 0.2);
-    padding: 2px 8px; border-radius: 6px;
-    align-self: flex-start;
-    border: 1px solid rgba(255, 255, 255, 0.25);
-}
-.employee-cash {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.95);
-    padding: 6px 12px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    white-space: nowrap;
-    font-weight: 600;
-}
-.employee-cash i { color: #FCD34D; }
-.employee-cash strong {
-    font-family: 'Courier New', monospace;
-    font-weight: 900;
-    color: #FFFFFF;
-    font-size: 13px;
-}
+.emp-name { font-size: 14px; font-weight: 800; color: #FFFFFF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15); }
+.emp-code { font-size: 10px; font-weight: 700; color: #FFFFFF; font-family: 'Courier New', monospace; background: rgba(255, 255, 255, 0.2); padding: 2px 8px; border-radius: 6px; align-self: flex-start; border: 1px solid rgba(255, 255, 255, 0.25); }
 
-.report-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    position: relative;
-    z-index: 1;
-    flex-shrink: 0;
-}
-.btn-action-header {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    border-radius: 10px;
-    font-weight: 800;
-    font-size: 12px;
-    text-decoration: none;
-    transition: all 0.3s ease;
-    white-space: nowrap;
-    border: 2px solid;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-}
+.report-header-actions { display: flex; align-items: center; gap: 8px; position: relative; z-index: 1; flex-shrink: 0; }
+.btn-action-header { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 10px; font-weight: 800; font-size: 12px; text-decoration: none; transition: all 0.3s ease; white-space: nowrap; border: 2px solid; cursor: pointer; font-family: 'Inter', sans-serif; }
 .btn-action-header i { font-size: 13px; }
-.btn-view-header {
-    background: #FFFFFF; color: #1e40af; border-color: #FFFFFF;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
-}
-.btn-view-header:hover {
-    transform: translateY(-2px);
-    background: #EFF6FF; color: #1e3a8a;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
-}
-.btn-edit-header {
-    background: #FCD34D; color: #78350F; border-color: #FCD34D;
-    box-shadow: 0 4px 14px rgba(252, 211, 77, 0.4);
-}
-.btn-edit-header:hover {
-    transform: translateY(-2px);
-    background: #FBBF24; color: #78350F;
-    border-color: #FBBF24;
-    box-shadow: 0 6px 20px rgba(251, 191, 36, 0.5);
-}
-.btn-delete-header {
-    background: #DC2626; color: #FFFFFF; border-color: #DC2626;
-    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
-}
-.btn-delete-header:hover {
-    transform: translateY(-2px);
-    background: #B91C1C; color: #FFFFFF;
-    border-color: #B91C1C;
-    box-shadow: 0 6px 20px rgba(185, 28, 28, 0.5);
-}
+.btn-view-header { background: #FFFFFF; color: #1e40af; border-color: #FFFFFF; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15); }
+.btn-view-header:hover { transform: translateY(-2px); background: #EFF6FF; color: #1e3a8a; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25); }
+.btn-edit-header { background: #FCD34D; color: #78350F; border-color: #FCD34D; box-shadow: 0 4px 14px rgba(252, 211, 77, 0.4); }
+.btn-edit-header:hover { transform: translateY(-2px); background: #FBBF24; color: #78350F; border-color: #FBBF24; }
+.btn-delete-header { background: #DC2626; color: #FFFFFF; border-color: #DC2626; box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4); }
+.btn-delete-header:hover { transform: translateY(-2px); background: #B91C1C; color: #FFFFFF; border-color: #B91C1C; }
 
-/* ============================================================
-   REPORT BODY - PROVIDER TABLE
-   ============================================================ */
+/* REPORT BODY */
 .report-body { padding: 0; background: var(--bg-card); overflow-x: auto; }
-.provider-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1100px; }
-.provider-table thead tr {
-    background: var(--bg-table-even);
-    border-bottom: 2px solid var(--border-color);
-}
-.provider-table thead th {
-    padding: 12px 16px;
-    text-align: left;
-    font-weight: 800;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
-}
+.provider-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1250px; }
+.provider-table thead tr { background: var(--bg-table-even); border-bottom: 2px solid var(--border-color); }
+.provider-table thead th { padding: 12px 14px; text-align: left; font-weight: 800; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.8px; white-space: nowrap; }
 .provider-table thead th.text-right { text-align: right; }
-.provider-table tbody tr {
-    border-bottom: 1px solid var(--border-color);
-    transition: background 0.2s ease;
-}
+.provider-table tbody tr { border-bottom: 1px solid var(--border-color); transition: background 0.2s ease; }
 .provider-table tbody tr:hover { background: var(--bg-table-hover); }
 .provider-table tbody tr:nth-child(even) { background: var(--bg-table-even); }
-.provider-table tbody td { padding: 14px 16px; color: var(--text-primary); vertical-align: middle; }
+.provider-table tbody td { padding: 12px 14px; color: var(--text-primary); vertical-align: middle; }
 .provider-table tbody td.text-right { text-align: right; }
 
-.provider-row-number {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px; height: 28px;
-    border-radius: 8px;
-    background: var(--blue-lighter);
-    color: var(--blue-primary);
-    font-size: 12px;
-    font-weight: 800;
-    border: 1px solid #BFDBFE;
-}
+.provider-row-number { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--blue-lighter); color: var(--blue-primary); font-size: 12px; font-weight: 800; border: 1px solid #BFDBFE; }
 html.dark-mode .provider-row-number { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
 
 .provider-cell { display: flex; align-items: center; gap: 12px; }
-.provider-icon {
-    width: 40px; height: 40px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: #FFFFFF;
-    font-size: 16px;
-    flex-shrink: 0;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
-}
+.provider-icon { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 15px; flex-shrink: 0; box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
 .provider-name { font-size: 13px; font-weight: 800; color: var(--text-primary); }
 
-.code-badge {
-    display: inline-block;
-    padding: 5px 12px;
-    background: #FEF3C7;
-    color: #D97706;
-    border-radius: 8px;
-    font-size: 11px;
-    font-weight: 800;
-    font-family: 'Courier New', monospace;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-    border: 1px solid #FDE68A;
-}
+.code-badge { display: inline-block; padding: 5px 12px; background: #FEF3C7; color: #D97706; border-radius: 8px; font-size: 11px; font-weight: 800; font-family: 'Courier New', monospace; letter-spacing: 0.5px; white-space: nowrap; border: 1px solid #FDE68A; }
 html.dark-mode .code-badge { background: #5f3a1e; color: #fbbf24; border-color: #92400e; }
 
-.provider-type-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-}
+.provider-type-badge { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
 .provider-type-badge i { font-size: 11px; }
 .type-bank { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
 .type-mobile_money { background: #EDE9FE; color: #7C3AED; border: 1px solid #C4B5FD; }
@@ -1119,31 +941,12 @@ html.dark-mode .type-bank { background: #1e3a5f; color: #93c5fd; border-color: #
 html.dark-mode .type-mobile_money { background: #4c1d95; color: #ddd6fe; border-color: #8b5cf6; }
 html.dark-mode .type-other { background: #5f3a1e; color: #fbbf24; border-color: #d97706; }
 
-.amount-badge {
-    display: inline-block;
-    padding: 6px 14px;
-    border-radius: 8px;
-    font-weight: 800;
-    font-size: 13px;
-    font-family: 'Courier New', monospace;
-    white-space: nowrap;
-}
+.amount-badge { display: inline-block; padding: 6px 12px; border-radius: 8px; font-weight: 800; font-size: 12px; font-family: 'Courier New', monospace; white-space: nowrap; }
 .amount-opening { background: #E5E7EB; color: #374151; border: 1px solid #D1D5DB; }
 .amount-float { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
 .amount-cash { background: #D1FAE5; color: #059669; border: 1px solid #A7F3D0; }
-.amount-total {
-    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
-    color: #1E3A8A;
-    border: 2px solid #2563EB;
-    font-size: 14px;
-}
-.amount-grand {
-    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-    color: #78350F;
-    border: 2px solid #F59E0B;
-    font-size: 15px;
-    font-weight: 900;
-}
+.amount-total { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: #1E3A8A; border: 2px solid #2563EB; font-size: 13px; }
+.amount-grand { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #78350F; border: 2px solid #F59E0B; font-size: 14px; font-weight: 900; }
 html.dark-mode .amount-opening { background: #374151; color: #9ca3af; border-color: #4b5563; }
 html.dark-mode .amount-float { background: #1e3a5f; color: #60a5fa; border-color: #3b82f6; }
 html.dark-mode .amount-cash { background: #065f46; color: #34d399; border-color: #10b981; }
@@ -1151,19 +954,21 @@ html.dark-mode .amount-total { background: linear-gradient(135deg, #1e3a5f, #1e4
 html.dark-mode .amount-grand { background: linear-gradient(135deg, #5f3a1e, #78350f); color: #fcd34d; border-color: #d97706; }
 
 .provider-table tfoot tr { border-top: 1px solid var(--border-color); }
-.provider-table tfoot td { padding: 14px 16px; font-weight: 800; }
+.provider-table tfoot td { padding: 12px 14px; font-weight: 800; }
 .provider-table tfoot td.text-right { text-align: right; }
-.tfoot-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
+.tfoot-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; }
 .tfoot-label i { font-size: 14px; }
 .tfoot-label.grand { font-size: 13px; }
+.opening-float-row { background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 100%) !important; }
+.opening-float-row .tfoot-label { color: #475569; }
+.opening-float-row .tfoot-label i { color: #64748B; }
+.opening-cash-row { background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 100%) !important; }
+.opening-cash-row .tfoot-label { color: #475569; }
+.opening-cash-row .tfoot-label i { color: #64748B; }
+html.dark-mode .opening-float-row,
+html.dark-mode .opening-cash-row { background: linear-gradient(135deg, #334155, #475569) !important; }
+html.dark-mode .opening-float-row .tfoot-label,
+html.dark-mode .opening-cash-row .tfoot-label { color: #cbd5e1; }
 .total-float-row { background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%) !important; }
 .total-float-row .tfoot-label { color: #1E40AF; }
 .total-float-row .tfoot-label i { color: #2563EB; }
@@ -1174,10 +979,7 @@ html.dark-mode .total-float-row .tfoot-label { color: #93c5fd; }
 .cash-row .tfoot-label i { color: #10B981; }
 html.dark-mode .cash-row { background: linear-gradient(135deg, #065f46, #047857) !important; }
 html.dark-mode .cash-row .tfoot-label { color: #34d399; }
-.grand-total-row {
-    background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%) !important;
-    border-top: 2px solid #F59E0B !important;
-}
+.grand-total-row { background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%) !important; border-top: 2px solid #F59E0B !important; }
 .grand-total-row .tfoot-label { color: #78350F; font-weight: 900; }
 .grand-total-row .tfoot-label i { color: #D97706; }
 html.dark-mode .grand-total-row { background: linear-gradient(135deg, #5f3a1e, #78350f) !important; }
@@ -1187,35 +989,21 @@ html.dark-mode .grand-total-row .tfoot-label { color: #fcd34d; }
 .no-providers i { font-size: 42px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 12px; }
 .no-providers p { font-size: 13px; margin: 0; font-weight: 600; }
 
-.empty-state {
-    text-align: center; padding: 60px 20px;
-    background: var(--bg-card); border-radius: 14px;
-    border: 1.5px solid var(--border-color);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
+.empty-state { text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: 14px; border: 1.5px solid var(--border-color); box-shadow: 0 2px 8px var(--shadow-color); }
 .empty-state i { font-size: 56px; color: var(--text-light); opacity: 0.4; display: block; margin-bottom: 16px; }
 .empty-state h3 { font-size: 18px; color: var(--text-primary); margin: 0 0 8px 0; }
 .empty-state p { color: var(--text-muted); font-size: 14px; margin: 0 0 20px 0; }
 
-/* ============================================================
-   RESPONSIVE
-   ============================================================ */
+/* RESPONSIVE */
 @media (max-width: 1400px) {
     .report-header { grid-template-columns: 1fr auto; }
-    .report-header-employee {
-        border-left: none; padding-left: 0;
-        border-right: 2px solid rgba(255, 255, 255, 0.2);
-    }
+    .report-header-employee { border-left: none; padding-left: 0; border-right: 2px solid rgba(255, 255, 255, 0.2); }
 }
 @media (max-width: 1200px) {
     .report-header { grid-template-columns: 1fr; gap: 16px; }
-    .report-header-employee {
-        border-left: none; border-right: none;
-        padding: 0; padding-top: 16px;
-        border-top: 2px solid rgba(255, 255, 255, 0.2);
-        flex-wrap: wrap;
-    }
+    .report-header-employee { border-left: none; border-right: none; padding: 0; padding-top: 16px; border-top: 2px solid rgba(255, 255, 255, 0.2); flex-wrap: wrap; }
     .report-header-actions { justify-content: flex-start; }
+    .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 768px) {
     .main-content { padding: 12px !important; }
@@ -1226,69 +1014,38 @@ html.dark-mode .grand-total-row .tfoot-label { color: #fcd34d; }
     .page-header .header-right .btn-add,
     .page-header .header-right .btn-export,
     .page-header .header-right .btn-back { flex: 1; justify-content: center; }
-
     .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .summary-card { padding: 16px 16px; gap: 12px; border-radius: 12px; }
-    .sc-bg-icon { font-size: 80px; }
-    .sc-value { font-size: 18px; letter-spacing: -0.3px; }
-    .sc-label { font-size: 9px; letter-spacing: 0.8px; }
-
+    .sc-value { font-size: 16px; }
     .filters-form { flex-direction: column; }
     .filter-group { width: 100%; }
     .filter-group .form-control { width: 100%; }
     .filter-actions { flex-direction: row; width: 100%; }
-    .filter-actions .btn-filter,
-    .filter-actions .btn-reset { flex: 1; justify-content: center; }
-
+    .filter-actions .btn-filter, .filter-actions .btn-reset { flex: 1; justify-content: center; }
     .report-header { padding: 16px; }
     .report-header-info { flex-direction: column; align-items: flex-start; gap: 12px; }
-    .report-header-icon { width: 46px; height: 46px; font-size: 18px; }
-    .report-header-number { font-size: 14px; }
     .report-header-employee { flex-direction: column; align-items: flex-start; gap: 12px; }
-    .emp-avatar-img, .emp-avatar { width: 40px; height: 40px; font-size: 16px; }
-    .emp-name { font-size: 13px; max-width: 150px; }
     .report-header-actions { flex-wrap: wrap; gap: 6px; width: 100%; }
     .btn-action-header { flex: 1; justify-content: center; padding: 10px 12px; font-size: 11px; }
-
-    .provider-table { font-size: 12px; min-width: 900px; }
-    .provider-table thead th { padding: 10px 12px; font-size: 9px; }
-    .provider-table tbody td { padding: 12px 12px; }
-    .provider-icon { width: 34px; height: 34px; font-size: 14px; }
-    .provider-name { font-size: 12px; }
-    .amount-badge { padding: 5px 10px; font-size: 12px; }
-    .amount-total, .amount-grand { font-size: 13px; }
+    .provider-table { font-size: 12px; min-width: 1050px; }
 }
 @media (max-width: 480px) {
-    .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .summary-card {
-        padding: 14px 12px; gap: 10px;
-        flex-direction: column; align-items: flex-start;
-    }
-    .sc-bg-icon { font-size: 70px; right: -8px; bottom: -10px; }
-    .sc-value { font-size: 15px; letter-spacing: -0.2px; }
-    .sc-label { font-size: 8px; }
+    .summary-cards { grid-template-columns: 1fr; }
+    .summary-card { padding: 14px 12px; gap: 10px; }
+    .sc-value { font-size: 15px; }
     .report-header-number { font-size: 12px; }
     .btn-action-header { padding: 8px 10px; font-size: 10px; }
-    .btn-action-header span { font-size: 10px; }
-    .provider-table { min-width: 800px; }
-    .provider-table thead th { padding: 8px 10px; font-size: 8px; }
-    .provider-table tbody td { padding: 10px 10px; }
+    .provider-table { min-width: 950px; }
 }
 </style>
 
 <script>
-// ============================================================
-// DELETE
-// ============================================================
 function deleteStock(id, number) {
     if (confirm('Delete evening stock "' + number + '"?\n\nThis action cannot be undone.')) {
         window.location.href = 'delete.php?id=' + id;
     }
 }
 
-// ============================================================
-// INIT
-// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
     var successAlert = document.querySelector('.alert-success');
     if (successAlert) {
